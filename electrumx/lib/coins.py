@@ -194,70 +194,84 @@ class Coin:
         return Decimal(value) / cls.VALUE_PER_COIN
 
 
-class BitcoinSV(Coin):
-    NAME = "BitcoinSV"
-    TX_COUNT = 267318795
-    TX_COUNT_HEIGHT = 557037
-    TX_PER_BLOCK = 400
+
+
+class Ravencoin(Coin):
+    NAME = "Ravencoin"
+    SHORTNAME = "RVN"
+    NET = "mainnet"
+    XPUB_VERBYTES = bytes.fromhex("0488B21E")
+    XPRV_VERBYTES = bytes.fromhex("0488ADE4")
+    P2PKH_VERBYTE = bytes.fromhex("3C")
+    P2SH_VERBYTES = [bytes.fromhex("7A")]
+    GENESIS_HASH = ('0000006b444bc2f2ffe627be9d9e7e7a'
+                    '0730000870ef6eb6da46c8eae389df90')
+    DESERIALIZER = lib_tx.DeserializerSegWit
+    X16RV2_ACTIVATION_TIME = 1569945600   # algo switch to x16rv2 at this timestamp
+    KAWPOW_ACTIVATION_TIME = 1588788000  # kawpow algo activation time
+    KAWPOW_ACTIVATION_HEIGHT = 1219736
+    TX_COUNT = 5626682
+    TX_COUNT_HEIGHT = 887000
+    TX_PER_BLOCK = 6
+    RPC_PORT = 8766
+    REORG_LIMIT = 100
     PEERS = [
-        'electrumx.bitcoinsv.io s',
-        'satoshi.vision.cash s',
-        'sv.usebsv.com s t',
-        'sv.satoshi.io s t',
     ]
-    GENESIS_ACTIVATION = 620_538
-
-
-class BitcoinTestnetMixin:
-    SHORTNAME = "XTN"
-    NET = "testnet"
-    P2PKH_VERBYTE = bytes.fromhex("6f")
-    P2SH_VERBYTES = [bytes.fromhex("c4")]
-    WIF_BYTE = bytes.fromhex("ef")
-    GENESIS_HASH = ('000000000933ea01ad0ee984209779ba'
-                    'aec3ced90fa3f408719526f8d77f4943')
-    REORG_LIMIT = 8000
-    TX_COUNT = 12242438
-    TX_COUNT_HEIGHT = 1035428
-    TX_PER_BLOCK = 21
-    RPC_PORT = 18332
-    PEER_DEFAULT_PORTS = {'t': '51001', 's': '51002'}
-
-
-class BitcoinSVTestnet(BitcoinTestnetMixin, Coin):
-    '''Bitcoin Testnet for Bitcoin SV daemons.'''
-    NAME = "BitcoinSV"
-    PEERS = [
-        'electrontest.cascharia.com t51001 s51002',
-    ]
-    GENESIS_ACTIVATION = 1_344_302
-
-
-class BitcoinSVScalingTestnet(BitcoinSVTestnet):
-    NET = "scalingtest"
-    PEERS = [
-        'stn-server.electrumsv.io t51001 s51002',
-    ]
-    TX_COUNT = 2015
-    TX_COUNT_HEIGHT = 5711
-    TX_PER_BLOCK = 5000
-    GENESIS_ACTIVATION = 14_896
 
     @classmethod
-    def max_fetch_blocks(cls, height):
-        if height <= 10:
-            return 100
-        return 3
+    def block(cls, raw_block):
+        '''Return a Block namedtuple given a raw block and its height.'''
+        timestamp = int.from_bytes(raw_block[68:72], byteorder='little')
+        header = raw_block[:80] if timestamp <= cls.KAWPOW_ACTIVATION_TIME else raw_block[:120]
+        txs = cls.DESERIALIZER(raw_block, start=len(header)).read_tx_block()
+        return Block(raw_block, header, txs)
+
+    @classmethod
+    def header_hash(cls, header):
+        '''Given a header return the hash.'''
+        timestamp = util.unpack_le_uint32_from(header, 68)[0]
+        assert cls.KAWPOW_ACTIVATION_TIME > 0
+
+        def reverse_bytes(data):
+            b = bytearray(data)
+            b.reverse()
+            return bytes(b)
+
+        if timestamp >= cls.KAWPOW_ACTIVATION_TIME:
+            import kawpow
+            nNonce64 = util.unpack_le_uint64_from(header, 80)[0]  # uint64_t
+            mix_hash = reverse_bytes(header[88:120])  # uint256
+
+            header_hash = reverse_bytes(double_sha256(header[:80]))
+
+            final_hash = reverse_bytes(kawpow.light_verify(header_hash, mix_hash, nNonce64))
+            return final_hash
+
+        elif timestamp >= cls.X16RV2_ACTIVATION_TIME:
+            import x16rv2_hash
+            return x16rv2_hash.getPoWHash(header)
+        else:
+            import x16r_hash
+            return x16r_hash.getPoWHash(header)
 
 
-class BitcoinSVRegtest(BitcoinSVTestnet):
-    NET = "regtest"
-    GENESIS_HASH = ('0f9188f13cb7b2c71f2a335e3a4fc328'
-                    'bf5beb436012afca590b1a11466e2206')
-    PEERS = []
-    TX_COUNT = 1
-    TX_COUNT_HEIGHT = 1
-    GENESIS_ACTIVATION = 10_000
-
-
-Bitcoin = BitcoinSV
+class RavencoinTestnet(Ravencoin):
+    NET = "testnet"
+    XPUB_VERBYTES = bytes.fromhex("043587CF")
+    XPRV_VERBYTES = bytes.fromhex("04358394")
+    P2PKH_VERBYTE = bytes.fromhex("6F")
+    P2SH_VERBYTES = [bytes.fromhex("C4")]
+    WIF_BYTE = bytes.fromhex("EF")
+    GENESIS_HASH = ('000000ecfc5e6324a079542221d00e10'
+                    '362bdc894d56500c414060eea8a3ad5a')
+    X16RV2_ACTIVATION_TIME = 1567533600
+    KAWPOW_ACTIVATION_HEIGHT = 231544
+    KAWPOW_ACTIVATION_TIME = 1585159200
+    TX_COUNT = 496158
+    TX_COUNT_HEIGHT = 420500
+    TX_PER_BLOCK = 1
+    RPC_PORT = 18766
+    PEER_DEFAULT_PORTS = {'t': '50003', 's': '50004'}
+    REORG_LIMIT = 100
+    PEERS = [
+    ]

@@ -1,0 +1,25 @@
+#!/bin/bash
+
+PYTHON_VER="$(python3 -c 'import sys; print(sys.version[:3])')"
+
+cd $(dirname $0)
+if [ -e ./env/bin/activate ]; then
+    source ./env/bin/activate
+else
+    virtualenv env -p `which python3`
+    source ./env/bin/activate
+    pip install aiohttp
+    pip install pylru
+    pip install plyvel
+    pip install aiorpcx==0.20.2
+    pip install x16r_hash
+    pip install x16rv2_hash
+    pip install kawpow
+fi
+
+export PYTHONPATH="/usr/local/lib/python${PYTHON_VER}/site-packages:$PYTHONPATH"
+
+./electrumx_server "$@"
+
+deactivate
+
