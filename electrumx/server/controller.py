@@ -137,6 +137,6 @@ class Controller(ServerBase):
                 await group.spawn(bp.fetch_and_process_blocks(caught_up_event))
                 await group.spawn(wait_for_catchup())
 
-            print('group.exception is:')
-            print(group.exception)
-            raise group.exception
+            # This is what I get for forking brand new versions
+            if group.exception is not None:
+                raise group.exception
