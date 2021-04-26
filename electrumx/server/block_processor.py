@@ -62,7 +62,6 @@ class Prefetcher:
                 self.logger.info(f'ignoring daemon error: {e}')
             except CancelledError as e:
                 self.logger.info(f'cancelled; prefetcher stopping {e}')
-                logging.exception("Here's the error:")
                 raise
             except Exception:   # pylint:disable=W0703
                 self.logger.exception('ignoring unexpected exception')
@@ -435,11 +434,11 @@ class BlockProcessor:
                          hashX + tx_numb + to_le_uint64(txout.value))
 
                 # For testing purposes TODO: Remove
-                if txout.value == 0:
-                    print('Found a tx with 0 value')
-                    print(txout.pk_script)
-                    if len(txout.pk_script) > 25 and txout.pk_script[25] == 0xc0:
-                        try:
+                try:
+                    if txout.value == 0:
+                        print('Found a tx with 0 value')
+                        print(txout.pk_script)
+                        if len(txout.pk_script) > 25 and txout.pk_script[25] == 0xc0:
                             print('Found an asset tx!!!')
                             length = txout.pk_script[26]
                             asset_header = txout.pk_script[27:30]
@@ -461,8 +460,8 @@ class BlockProcessor:
                             print(reissue)
                             print(has_ifps)
                             print(ifps)
-                        except Exception as ex:
-                            logging.exception("Oops my print testing broke :(")
+                except Exception as ex:
+                    logging.exception("Oops my print testing broke :(")
 
 
             append_hashXs(hashXs)
