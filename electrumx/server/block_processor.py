@@ -381,7 +381,12 @@ class BlockProcessor:
 
         is_unspendable = (is_unspendable_genesis if height >= self.coin.GENESIS_ACTIVATION
                           else is_unspendable_legacy)
-        undo_info = self.advance_txs(block.transactions, is_unspendable)
+        try:
+            undo_info = self.advance_txs(block.transactions, is_unspendable)
+        except Exception as ex:
+            logging.exception("Advance block exception")
+            raise ex
+
         if height >= min_height:
             self.undo_infos.append((undo_info, height))
             self.db.write_raw_block(block.raw, height)
@@ -648,8 +653,12 @@ class BlockProcessor:
                 self.reorg_count = None
                 # Prefetcher block cache cleared so nothing to process
             else:
-                blocks = self.prefetcher.get_prefetched_blocks()
-                await self._advance_blocks(blocks)
+                try:
+                    blocks = self.prefetcher.get_prefetched_blocks()
+                    await self._advance_blocks(blocks)
+                except Exception as ex:
+                    logging.exception("Process blocks exception")
+                    raise ex
 
         # This must be done to set state before the main loop
         if self.height == self.daemon.cached_height():
