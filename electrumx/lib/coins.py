@@ -216,6 +216,7 @@ class Ravencoin(Coin):
     RPC_PORT = 8766
     REORG_LIMIT = 100
     PEERS = [
+        'rvn4lyfe.com s',
     ]
 
     @classmethod
