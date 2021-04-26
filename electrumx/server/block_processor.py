@@ -659,9 +659,13 @@ class BlockProcessor:
             await self._on_caught_up()
 
         while True:
-            await self.blocks_event.wait()
-            self.blocks_event.clear()
-            await self.run_with_lock(process_event())
+            try:
+                await self.blocks_event.wait()
+                self.blocks_event.clear()
+                await self.run_with_lock(process_event())
+            except Exception as ex:
+                logging.exception("Process blocks exception")
+                raise ex
 
     async def _on_caught_up(self):
         if not self._caught_up_event.is_set():
