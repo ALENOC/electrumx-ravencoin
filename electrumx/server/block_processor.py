@@ -62,6 +62,7 @@ class Prefetcher:
                 self.logger.info(f'ignoring daemon error: {e}')
             except CancelledError as e:
                 self.logger.info(f'cancelled; prefetcher stopping {e}')
+                logging.exception("Here's the error:")
                 raise
             except Exception:   # pylint:disable=W0703
                 self.logger.exception('ignoring unexpected exception')
