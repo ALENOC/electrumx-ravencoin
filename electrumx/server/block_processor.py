@@ -62,6 +62,7 @@ class Prefetcher:
                 self.logger.info(f'ignoring daemon error: {e}')
             except CancelledError as e:
                 self.logger.info(f'cancelled; prefetcher stopping {e}')
+                logging.exception("Here is the error:")
                 raise
             except Exception:   # pylint:disable=W0703
                 self.logger.exception('ignoring unexpected exception')
@@ -381,11 +382,8 @@ class BlockProcessor:
 
         is_unspendable = (is_unspendable_genesis if height >= self.coin.GENESIS_ACTIVATION
                           else is_unspendable_legacy)
-        try:
-            undo_info = self.advance_txs(block.transactions, is_unspendable)
-        except Exception as ex:
-            logging.exception("Advance block exception")
-            raise ex
+
+        undo_info = self.advance_txs(block.transactions, is_unspendable)
 
         if height >= min_height:
             self.undo_infos.append((undo_info, height))
@@ -653,12 +651,8 @@ class BlockProcessor:
                 self.reorg_count = None
                 # Prefetcher block cache cleared so nothing to process
             else:
-                try:
-                    blocks = self.prefetcher.get_prefetched_blocks()
-                    await self._advance_blocks(blocks)
-                except Exception as ex:
-                    logging.exception("Process blocks exception")
-                    raise ex
+                blocks = self.prefetcher.get_prefetched_blocks()
+                await self._advance_blocks(blocks)
 
         # This must be done to set state before the main loop
         if self.height == self.daemon.cached_height():
@@ -707,7 +701,10 @@ class BlockProcessor:
             async with TaskGroup() as group:
                 await group.spawn(self.prefetcher.main_loop(self.height))
                 await group.spawn(self._process_blocks())
-            raise group.exception
+
+            # Bruh
+            if group.exception is not None:
+                raise group.exception
         # Don't flush for arbitrary exceptions as they might be a cause or consequence of
         # corrupted data
         except CancelledError:
