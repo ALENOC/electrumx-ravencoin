@@ -207,6 +207,9 @@ class Deserializer(object):
         return result
 
 
+# TODO: This was all just copied from v1.15 ... Change/update?
+
+
 class TxSegWit(namedtuple("Tx", "version marker flag inputs outputs "
                           "witness locktime")):
     '''Class representing a SegWit transaction.'''

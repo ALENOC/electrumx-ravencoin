@@ -11,7 +11,7 @@ else
     pip install aiohttp
     pip install pylru
     pip install plyvel
-    pip install aiorpcx==0.20.2
+    pip install aiorpcx==0.22.0
     pip install x16r_hash
     pip install x16rv2_hash
     pip install kawpow

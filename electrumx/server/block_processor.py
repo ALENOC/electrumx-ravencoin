@@ -9,6 +9,8 @@
 '''Block prefetcher and chain processor.'''
 
 
+import logging
+
 import asyncio
 import time
 from asyncio import sleep
@@ -430,6 +432,37 @@ class BlockProcessor:
                 append_hashX(hashX)
                 put_utxo(tx_hash + to_le_uint32(idx),
                          hashX + tx_numb + to_le_uint64(txout.value))
+
+                # For testing purposes TODO: Remove
+                if txout.value == 0:
+                    print('Found a tx with 0 value')
+                    print(txout.pk_script)
+                    if len(txout.pk_script) > 25 and txout.pk_script[25] == 0xc0:
+                        try:
+                            print('Found an asset tx!!!')
+                            length = txout.pk_script[26]
+                            asset_header = txout.pk_script[27:30]
+                            asset_type = chr(txout.pk_script[30])
+                            asset_name_len = txout.pk_script[31]
+                            asset_name = txout.pk_script[31:(32 + asset_name_len)].decode('ascii')
+                            sat_amt = int.from_bytes(txout.pk_script[(32 + asset_name_len):(40 + asset_name_len)],
+                                                     byteorder='little')
+                            div_amt = txout.pk_script[41 + asset_name_len]
+                            reissue = False if txout.pk_script[42 + asset_name_len] == 0 else True
+                            has_ifps = False if txout.pk_script[43 + asset_name_len] == 0 else True
+                            ifps = txout.pk_script[44 + asset_name_len:78 + length].hex() if has_ifps else None
+
+                            print(asset_header)
+                            print(asset_type)
+                            print(asset_name)
+                            print(sat_amt)
+                            print(div_amt)
+                            print(reissue)
+                            print(has_ifps)
+                            print(ifps)
+                        except Exception as ex:
+                            logging.exception("Oops my print testing broke :(")
+
 
             append_hashXs(hashXs)
             update_touched(hashXs)
