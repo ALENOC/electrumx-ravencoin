@@ -728,7 +728,7 @@ class BlockProcessor:
                          .format(hash_to_hex_str(tx_hash), tx_idx))
 
     def spend_asset(self, tx_hash, tx_idx):
-
+        # TODO: Find a way to make this faster
         # Fast track is it being in the cache
         idx_packed = pack_le_uint32(tx_idx)
         cache_value = self.asset_cache.pop(tx_hash + idx_packed, None)
@@ -755,13 +755,13 @@ class BlockProcessor:
                     continue
 
             # Key: b'u' + address_hashX + tx_idx + tx_num
-            # Value: the UTXO value as a 64-bit unsigned integer
+            # Value: the asset name and amt
             udb_key = b'u' + hashX + hdb_key[-9:]
             value = self.db.asset_db.get(udb_key)
             if value:
                 # Remove both entries for this UTXO
-                self.db_deletes.append(hdb_key)
-                self.db_deletes.append(udb_key)
+                self.asset_deletes.append(hdb_key)
+                self.asset_deletes.append(udb_key)
                 return hashX + tx_num_packed + value
 
         # Asset doesn't need to be found
