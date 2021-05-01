@@ -256,7 +256,7 @@ class DB(object):
         self.logger.info(f'flush #{self.history.flush_count:,d} took '
                          f'{elapsed:.1f}s.  Height {flush_data.height:,d} '
                          f'txs: {flush_data.tx_count:,d} ({tx_delta:+,d}) '
-                         f'assets: {flushdata.asset_count:,d} ({asset_delta:+.d})')
+                         f'assets: {flush_data.asset_count:,d} ({asset_delta:+.d})')
 
         # Catch-up stats
         if self.utxo_db.for_sync:

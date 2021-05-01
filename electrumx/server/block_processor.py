@@ -343,9 +343,6 @@ class BlockProcessor:
                          self.asset_count)
 
     async def flush(self, flush_utxos):
-        self.asset_cache.clear()
-        self.asset_data.clear()
-        self.asset_deletes.clear()
         self.db.flush_dbs(self.flush_data(), flush_utxos, self.estimate_txs_remaining)
         self.next_cache_check = time.monotonic() + 30
 
