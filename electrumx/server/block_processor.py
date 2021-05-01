@@ -366,7 +366,7 @@ class BlockProcessor:
         self.logger.info('our height: {:,d} daemon: {:,d} '
                          'UTXOs {:,d}MB hist {:,d}MB assets {:,d}MB'
                          .format(self.height, self.daemon.cached_height(),
-                                 utxo_MB, hist_MB), asset_MB)
+                                 utxo_MB, hist_MB, asset_MB))
 
         # Flush history if it takes up over 20% of cache memory.
         # Flush UTXOs once they take up 80% of cache memory.
