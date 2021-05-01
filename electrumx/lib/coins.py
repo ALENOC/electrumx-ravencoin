@@ -87,6 +87,10 @@ class Coin:
         assert cls.STATIC_BLOCK_HEADERS
         return height * cls.BASIC_HEADER_SIZE
 
+    def static_header_len(cls, height):
+        '''Given a header height return its length.'''
+        return (cls.static_header_offset(height + 1)
+                - cls.static_header_offset(height))
 
     @classmethod
     def lookup_coin_class(cls, name, net):
@@ -251,6 +255,7 @@ class Ravencoin(Coin):
         header = raw_block[:cls.BASIC_HEADER_SIZE] \
             if timestamp < cls.KAWPOW_ACTIVATION_TIME \
             else raw_block[:cls.KAWPOW_HEADER_SIZE]
+        assert header is not None
         txs = cls.DESERIALIZER(raw_block, start=len(header)).read_tx_block()
         return Block(raw_block, header, txs)
 

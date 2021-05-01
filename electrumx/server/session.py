@@ -1083,6 +1083,17 @@ class ElectrumX(SessionBase):
             self.unsubscribe_hashX(hashX)
             return None
 
+    async def hashX_listassets(self, hashX):
+        assets = await self.db.all_assets(hashX)
+        assets = sorted(assets)
+        self.bump_cost(1.0 + len(assets) / 50)
+        # TODO: mempool
+        return [{'tx_hash': hash_to_hex_str(asset.tx_hash),
+                 'tx_pos': asset.tx_pos,
+                 'height': asset.height,
+                 'value': asset.name}
+                for asset in assets]
+
     async def hashX_listunspent(self, hashX):
         '''Return the list of UTXOs of a script hash, including mempool
         effects.'''
@@ -1148,6 +1159,10 @@ class ElectrumX(SessionBase):
         '''Return the list of UTXOs of a scripthash.'''
         hashX = scripthash_to_hashX(scripthash)
         return await self.hashX_listunspent(hashX)
+
+    async def scripthash_listassets(self, scripthash):
+        hashX = scripthash_to_hashX(scripthash)
+        return await self.hashX_listassets(hashX)
 
     async def scripthash_subscribe(self, scripthash):
         '''Subscribe to a script hash.
@@ -1393,6 +1408,10 @@ class ElectrumX(SessionBase):
             self.bump_cost(cost)
             return hash_to_hex_str(tx_hash)
 
+    async def asset_get_meta(self, name):
+        self.bump_cost(1.0)
+        return await self.db.lookup_asset_meta(name)
+
     async def compact_fee_histogram(self):
         self.bump_cost(1.0)
         return []
@@ -1410,11 +1429,13 @@ class ElectrumX(SessionBase):
             'blockchain.scripthash.get_history': self.scripthash_get_history,
             'blockchain.scripthash.get_mempool': self.scripthash_get_mempool,
             'blockchain.scripthash.listunspent': self.scripthash_listunspent,
+            'blockchain.scripthash.listassets': self.scripthash_listassets,
             'blockchain.scripthash.subscribe': self.scripthash_subscribe,
             'blockchain.transaction.broadcast': self.transaction_broadcast,
             'blockchain.transaction.get': self.transaction_get,
             'blockchain.transaction.get_merkle': self.transaction_merkle,
             'blockchain.transaction.id_from_pos': self.transaction_id_from_pos,
+            'blockchain.asset.get_meta': self.asset_get_meta,
             'mempool.get_fee_histogram': self.compact_fee_histogram,
             'server.add_peer': self.add_peer,
             'server.banner': self.banner,

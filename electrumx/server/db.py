@@ -23,7 +23,7 @@ import attr
 from aiorpcx import run_in_thread, sleep
 
 import electrumx.lib.util as util
-from electrumx.lib.hash import hash_to_hex_str
+from electrumx.lib.hash import hash_to_hex_str, HASHX_LEN
 from electrumx.lib.merkle import Merkle, MerkleCache
 from electrumx.lib.util import (
     formatted_time, pack_be_uint16, pack_be_uint32, pack_le_uint32,
@@ -32,7 +32,7 @@ from electrumx.lib.util import (
 from electrumx.server.storage import db_class
 from electrumx.server.history import History
 
-
+ASSET = namedtuple("ASSET", "tx_num tx_pos tx_hash height name")
 UTXO = namedtuple("UTXO", "tx_num tx_pos tx_hash height value")
 
 
@@ -47,6 +47,12 @@ class FlushData(object):
     adds = attr.ib()
     deletes = attr.ib()
     tip = attr.ib()
+    # Assets
+    asset_adds = attr.ib()
+    asset_deletes = attr.ib()
+    asset_meta = attr.ib()
+    asset_undo_infos = attr.ib()
+    asset_count = attr.ib()
 
 
 class DB(object):
@@ -75,17 +81,21 @@ class DB(object):
         self.utxo_flush_count = 0
         self.fs_height = -1
         self.fs_tx_count = 0
+        self.fs_asset_count = 0
         self.db_height = -1
         self.db_tx_count = 0
+        self.db_asset_count = 0
         self.db_tip = None
         self.tx_counts = None
         self.last_flush = time.time()
         self.last_flush_tx_count = 0
+        self.last_flush_asset_count = 0
         self.wall_time = 0
         self.first_sync = True
         self.db_version = -1
 
         self.asset_db = None
+        self.asset_info_db = None
 
         self.logger.info(f'using {self.env.db_engine} for DB backend')
 
@@ -114,6 +124,7 @@ class DB(object):
     async def _open_dbs(self, for_sync, compacting):
         assert self.utxo_db is None
         assert self.asset_db is None
+        assert self.asset_info_db is None
 
         # First UTXO DB
         self.utxo_db = self.db_class('utxo', for_sync)
@@ -131,6 +142,7 @@ class DB(object):
         # Asset DB
         self.asset_db = self.db_class('asset', for_sync)
         self.read_asset_state()
+        self.asset_info_db = self.db_class('asset_info', for_sync)
 
         # Then history DB
         self.utxo_flush_count = self.history.open_db(self.db_class, for_sync,
@@ -187,6 +199,7 @@ class DB(object):
     def assert_flushed(self, flush_data):
         '''Asserts state is fully flushed.'''
         assert flush_data.tx_count == self.fs_tx_count == self.db_tx_count
+        assert flush_data.asset_count == self.fs_asset_count == self.db_asset_count
         assert flush_data.height == self.fs_height == self.db_height
         assert flush_data.tip == self.db_tip
         assert not flush_data.headers
@@ -194,6 +207,10 @@ class DB(object):
         assert not flush_data.adds
         assert not flush_data.deletes
         assert not flush_data.undo_infos
+        assert not flush_data.asset_adds
+        assert not flush_data.asset_deletes
+        assert not flush_data.asset_undo_infos
+        assert not flush_data.asset_meta
         self.history.assert_flushed()
 
     def flush_dbs(self, flush_data, flush_utxos, estimate_txs_remaining):
@@ -206,6 +223,7 @@ class DB(object):
         start_time = time.time()
         prior_flush = self.last_flush
         tx_delta = flush_data.tx_count - self.last_flush_tx_count
+        asset_delta = flush_data.asset_count - self.last_flush_asset_count
 
         # Flush to file system
         self.flush_fs(flush_data)
@@ -223,10 +241,22 @@ class DB(object):
         # time it took to commit the batch
         self.flush_state(self.utxo_db)
 
+        with self.asset_db.write_batch() as batch:
+            if flush_utxos:
+                self.flush_asset_db(batch, flush_data)
+            self.flush_asset_state(batch)
+
+        self.flush_asset_state(batch)
+
+        with self.asset_info_db.write_batch() as batch:
+            if flush_utxos:
+                self.flush_asset_info_db(batch, flush_data)
+
         elapsed = self.last_flush - start_time
         self.logger.info(f'flush #{self.history.flush_count:,d} took '
                          f'{elapsed:.1f}s.  Height {flush_data.height:,d} '
-                         f'txs: {flush_data.tx_count:,d} ({tx_delta:+,d})')
+                         f'txs: {flush_data.tx_count:,d} ({tx_delta:+,d}) '
+                         f'assets: {flushdata.asset_count:,d} ({asset_delta:+.d})')
 
         # Catch-up stats
         if self.utxo_db.for_sync:
@@ -273,6 +303,7 @@ class DB(object):
 
         self.fs_height = flush_data.height
         self.fs_tx_count = flush_data.tx_count
+        self.fs_asset_count = flush_data.asset_count
 
         if self.utxo_db.for_sync:
             elapsed = time.monotonic() - start_time
@@ -280,6 +311,53 @@ class DB(object):
 
     def flush_history(self):
         self.history.flush()
+
+    def flush_asset_info_db(self, batch, flush_data):
+        batch_put = batch.put
+        for key, value in flush_data.asset_meta.items():
+            div_amt = value['div_amt'].to_bytes(1, 'little')
+            reissuable = b'x\01' if value['reissuable'] else b'x\00'
+            has_ipfs = b'x\01' if value['has_ipfs'] else b'x\00'
+            ipfs = value['ipfs'] if value['has_ipfs'] else None
+            new_val = div_amt + reissuable + has_ipfs
+            if ipfs:
+                new_val += ipfs
+            batch_put(key, new_val)
+        flush_data.asset_meta.clear()
+
+    def flush_asset_db(self, batch, flush_data):
+        start_time = time.monotonic()
+        add_count = len(flush_data.asset_adds)
+        spend_count = len(flush_data.asset_deletes) // 2
+
+        # Spends
+        batch_delete = batch.delete
+        for key in sorted(flush_data.asset_deletes):
+            batch_delete(key)
+        flush_data.asset_deletes.clear()
+
+        # New UTXOs
+        batch_put = batch.put
+        for key, value in flush_data.asset_adds.items():
+            # suffix = tx_idx + tx_num
+            # value = hashx + tx_num + u64 sat val + asset name
+            hashX = value[:HASHX_LEN]
+            suffix = key[-4:] + value[HASHX_LEN:5+HASHX_LEN]
+            batch_put(b'h' + key[:4] + suffix, hashX)
+            batch_put(b'u' + hashX + suffix, value[5+HASHX_LEN:])
+        flush_data.asset_adds.clear()
+
+        # New undo information
+        self.flush_asset_undo_infos(batch_put, flush_data.asset_undo_infos)
+        flush_data.asset_undo_infos.clear()
+
+        if self.asset_db.for_sync:
+            elapsed = time.monotonic() - start_time
+            self.logger.info(f'{add_count:,d} Asset adds, '
+                             f'{spend_count:,d} spends in '
+                             f'{elapsed:.1f}s, committing...')
+
+        self.db_asset_count = flush_data.asset_count
 
     def flush_utxo_db(self, batch, flush_data):
         '''Flush the cached DB writes and UTXO set to the batch.'''
@@ -324,6 +402,10 @@ class DB(object):
         self.db_tx_count = flush_data.tx_count
         self.db_tip = flush_data.tip
 
+    def flush_asset_state(self, batch):
+        self.last_flush_asset_count = self.fs_asset_count
+        self.write_asset_state(batch)
+
     def flush_state(self, batch):
         '''Flush chain state to the batch.'''
         now = time.time()
@@ -341,23 +423,30 @@ class DB(object):
 
         start_time = time.time()
         tx_delta = flush_data.tx_count - self.last_flush_tx_count
+        asset_delta = flush_data.asset_count - self.last_flush_asset_count
 
-        self.backup_fs(flush_data.height, flush_data.tx_count)
+        self.backup_fs(flush_data.height, flush_data.tx_count, flush_data.asset_count)
         self.history.backup(touched, flush_data.tx_count)
         with self.utxo_db.write_batch() as batch:
             self.flush_utxo_db(batch, flush_data)
             # Flush state last as it reads the wall time.
             self.flush_state(batch)
 
+        with self.asset_db.write_batch() as batch:
+            self.flush_asset_db(batch, flush_data)
+            self.flush_asset_state(batch)
+
         elapsed = self.last_flush - start_time
         self.logger.info(f'backup flush #{self.history.flush_count:,d} took '
                          f'{elapsed:.1f}s.  Height {flush_data.height:,d} '
-                         f'txs: {flush_data.tx_count:,d} ({tx_delta:+,d})')
+                         f'txs: {flush_data.tx_count:,d} ({tx_delta:+,d}) '
+                         f'assets: {flush_data.asset_count:,d} ({asset_delta:+,d})')
 
-    def backup_fs(self, height, tx_count):
+    def backup_fs(self, height, tx_count, asset_count):
         '''Back up during a reorg.  This just updates our pointers.'''
         self.fs_height = height
         self.fs_tx_count = tx_count
+        self.fs_asset_count = asset_count
         # Truncate header_mc: header count is 1 more than the height.
         self.header_mc.truncate(height + 1)
 
@@ -430,7 +519,7 @@ class DB(object):
         offset = 0
         headers = []
         for n in range(count):
-            hlen = self.env.coin.static_header_offset(height + n)
+            hlen = self.env.coin.static_header_len(height + n)
             headers.append(headers_concat[offset:offset + hlen])
             offset += hlen
 
@@ -465,9 +554,16 @@ class DB(object):
         '''DB key for undo information at the given height.'''
         return b'U' + pack_be_uint32(height)
 
+    def read_asset_undo_info(self, height):
+        return self.asset_db.get(self.undo_key(height))
+
     def read_undo_info(self, height):
         '''Read undo information from a file for the current height.'''
         return self.utxo_db.get(self.undo_key(height))
+
+    def flush_asset_undo_infos(self, batch_put, undo_infos):
+        for undo_info, height in undo_infos:
+            batch_put(self.undo_key(height), b''.join(undoinfo))
 
     def flush_undo_infos(self, batch_put, undo_infos):
         '''undo_infos is a list of (undo_info, height) pairs.'''
@@ -514,6 +610,18 @@ class DB(object):
                     batch.delete(key)
             self.logger.info(f'deleted {len(keys):,d} stale undo entries')
 
+        keys = []
+        for key, _hist in self.asset_db.iterator(prefix=prefix):
+            height, = unpack_be_uint32(key[-4:])
+            if height >= min_height:
+                break
+            keys.append(key)
+
+        if keys:
+            with self.asset_db.write_batch() as batch:
+                for key in keys:
+                    batch.delete(key)
+
         # delete old block files
         prefix = self.raw_block_prefix()
         paths = [path for path in glob(f'{prefix}[0-9]*')
@@ -528,8 +636,19 @@ class DB(object):
             self.logger.info(f'deleted {len(paths):,d} stale block files')
 
     # -- Asset database
+
     def read_asset_state(self):
-        pass #TODO: This
+        state = self.asset_db.get(b'state')
+        if not state:
+            self.db_asset_count = 0
+        else:
+            state = ast.literal_eval(state.decode())
+            if not isinstance(state, dict):
+                raise self.DBError('failed reading state from asset DB')
+            self.db_asset_count = state['asset_count']
+
+        self.fs_asset_count = self.db_asset_count
+        self.last_flush_asset_count = self.fs_asset_count
 
     # -- UTXO database
 
@@ -673,6 +792,12 @@ class DB(object):
             self.write_utxo_state(batch)
         self.logger.info('DB 2 of 3 upgraded successfully')
 
+    def write_asset_state(self, batch):
+        state = {
+            'asset_count': self.db_asset_count,
+        }
+        batch.put(b'state', repr(state).encode())
+
     def write_utxo_state(self, batch):
         '''Write (UTXO) state to the batch.'''
         state = {
@@ -692,6 +817,26 @@ class DB(object):
         with self.utxo_db.write_batch() as batch:
             self.write_utxo_state(batch)
 
+    async def all_assets(self, hashX):
+        def read_assets():
+            assets = []
+            assets_append = assets.append
+            prefix = b'u' + hashX
+            for db_key, db_value in self.asset_db.iterator(prefix=prefix):
+                tx_pos, = unpack_le_uint32(db_key[-9:-5])
+                tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
+                value, = unpack_le_uint64(db_value)
+                tx_hash, height = self.fs_tx_hash(tx_num)
+                assets_append(ASSET(tx_num, tx_pos, tx_hash, height, value))
+            return assets
+
+        while True:
+            assets = await run_in_thread(read_assets)
+            if all(asset.tx_hash is not None for asset in assets):
+                return assets
+            self.logger.warning('all_assets: tx hash not found (reorg?), retrying...')
+            await sleep(0.25)
+
     async def all_utxos(self, hashX):
         '''Return all UTXOs for an address sorted in no particular order.'''
         def read_utxos():
@@ -703,9 +848,8 @@ class DB(object):
             for db_key, db_value in self.utxo_db.iterator(prefix=prefix):
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
                 tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
-                value, = unpack_le_uint64(db_value)
                 tx_hash, height = self.fs_tx_hash(tx_num)
-                utxos_append(UTXO(tx_num, tx_pos, tx_hash, height, value))
+                utxos_append(UTXO(tx_num, tx_pos, tx_hash, height, dbvalue))
             return utxos
 
         while True:
@@ -763,3 +907,57 @@ class DB(object):
 
         hashX_pairs = await run_in_thread(lookup_hashXs)
         return await run_in_thread(lookup_utxos, hashX_pairs)
+
+    async def lookup_asset_meta(self, asset_name):
+        db_value = self.asset_info_db.get(asset_name)
+        if not db_value:
+            return None
+        return db_value
+
+    async def lookup_assets(self, prevouts):
+        '''For each prevout, lookup it up in the DB and return a (hashX,
+        value) pair or None if not found.
+
+        Used by the mempool code.
+        '''
+        def lookup_hashXs():
+            '''Return (hashX, suffix) pairs, or None if not found,
+            for each prevout.
+            '''
+            def lookup_hashX(tx_hash, tx_idx):
+                idx_packed = pack_le_uint32(tx_idx)
+
+                # Key: b'h' + compressed_tx_hash + tx_idx + tx_num
+                # Value: hashX
+                prefix = b'h' + tx_hash[:4] + idx_packed
+
+                # Find which entry, if any, the TX_HASH matches.
+                for db_key, hashX in self.asset_db.iterator(prefix=prefix):
+                    tx_num_packed = db_key[-5:]
+                    tx_num, = unpack_le_uint64(tx_num_packed + bytes(3))
+                    fs_hash, _height = self.fs_tx_hash(tx_num)
+                    if fs_hash == tx_hash:
+                        return hashX, idx_packed + tx_num_packed
+                return None, None
+            return [lookup_hashX(*prevout) for prevout in prevouts]
+
+        def lookup_assets(hashX_pairs):
+            def lookup_asset(hashX, suffix):
+                if not hashX:
+                    # This can happen when the daemon is a block ahead
+                    # of us and has mempool txs spending outputs from
+                    # that new block
+                    return None
+                # Key: b'u' + address_hashX + tx_idx + tx_num
+                # Value: the UTXO value as a 64-bit unsigned integer
+                key = b'u' + hashX + suffix
+                db_value = self.asset_db.get(key)
+                if not db_value:
+                    # This can happen if the DB was updated between
+                    # getting the hashXs and getting the UTXOs
+                    return None
+                return hashX, db_value
+            return [lookup_asset(*hashX_pair) for hashX_pair in hashX_pairs]
+
+        hashX_pairs = await run_in_thread(lookup_hashXs)
+        return await run_in_thread(lookup_assets, hashX_pairs)
