@@ -227,9 +227,9 @@ class Ravencoin(Coin):
     @classmethod
     def get_header_length(cls, height):
         if height < cls.KAWPOW_ACTIVATION_HEIGHT:
-            80
+            return 80
         else:
-            120
+            return 120
 
     @classmethod
     def block(cls, raw_block):
