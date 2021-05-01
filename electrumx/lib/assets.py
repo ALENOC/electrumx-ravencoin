@@ -76,7 +76,7 @@ def is_asset_script(script: bytes):
                         index = 30
             elif script[28] == RVN_R:
                 if script[29] == RVN_V:
-                    if script[29] == RVN_N:
+                    if script[30] == RVN_N:
                         index = 31
 
             if index > 0:

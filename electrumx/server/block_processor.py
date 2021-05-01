@@ -442,23 +442,27 @@ class BlockProcessor:
                 if asset_info is not None:
                     try:
                         start = asset_info[2]
-                        asset_name = txout.pk_script[start:(start + asset_name_len)].decode('ascii')
+                        asset_name_len = txout.pk_script[start]
+                        asset_name = txout.pk_script[start+1:(start+1 + asset_name_len)].decode('ascii')
                         if not asset_info[1]: # Not an owner asset
-                            sat_amt = int.from_bytes(txout.pk_script[(start + asset_name_len):
-                                                                     (start + 8 + asset_name_len)],
+                            sat_amt = int.from_bytes(txout.pk_script[(start + 1 + asset_name_len):
+                                                                     (start + 9 + asset_name_len)],
                                                      byteorder='little')
                             if asset_info[0] != TX_TRANSFER_ASSET:
-                                div_amt = txout.pk_script[40 + asset_name_len]
-                                reissue = False if txout.pk_script[41 + asset_name_len] == 0 else True
+                                div_amt = txout.pk_script[start + 9 + asset_name_len]
+                                reissue = False if txout.pk_script[start + 10 + asset_name_len] == 0 else True
                                 if asset_info[0] != TX_REISSUE_ASSET:
                                     # This only happens when creating new assets
-                                    has_ifps = False if txout.pk_script[42 + asset_name_len] == 0 else True
+                                    has_ifps = False if txout.pk_script[start + 11 + asset_name_len] == 0 else True
                                     ifps = txout.pk_script[
-                                           43 + asset_name_len:77 + asset_name_len].hex() if has_ifps else None
+                                           start + 13 + asset_name_len:start + 47 + asset_name_len].hex() if has_ifps else None
+                                    if has_ifps:
+                                        print('Asset {} created with IPFS {}', asset_name, ifps)
                                 else:
                                     # When reissuing
                                     ifps = txout.pk_script[
-                                           42 + asset_name_len:75 + asset_name_len].hex()
+                                           start + 12 + asset_name_len:start + 46 + asset_name_len].hex()
+                                    print('Asset {} reissued with IPFS {}', asset_name, ifps)
                     except Exception as ex:
                         print('Error checking asset')
                         print(txout.pk_script)
