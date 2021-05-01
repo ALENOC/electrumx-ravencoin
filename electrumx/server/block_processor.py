@@ -488,7 +488,7 @@ class BlockProcessor:
                         asset_num += 1
                         start = asset_info[2]
                         asset_name_len = txout.pk_script[start]
-                        asset_name = txout.pk_script[start+1:(start+1 + asset_name_len)].decode('ascii')
+                        asset_name = txout.pk_script[start+1:(start+1 + asset_name_len)]
                         if asset_info[1]:
                             # This is an ownership asset, just give it "1"
                             put_asset(tx_hash + to_le_uint32(idx),
