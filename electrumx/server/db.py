@@ -313,6 +313,9 @@ class DB(object):
         self.history.flush()
 
     def flush_asset_info_db(self, batch, flush_data):
+        start_time = time.monotonic()
+        changes = len(flush_data.asset_meta)
+
         batch_put = batch.put
         for key, value in flush_data.asset_meta.items():
             div_amt = value['div_amt'].to_bytes(1, 'little')
@@ -324,6 +327,11 @@ class DB(object):
                 new_val += ipfs
             batch_put(key, new_val)
         flush_data.asset_meta.clear()
+
+        if self.asset_info_db.for_sync:
+            elapsed = time.monotonic() - start_time
+            self.logger.info(f'{changes:,d} assets\' metadata added or changed, '
+                             f'{elapsed:.1f}s, committing...')
 
     def flush_asset_db(self, batch, flush_data):
         start_time = time.monotonic()

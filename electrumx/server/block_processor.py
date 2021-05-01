@@ -515,7 +515,7 @@ class BlockProcessor:
                                         'has_ipfs': has_ifps
                                     }
                                     if has_ifps:
-                                        asset_data['ipfs'] = base_encode(ifps, 58)
+                                        asset_data['ipfs'] = ifps
                                     put_asset_data(asset_name, asset_data)
                                 else:
                                     # When reissuing
@@ -525,7 +525,7 @@ class BlockProcessor:
                                         'div_amt': div_amt,
                                         'reissuable': reissue,
                                         'has_ipfs': True,
-                                        'ipfs': base_encode(ifps, 58)
+                                        'ipfs': ifps
                                     }
                                     put_asset_data(asset_name, asset_data)
                     except Exception as ex:
