@@ -739,7 +739,7 @@ class BlockProcessor:
 
         # Asset doesn't need to be found
         # raise ChainError('UTXO {} / {:,d} not found in "h" table'
-                         .format(hash_to_hex_str(tx_hash), tx_idx))
+                        # .format(hash_to_hex_str(tx_hash), tx_idx))
 
     async def _process_blocks(self):
         '''Loop forever processing blocks as they arrive.'''
