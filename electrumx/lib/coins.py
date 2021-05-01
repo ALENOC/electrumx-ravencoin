@@ -87,7 +87,7 @@ class Coin:
         return height * cls.BASIC_HEADER_SIZE
 
 
-@classmethod
+    @classmethod
     def lookup_coin_class(cls, name, net):
         '''Return a coin class given name and network.
 
