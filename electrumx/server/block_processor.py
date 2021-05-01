@@ -22,7 +22,7 @@ from electrumx.server.daemon import DaemonError
 from electrumx.lib.hash import hash_to_hex_str, HASHX_LEN
 from electrumx.lib.script import is_unspendable_legacy, is_unspendable_genesis
 from electrumx.lib.util import (
-    class_logger, pack_le_uint32, pack_le_uint64, unpack_le_uint64
+    class_logger, pack_le_uint32, pack_le_uint64, unpack_le_uint64, base_encode
 )
 from electrumx.server.db import FlushData
 from electrumx.lib.assets import is_asset_script, TX_TRANSFER_ASSET, TX_NEW_ASSET, TX_REISSUE_ASSET
@@ -207,6 +207,19 @@ class BlockProcessor:
         self.utxo_cache = {}
         self.db_deletes = []
 
+        # Asset cache
+
+        # Same as utxo cache but for assets.
+        # All keys in this dict will also be in the
+        # utxo_cache because assets are normal tx's with no RVN value
+        self.asset_cache = {}
+
+        # Same as above.
+        self.asset_deletes = []
+
+        # A dict of the asset name -> asset data in json string form
+        self.asset_data = {}
+
     async def run_with_lock(self, coro):
         # Shielded so that cancellations from shutdown don't lose work.  Cancellation will
         # cause fetch_and_process_blocks to block on the lock in flush(), the task completes,
@@ -324,6 +337,9 @@ class BlockProcessor:
                          self.db_deletes, self.tip)
 
     async def flush(self, flush_utxos):
+        self.asset_cache.clear()
+        self.asset_data.clear()
+        self.asset_deletes.clear()
         self.db.flush_dbs(self.flush_data(), flush_utxos, self.estimate_txs_remaining)
         self.next_cache_check = time.monotonic() + 30
 
@@ -338,19 +354,25 @@ class BlockProcessor:
         # Roughly ntxs * 32 + nblocks * 42
         tx_hash_size = ((self.tx_count - self.db.fs_tx_count) * 32
                         + (self.height - self.db.fs_height) * 42)
+
+        asset_cache_size = len(self.asset_cache) * 235 #Added 30 bytes for the max name length
+        asset_deletes_size = len(self.asset_cache) * 57
+        asset_data_size = len(self.asset_data) * 232
+
         utxo_MB = (db_deletes_size + utxo_cache_size) // one_MB
         hist_MB = (hist_cache_size + tx_hash_size) // one_MB
+        asset_MB = (asset_data_size + asset_deletes_size + asset_cache_size) // one_MB
 
         self.logger.info('our height: {:,d} daemon: {:,d} '
-                         'UTXOs {:,d}MB hist {:,d}MB'
+                         'UTXOs {:,d}MB hist {:,d}MB assets {:,d}MB'
                          .format(self.height, self.daemon.cached_height(),
-                                 utxo_MB, hist_MB))
+                                 utxo_MB, hist_MB), asset_MB)
 
         # Flush history if it takes up over 20% of cache memory.
         # Flush UTXOs once they take up 80% of cache memory.
         cache_MB = self.env.cache_MB
-        if utxo_MB + hist_MB >= cache_MB or hist_MB >= cache_MB // 5:
-            return utxo_MB >= cache_MB * 4 // 5
+        if asset_MB + utxo_MB + hist_MB >= cache_MB or hist_MB >= cache_MB // 5:
+            return (utxo_MB + asset_MB) >= cache_MB * 4 // 5
         return None
 
     async def _advance_blocks(self, raw_blocks):
@@ -413,7 +435,10 @@ class BlockProcessor:
         tx_num = self.tx_count
         script_hashX = self.coin.hashX_from_script
         put_utxo = self.utxo_cache.__setitem__
+        put_asset = self.asset_cache.__setitem__
+        put_asset_data = self.asset_data.__setitem__
         spend_utxo = self.spend_utxo
+        spend_asset = self.spend_asset
         undo_info_append = undo_info.append
         update_touched = self.touched.update
         hashXs_by_tx = []
@@ -431,6 +456,7 @@ class BlockProcessor:
                 if txin.is_generation():
                     continue
                 cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
+                spend_asset(txin.prev_hash, txin.prev_idx)
                 undo_info_append(cache_value)
                 append_hashX(cache_value[:-13])
 
@@ -444,11 +470,11 @@ class BlockProcessor:
                 hashX = script_hashX(txout.pk_script)
 
                 # Ignore outputs to burn addresses
-                if hashX in BURN_ADDRESSES_SCRIPTX:
-                    print('IGNORING BURN ADDRESS UTXO')
-                else:
-                    append_hashX(hashX)
-                    put_utxo(tx_hash + to_le_uint32(idx),
+                # if hashX in BURN_ADDRESSES_SCRIPTX:
+                #    print('IGNORING BURN ADDRESS UTXO')
+                # else:
+                append_hashX(hashX)
+                put_utxo(tx_hash + to_le_uint32(idx),
                          hashX + tx_numb + to_le_uint64(txout.value))
 
                 # For testing purposes TODO: Remove
@@ -458,6 +484,8 @@ class BlockProcessor:
                         start = asset_info[2]
                         asset_name_len = txout.pk_script[start]
                         asset_name = txout.pk_script[start+1:(start+1 + asset_name_len)].decode('ascii')
+                        put_asset(tx_hash + to_le_uint32(idx),
+                                  hashX + tx_numb + txout.pk_script[start:1+start+asset_name_len])
                         if not asset_info[1]: # Not an owner asset
                             sat_amt = int.from_bytes(txout.pk_script[(start + 1 + asset_name_len):
                                                                      (start + 9 + asset_name_len)],
@@ -469,11 +497,25 @@ class BlockProcessor:
                                     # This only happens when creating new assets
                                     has_ifps = False if txout.pk_script[start + 11 + asset_name_len] == 0 else True
                                     ifps = txout.pk_script[
-                                           start + 12 + asset_name_len:start + 46 + asset_name_len].hex() if has_ifps else None
+                                           start + 12 + asset_name_len:start + 46 + asset_name_len] if has_ifps else None
+                                    asset_data = {
+                                        'div_amt': div_amt,
+                                        'reissuable': reissue,
+                                        'has_ifps': has_ifps
+                                    }
+                                    if has_ifps:
+                                        asset_data['ipfs'] = base_encode(ifps, 58)
+                                    put_asset_data(asset_name, asset_data)
                                 else:
                                     # When reissuing
                                     ifps = txout.pk_script[
-                                           start + 11 + asset_name_len:start + 45 + asset_name_len].hex()
+                                           start + 11 + asset_name_len:start + 45 + asset_name_len]
+                                    asset_data = {
+                                        'div_amt': div_amt,
+                                        'reissuable': reissue,
+                                        'ipfs': base_encode(ifps, 58)
+                                    }
+                                    put_asset_data(asset_name, asset_data)
                     except Exception as ex:
                         print('Error checking asset')
                         print(txout.pk_script)
@@ -656,6 +698,47 @@ class BlockProcessor:
                 return hashX + tx_num_packed + utxo_value_packed
 
         raise ChainError('UTXO {} / {:,d} not found in "h" table'
+                         .format(hash_to_hex_str(tx_hash), tx_idx))
+
+    def spend_asset(self, tx_hash, tx_idx):
+
+        # Fast track is it being in the cache
+        idx_packed = pack_le_uint32(tx_idx)
+        cache_value = self.asset_cache.pop(tx_hash + idx_packed, None)
+        if cache_value:
+            return # cache_value
+
+        # Spend it from the DB.
+
+        # Key: b'h' + compressed_tx_hash + tx_idx + tx_num
+        # Value: hashX
+        prefix = b'h' + tx_hash[:4] + idx_packed
+        candidates = {db_key: hashX for db_key, hashX
+                      in self.db.asset_db.iterator(prefix=prefix)}
+
+        for hdb_key, hashX in candidates.items():
+            tx_num_packed = hdb_key[-5:]
+
+            if len(candidates) > 1:
+                tx_num, = unpack_le_uint64(tx_num_packed + bytes(3))
+                # Assets are on txs
+                fs_hash, _height = self.db.fs_tx_hash(tx_num)
+                if fs_hash != tx_hash:
+                    assert fs_hash is not None  # Should always be found
+                    continue
+
+            # Key: b'u' + address_hashX + tx_idx + tx_num
+            # Value: the UTXO value as a 64-bit unsigned integer
+            udb_key = b'u' + hashX + hdb_key[-9:]
+            utxo_value_packed = self.db.utxo_db.get(udb_key)
+            if utxo_value_packed:
+                # Remove both entries for this UTXO
+                self.db_deletes.append(hdb_key)
+                self.db_deletes.append(udb_key)
+                return # hashX + tx_num_packed + utxo_value_packed
+
+        # Asset doesn't need to be found
+        # raise ChainError('UTXO {} / {:,d} not found in "h" table'
                          .format(hash_to_hex_str(tx_hash), tx_idx))
 
     async def _process_blocks(self):

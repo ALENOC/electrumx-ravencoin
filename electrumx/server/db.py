@@ -85,6 +85,8 @@ class DB(object):
         self.first_sync = True
         self.db_version = -1
 
+        self.asset_db = None
+
         self.logger.info(f'using {self.env.db_engine} for DB backend')
 
         # Header merkle cache
@@ -111,6 +113,7 @@ class DB(object):
 
     async def _open_dbs(self, for_sync, compacting):
         assert self.utxo_db is None
+        assert self.asset_db is None
 
         # First UTXO DB
         self.utxo_db = self.db_class('utxo', for_sync)
@@ -124,6 +127,10 @@ class DB(object):
         else:
             self.logger.info(f'opened UTXO DB (for sync: {for_sync})')
         self.read_utxo_state()
+
+        # Asset DB
+        self.asset_db = self.db_class('asset', for_sync)
+        self.read_asset_state()
 
         # Then history DB
         self.utxo_flush_count = self.history.open_db(self.db_class, for_sync,
@@ -153,8 +160,10 @@ class DB(object):
         if self.utxo_db:
             self.logger.info('closing DBs to re-open for serving')
             self.utxo_db.close()
+            self.asset_db.close()
             self.history.close_db()
             self.utxo_db = None
+            self.asset_db = None
         await self._open_dbs(False, False)
 
     # Header merkle cache
@@ -517,6 +526,10 @@ class DB(object):
                 except FileNotFoundError:
                     pass
             self.logger.info(f'deleted {len(paths):,d} stale block files')
+
+    # -- Asset database
+    def read_asset_state(self):
+        pass #TODO: This
 
     # -- UTXO database
 
