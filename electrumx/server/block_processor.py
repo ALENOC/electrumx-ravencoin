@@ -29,12 +29,12 @@ from electrumx.lib.assets import is_asset_script, TX_TRANSFER_ASSET, TX_NEW_ASSE
 
 # We can safely assume that TX's to these addresses will never come out
 # Therefore we don't need to store them in the database
-BURN_ADDRESSES = [
-    'RXissueAssetXXXXXXXXXXXXXXXXXhhZGt',
-    'RXReissueAssetXXXXXXXXXXXXXXVEFAWu',
-    'RXissueSubAssetXXXXXXXXXXXXXWcwhwL',
-    'RXissueUniqueAssetXXXXXXXXXXWEAe58',
-    'RXBurnXXXXXXXXXXXXXXXXXXXXXXWUo9FV',
+BURN_ADDRESSES_SCRIPTX = [
+    b'IB(?\x903\xc1\xdb\xe0\xfd}', # 'RXissueAssetXXXXXXXXXXXXXXXXXhhZGt'
+    b'\xb4K8\x1a\x1b\x7f\x98k\xe3\x869', # 'RXReissueAssetXXXXXXXXXXXXXXVEFAWu',
+    b'\x95\x90\x89*\xfaF|\xbaT\x11\xbb', # 'RXissueSubAssetXXXXXXXXXXXXXWcwhwL',
+    b'3\x7f\x1e\x0e\xe8)J\xf3;\x85|', #'RXissueUniqueAssetXXXXXXXXXXWEAe58',
+    b'\x11K\x89.t@eV\xe0\x93\xdd', # 'RXBurnXXXXXXXXXXXXXXXXXXXXXXWUo9FV',
 ]
 
 class Prefetcher:
@@ -443,20 +443,12 @@ class BlockProcessor:
                 # Get the hashX
                 hashX = script_hashX(txout.pk_script)
 
-                # if hashX in BURN_ADDRESSES:
-                #    print('IGNORING BURN ADDRESS UTXO')
-                # else:
-
-                print(self.coin.address_to_hashX('RXissueAssetXXXXXXXXXXXXXXXXXhhZGt'))
-                print(self.coin.address_to_hashX('RXReissueAssetXXXXXXXXXXXXXXVEFAWu'))
-                print(self.coin.address_to_hashX('RXissueSubAssetXXXXXXXXXXXXXWcwhwL'))
-                print(self.coin.address_to_hashX('RXissueUniqueAssetXXXXXXXXXXWEAe58'))
-                print(self.coin.address_to_hashX('RXBurnXXXXXXXXXXXXXXXXXXXXXXWUo9FV'))
-
-                print(hashX)
-
-                append_hashX(hashX)
-                put_utxo(tx_hash + to_le_uint32(idx),
+                # Ignore outputs to burn addresses
+                if hashX in BURN_ADDRESSES_SCRIPTX:
+                    print('IGNORING BURN ADDRESS UTXO')
+                else:
+                    append_hashX(hashX)
+                    put_utxo(tx_hash + to_le_uint32(idx),
                          hashX + tx_numb + to_le_uint64(txout.value))
 
                 # For testing purposes TODO: Remove
