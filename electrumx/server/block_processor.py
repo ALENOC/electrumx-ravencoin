@@ -25,6 +25,7 @@ from electrumx.lib.util import (
     class_logger, pack_le_uint32, pack_le_uint64, unpack_le_uint64
 )
 from electrumx.server.db import FlushData
+from electrumx.lib.assets import is_asset_script, TX_TRANSFER_ASSET, TX_NEW_ASSET, TX_REISSUE_ASSET
 
 
 class Prefetcher:
@@ -437,34 +438,35 @@ class BlockProcessor:
                          hashX + tx_numb + to_le_uint64(txout.value))
 
                 # For testing purposes TODO: Remove
-                if txout.value == 0:
-                    if len(txout.pk_script) > 26 and txout.pk_script[25] == 0xc0:
-                        try:
-                            length = txout.pk_script[26]
-                            asset_header = txout.pk_script[27:30]
-                            asset_type = chr(txout.pk_script[30])
-                            asset_name_len = txout.pk_script[31]
-                            asset_name = txout.pk_script[32:(32 + asset_name_len)].decode('ascii')
-                            if asset_type != 'o':
-                                sat_amt = int.from_bytes(txout.pk_script[(32 + asset_name_len):(40 + asset_name_len)],
-                                                         byteorder='little')
-                                if asset_type != 't':
-                                    div_amt = txout.pk_script[40 + asset_name_len]
-                                    reissue = False if txout.pk_script[41 + asset_name_len] == 0 else True
-                                    if asset_type != 'r':
-                                        has_ifps = False if txout.pk_script[42 + asset_name_len] == 0 else True
-                                        ifps = txout.pk_script[
+                asset_info = is_asset_script(txout.pk_script)
+                if asset_info is not None:
+                    try:
+                        start = asset_info[2]
+                        asset_name = txout.pk_script[start:(start + asset_name_len)].decode('ascii')
+                        if not asset_info[1]: # Not an owner asset
+                            sat_amt = int.from_bytes(txout.pk_script[(start + asset_name_len):
+                                                                     (start + 8 + asset_name_len)],
+                                                     byteorder='little')
+                            if asset_info[0] != TX_TRANSFER_ASSET:
+                                div_amt = txout.pk_script[40 + asset_name_len]
+                                reissue = False if txout.pk_script[41 + asset_name_len] == 0 else True
+                                if asset_info[0] != TX_REISSUE_ASSET:
+                                    # This only happens when creating new assets
+                                    has_ifps = False if txout.pk_script[42 + asset_name_len] == 0 else True
+                                    ifps = txout.pk_script[
                                            43 + asset_name_len:77 + asset_name_len].hex() if has_ifps else None
-                                    else:
-                                        ifps = txout.pk_script[
-                                               42 + asset_name_len:75 + asset_name_len].hex()
-                        except Exception as ex:
-                            print('Error checking asset')
-                            print(txout.pk_script)
-                            print('Tx ID:')
-                            print(tx_hash)
-                            logging.exception('block_processor asset error')
-
+                                else:
+                                    # When reissuing
+                                    ifps = txout.pk_script[
+                                           42 + asset_name_len:75 + asset_name_len].hex()
+                    except Exception as ex:
+                        print('Error checking asset')
+                        print(txout.pk_script)
+                        print('Tx ID:')
+                        b = bytearray(tx_hash)
+                        b.reverse()
+                        print(bytes(b).hex())
+                        logging.exception('block_processor asset error')
 
             append_hashXs(hashXs)
             update_touched(hashXs)
