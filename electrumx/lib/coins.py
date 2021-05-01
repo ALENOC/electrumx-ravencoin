@@ -242,7 +242,7 @@ class Ravencoin(Coin):
         return result
 
 
-@classmethod
+    @classmethod
     def block(cls, raw_block):
         '''Return a Block namedtuple given a raw block and its height.'''
         timestamp = util.unpack_le_uint32_from(raw_block, 68)[0]
