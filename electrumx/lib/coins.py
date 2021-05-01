@@ -223,6 +223,7 @@ class Ravencoin(Coin):
     X16RV2_ACTIVATION_TIME = 1569945600   # algo switch to x16rv2 at this timestamp
     KAWPOW_ACTIVATION_TIME = 1588788000  # kawpow algo activation time
     KAWPOW_ACTIVATION_HEIGHT = 1219736
+    KAWPOW_HEADER_SIZE = 120
     TX_COUNT = 5626682
     TX_COUNT_HEIGHT = 887000
     TX_PER_BLOCK = 6
@@ -247,7 +248,9 @@ class Ravencoin(Coin):
     def block(cls, raw_block):
         '''Return a Block namedtuple given a raw block and its height.'''
         timestamp = util.unpack_le_uint32_from(raw_block, 68)[0]
-        header = raw_block[:80] if timestamp < cls.KAWPOW_ACTIVATION_TIME else raw_block[:120]
+        header = raw_block[:cls.BASIC_HEADER_SIZE] \
+            if timestamp < cls.KAWPOW_ACTIVATION_TIME \
+            else raw_block[:cls.KAWPOW_HEADER_SIZE]
         txs = cls.DESERIALIZER(raw_block, start=len(header)).read_tx_block()
         return Block(raw_block, header, txs)
 
