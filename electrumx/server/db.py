@@ -9,6 +9,8 @@
 '''Interface to the blockchain database.'''
 
 
+import logging
+
 import array
 import ast
 import os
@@ -158,12 +160,16 @@ class DB(object):
     # Header merkle cache
 
     async def populate_header_merkle_cache(self):
-        self.logger.info('populating header merkle cache...')
-        length = max(1, self.db_height - self.env.reorg_limit)
-        start = time.monotonic()
-        await self.header_mc.initialize(length)
-        elapsed = time.monotonic() - start
-        self.logger.info(f'header merkle cache populated in {elapsed:.1f}s')
+        try:
+            self.logger.info('populating header merkle cache...')
+            length = max(1, self.db_height - self.env.reorg_limit)
+            start = time.monotonic()
+            await self.header_mc.initialize(length)
+            elapsed = time.monotonic() - start
+            self.logger.info(f'header merkle cache populated in {elapsed:.1f}s')
+        except Exception as ex:
+            logging.exception('DB.populate_header_merkle_cache error:')
+            raise
 
     async def header_branch_and_root(self, length, height):
         return await self.header_mc.branch_and_root(length, height)

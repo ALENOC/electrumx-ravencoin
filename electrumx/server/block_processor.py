@@ -706,6 +706,8 @@ class BlockProcessor:
                 await group.spawn(self.prefetcher.main_loop(self.height))
                 await group.spawn(self._process_blocks())
 
+            print('Block_Processor fetch_and_process_blocks error:')
+            print('group.exception')
             # Bruh
             if group.exception is not None:
                 raise group.exception

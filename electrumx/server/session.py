@@ -7,6 +7,8 @@
 
 '''Classes for local RPC server and remote client TCP/SSL servers.'''
 
+import logging
+
 import codecs
 import itertools
 import json
@@ -620,6 +622,7 @@ class SessionManager:
                 await group.spawn(self._log_sessions())
                 await group.spawn(self._manage_servers())
         finally:
+            logging.exception('Session.serve Error:')
             # Close servers then sessions
             self.logger.info('stopping servers')
             await self._stop_servers(self.servers.keys())
