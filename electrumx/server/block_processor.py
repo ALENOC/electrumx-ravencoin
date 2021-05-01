@@ -439,7 +439,6 @@ class BlockProcessor:
                 # For testing purposes TODO: Remove
                 if txout.value == 0:
                     if len(txout.pk_script) > 26 and txout.pk_script[25] == 0xc0:
-                        print('Found an asset tx!!!')
                         try:
                             length = txout.pk_script[26]
                             asset_header = txout.pk_script[27:30]
