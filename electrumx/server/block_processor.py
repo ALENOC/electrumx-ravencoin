@@ -455,13 +455,13 @@ class BlockProcessor:
                                     # This only happens when creating new assets
                                     has_ifps = False if txout.pk_script[start + 11 + asset_name_len] == 0 else True
                                     ifps = txout.pk_script[
-                                           start + 13 + asset_name_len:start + 47 + asset_name_len].hex() if has_ifps else None
+                                           start + 12 + asset_name_len:start + 46 + asset_name_len].hex() if has_ifps else None
                                     if has_ifps:
                                         print('Asset {} created with IPFS {}'.format(asset_name, ifps))
                                 else:
                                     # When reissuing
                                     ifps = txout.pk_script[
-                                           start + 12 + asset_name_len:start + 46 + asset_name_len].hex()
+                                           start + 11 + asset_name_len:start + 45 + asset_name_len].hex()
                                     print('Asset {} reissued with IPFS {}'.format(asset_name, ifps))
                     except Exception as ex:
                         print('Error checking asset')
