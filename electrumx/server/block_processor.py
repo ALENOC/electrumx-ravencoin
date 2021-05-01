@@ -757,12 +757,12 @@ class BlockProcessor:
             # Key: b'u' + address_hashX + tx_idx + tx_num
             # Value: the UTXO value as a 64-bit unsigned integer
             udb_key = b'u' + hashX + hdb_key[-9:]
-            utxo_value_packed = self.db.utxo_db.get(udb_key)
-            if utxo_value_packed:
+            value = self.db.asset_db.get(udb_key)
+            if value:
                 # Remove both entries for this UTXO
                 self.db_deletes.append(hdb_key)
                 self.db_deletes.append(udb_key)
-                return hashX + tx_num_packed + utxo_value_packed
+                return hashX + tx_num_packed + value
 
         # Asset doesn't need to be found
         # raise ChainError('UTXO {} / {:,d} not found in "h" table'
