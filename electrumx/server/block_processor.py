@@ -441,16 +441,17 @@ class BlockProcessor:
                     continue
 
                 # Get the hashX
-                # hashX = script_hashX(txout.pk_script)
+                hashX = script_hashX(txout.pk_script)
+
                 # if hashX in BURN_ADDRESSES:
                 #    print('IGNORING BURN ADDRESS UTXO')
                 # else:
 
-                print(coin.address_to_hashX('RXissueAssetXXXXXXXXXXXXXXXXXhhZGt'))
-                print(coin.address_to_hashX('RXReissueAssetXXXXXXXXXXXXXXVEFAWu'))
-                print(coin.address_to_hashX('RXissueSubAssetXXXXXXXXXXXXXWcwhwL'))
-                print(coin.address_to_hashX('RXissueUniqueAssetXXXXXXXXXXWEAe58'))
-                print(coin.address_to_hashX('RXBurnXXXXXXXXXXXXXXXXXXXXXXWUo9FV'))
+                print(self.coin.address_to_hashX('RXissueAssetXXXXXXXXXXXXXXXXXhhZGt'))
+                print(self.coin.address_to_hashX('RXReissueAssetXXXXXXXXXXXXXXVEFAWu'))
+                print(self.coin.address_to_hashX('RXissueSubAssetXXXXXXXXXXXXXWcwhwL'))
+                print(self.coin.address_to_hashX('RXissueUniqueAssetXXXXXXXXXXWEAe58'))
+                print(self.coin.address_to_hashX('RXBurnXXXXXXXXXXXXXXXXXXXXXXWUo9FV'))
 
                 print(hashX)
 
