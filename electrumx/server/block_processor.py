@@ -460,14 +460,21 @@ class BlockProcessor:
                                     print(div_amt)
                                     reissue = False if txout.pk_script[41 + asset_name_len] == 0 else True
                                     print(reissue)
-                                    has_ifps = False if txout.pk_script[42 + asset_name_len] == 0 else True
-                                    print(has_ifps)
-                                    ifps = txout.pk_script[
+                                    if asset_type != 'r':
+                                        has_ifps = False if txout.pk_script[42 + asset_name_len] == 0 else True
+                                        print(has_ifps)
+                                        ifps = txout.pk_script[
                                            43 + asset_name_len:77 + asset_name_len].hex() if has_ifps else None
-                                    print(ifps)
+                                        print(ifps)
+                                    else:
+                                        ifps = txout.pk_script[
+                                               42 + asset_name_len:75 + asset_name_len].hex()
+                                        print(ifps)
                         except Exception as ex:
                             print('Error checking asset')
                             print(txout.pk_script)
+                            print('Tx ID:')
+                            print(tx_hash)
                             logging.exception('block_processor asset error')
 
 
