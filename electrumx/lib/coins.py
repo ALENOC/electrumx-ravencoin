@@ -224,7 +224,7 @@ class Ravencoin(Coin):
     def block(cls, raw_block):
         '''Return a Block namedtuple given a raw block and its height.'''
         timestamp = int.from_bytes(raw_block[68:72], byteorder='little')
-        header = raw_block[:80] if timestamp <= cls.KAWPOW_ACTIVATION_TIME else raw_block[:120]
+        header = raw_block[:80] if timestamp < cls.KAWPOW_ACTIVATION_TIME else raw_block[:120]
         txs = cls.DESERIALIZER(raw_block, start=len(header)).read_tx_block()
         return Block(raw_block, header, txs)
 
