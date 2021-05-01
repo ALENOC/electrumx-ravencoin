@@ -77,6 +77,10 @@ class Coin:
     PEERS = []
 
     @classmethod
+    def get_header_length(cls, height):
+        return 80
+
+    @classmethod
     def lookup_coin_class(cls, name, net):
         '''Return a coin class given name and network.
 
@@ -219,6 +223,13 @@ class Ravencoin(Coin):
     PEERS = [
         'rvn4lyfe.com s',
     ]
+
+    @classmethod
+    def get_header_length(cls, height):
+        if height < cls.KAWPOW_ACTIVATION_HEIGHT:
+            80
+        else:
+            120
 
     @classmethod
     def block(cls, raw_block):

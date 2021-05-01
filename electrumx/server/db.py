@@ -419,9 +419,9 @@ class DB(object):
             raise self.DBError('only got {:,d} headers starting at {:,d}, not '
                                '{:,d}'.format(headers_count, height, count))
         offset = 0
-        hlen = 80
         headers = []
-        for _ in range(count):
+        for n in range(count):
+            hlen = self.header_len(height + n)
             headers.append(headers_concat[offset:offset + hlen])
             offset += hlen
 
