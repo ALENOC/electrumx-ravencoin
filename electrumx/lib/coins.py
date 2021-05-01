@@ -62,6 +62,7 @@ class Coin:
     RPC_URL_REGEX = re.compile('.+@(\\[[0-9a-fA-F:]+\\]|[^:]+)(:[0-9]+)?')
     VALUE_PER_COIN = 100000000
     SESSIONCLS = ElectrumX
+    STATIC_BLOCK_HEADERS = True
     DEFAULT_MAX_SEND = 1000000
     DESERIALIZER = lib_tx.Deserializer
     DAEMON = daemon.Daemon
@@ -77,10 +78,16 @@ class Coin:
     PEERS = []
 
     @classmethod
-    def get_header_length(cls, height):
-        return 80
+    def static_header_offset(cls, height):
+        '''Given a header height return its offset in the headers file.
 
-    @classmethod
+        If header sizes change at some point, this is the only code
+        that needs updating.'''
+        assert cls.STATIC_BLOCK_HEADERS
+        return height * cls.BASIC_HEADER_SIZE
+
+
+@classmethod
     def lookup_coin_class(cls, name, net):
         '''Return a coin class given name and network.
 
@@ -225,13 +232,17 @@ class Ravencoin(Coin):
     ]
 
     @classmethod
-    def get_header_length(cls, height):
-        if height < cls.KAWPOW_ACTIVATION_HEIGHT:
-            return 80
-        else:
-            return 120
+    def static_header_offset(cls, height):
+        '''Given a header height return its offset in the headers file.'''
+        if cls.KAWPOW_ACTIVATION_HEIGHT < 0 or height <= cls.KAWPOW_ACTIVATION_HEIGHT:
+            result = height * cls.BASIC_HEADER_SIZE
+        else:  # RVN block header size increased with kawpow fork
+            baseoffset = cls.KAWPOW_ACTIVATION_HEIGHT * cls.BASIC_HEADER_SIZE
+            result = baseoffset + ((height - cls.KAWPOW_ACTIVATION_HEIGHT) * cls.KAWPOW_HEADER_SIZE)
+        return result
 
-    @classmethod
+
+@classmethod
     def block(cls, raw_block):
         '''Return a Block namedtuple given a raw block and its height.'''
         timestamp = util.unpack_le_uint32_from(raw_block, 68)[0]
