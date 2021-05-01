@@ -63,6 +63,7 @@ class Coin:
     VALUE_PER_COIN = 100000000
     SESSIONCLS = ElectrumX
     STATIC_BLOCK_HEADERS = True
+    BASIC_HEADER_SIZE = 80
     DEFAULT_MAX_SEND = 1000000
     DESERIALIZER = lib_tx.Deserializer
     DAEMON = daemon.Daemon
