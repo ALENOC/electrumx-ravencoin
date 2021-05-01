@@ -421,7 +421,7 @@ class DB(object):
         offset = 0
         headers = []
         for n in range(count):
-            hlen = self.header_len(height + n)
+            hlen = self.env.coin.get_header_length(height + n)
             headers.append(headers_concat[offset:offset + hlen])
             offset += hlen
 
