@@ -27,6 +27,15 @@ from electrumx.lib.util import (
 from electrumx.server.db import FlushData
 from electrumx.lib.assets import is_asset_script, TX_TRANSFER_ASSET, TX_NEW_ASSET, TX_REISSUE_ASSET
 
+# We can safely assume that TX's to these addresses will never come out
+# Therefore we don't need to store them in the database
+BURN_ADDRESSES = [
+    'RXissueAssetXXXXXXXXXXXXXXXXXhhZGt',
+    'RXReissueAssetXXXXXXXXXXXXXXVEFAWu',
+    'RXissueSubAssetXXXXXXXXXXXXXWcwhwL',
+    'RXissueUniqueAssetXXXXXXXXXXWEAe58',
+    'RXBurnXXXXXXXXXXXXXXXXXXXXXXWUo9FV',
+]
 
 class Prefetcher:
     '''Prefetches blocks (in the forward direction only).'''
@@ -432,7 +441,19 @@ class BlockProcessor:
                     continue
 
                 # Get the hashX
-                hashX = script_hashX(txout.pk_script)
+                # hashX = script_hashX(txout.pk_script)
+                # if hashX in BURN_ADDRESSES:
+                #    print('IGNORING BURN ADDRESS UTXO')
+                # else:
+
+                print(coin.address_to_hashX('RXissueAssetXXXXXXXXXXXXXXXXXhhZGt'))
+                print(coin.address_to_hashX('RXReissueAssetXXXXXXXXXXXXXXVEFAWu'))
+                print(coin.address_to_hashX('RXissueSubAssetXXXXXXXXXXXXXWcwhwL'))
+                print(coin.address_to_hashX('RXissueUniqueAssetXXXXXXXXXXWEAe58'))
+                print(coin.address_to_hashX('RXBurnXXXXXXXXXXXXXXXXXXXXXXWUo9FV'))
+
+                print(hashX)
+
                 append_hashX(hashX)
                 put_utxo(tx_hash + to_le_uint32(idx),
                          hashX + tx_numb + to_le_uint64(txout.value))
@@ -456,13 +477,10 @@ class BlockProcessor:
                                     has_ifps = False if txout.pk_script[start + 11 + asset_name_len] == 0 else True
                                     ifps = txout.pk_script[
                                            start + 12 + asset_name_len:start + 46 + asset_name_len].hex() if has_ifps else None
-                                    if has_ifps:
-                                        print('Asset {} created with IPFS {}'.format(asset_name, ifps))
                                 else:
                                     # When reissuing
                                     ifps = txout.pk_script[
                                            start + 11 + asset_name_len:start + 45 + asset_name_len].hex()
-                                    print('Asset {} reissued with IPFS {}'.format(asset_name, ifps))
                     except Exception as ex:
                         print('Error checking asset')
                         print(txout.pk_script)
