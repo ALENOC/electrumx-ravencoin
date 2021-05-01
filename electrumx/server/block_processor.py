@@ -536,6 +536,7 @@ class BlockProcessor:
                         b.reverse()
                         print(bytes(b).hex())
                         logging.exception('block_processor asset error')
+                        raise
 
             append_hashXs(hashXs)
             update_touched(hashXs)
