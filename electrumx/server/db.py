@@ -173,9 +173,11 @@ class DB(object):
             self.logger.info('closing DBs to re-open for serving')
             self.utxo_db.close()
             self.asset_db.close()
+            self.asset_info_db.close()
             self.history.close_db()
             self.utxo_db = None
             self.asset_db = None
+            self.asset_info_db = None
         await self._open_dbs(False, False)
 
     # Header merkle cache
@@ -571,7 +573,7 @@ class DB(object):
 
     def flush_asset_undo_infos(self, batch_put, undo_infos):
         for undo_info, height in undo_infos:
-            batch_put(self.undo_key(height), b''.join(undoinfo))
+            batch_put(self.undo_key(height), b''.join(undo_info))
 
     def flush_undo_infos(self, batch_put, undo_infos):
         '''undo_infos is a list of (undo_info, height) pairs.'''
