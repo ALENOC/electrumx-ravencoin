@@ -381,8 +381,9 @@ class BlockProcessor:
     async def _advance_blocks(self, raw_blocks):
         '''Process the list of raw blocks passed.  Detects and handles reorgs.'''
         start = time.monotonic()
-        for raw_block in raw_blocks:
-            block = self.coin.block(raw_block)
+        first = self.height + 1
+        for n, raw_block in enumerate(raw_blocks):
+            block = self.coin.block(raw_block, first + n)
             if self.coin.header_prevhash(block.header) != self.tip:
                 self.schedule_reorg(-1)
                 return

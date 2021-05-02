@@ -72,6 +72,9 @@ class DB(object):
         self.env = env
         self.coin = env.coin
 
+        self.header_offset = self.coin.static_header_offset
+        self.header_len = self.coin.static_header_len
+
         self.logger.info(f'switching current directory to {env.db_dir}')
         os.chdir(env.db_dir)
 
@@ -293,7 +296,7 @@ class DB(object):
         # Write the headers, tx counts, and tx hashes
         start_time = time.monotonic()
         height_start = self.fs_height + 1
-        offset = height_start * 80
+        offset = self.header_offset(height_start)
         self.headers_file.write(offset, b''.join(flush_data.headers))
         flush_data.headers.clear()
 
@@ -472,7 +475,6 @@ class DB(object):
         are available starting at start_height up to count.  This
         would be zero if start_height is beyond self.db_height, for
         example.
-
         Returns a (binary, n) pair where binary is the concatenated
         binary headers, and n is the count of headers returned.
         '''
@@ -484,8 +486,8 @@ class DB(object):
             # Read some from disk
             disk_count = max(0, min(count, self.db_height + 1 - start_height))
             if disk_count:
-                offset = self.coin.static_header_offset(start_height)
-                size = self.coin.static_header_offset(start_height + disk_count) - offset
+                offset = self.header_offset(start_height)
+                size = self.header_offset(start_height + disk_count) - offset
                 return self.headers_file.read(offset, size), disk_count
             return b'', 0
 
@@ -529,11 +531,9 @@ class DB(object):
         offset = 0
         headers = []
         for n in range(count):
-            hlen = self.env.coin.static_header_len(height + n)
+            hlen = self.header_len(height + n)
             headers.append(headers_concat[offset:offset + hlen])
             offset += hlen
-
-        return [self.coin.header_hash(header) for header in headers]
 
     async def limited_history(self, hashX, *, limit=1000):
         '''Return an unpruned, sorted list of (tx_hash, height) tuples of

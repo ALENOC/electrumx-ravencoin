@@ -62,7 +62,6 @@ class Coin:
     RPC_URL_REGEX = re.compile('.+@(\\[[0-9a-fA-F:]+\\]|[^:]+)(:[0-9]+)?')
     VALUE_PER_COIN = 100000000
     SESSIONCLS = ElectrumX
-    STATIC_BLOCK_HEADERS = True
     BASIC_HEADER_SIZE = 80
     DEFAULT_MAX_SEND = 1000000
     DESERIALIZER = lib_tx.Deserializer
@@ -84,7 +83,6 @@ class Coin:
 
         If header sizes change at some point, this is the only code
         that needs updating.'''
-        assert cls.STATIC_BLOCK_HEADERS
         return height * cls.BASIC_HEADER_SIZE
 
     @classmethod
@@ -134,16 +132,16 @@ class Coin:
     @classmethod
     def genesis_block(cls, block):
         '''Check the Genesis block is the right one for this coin.
-
         Return the block less its unspendable coinbase.
         '''
-        header = block[:80]
+        header = cls.block_header(block, 0)
         header_hex_hash = hash_to_hex_str(cls.header_hash(header))
         if header_hex_hash != cls.GENESIS_HASH:
             raise CoinError('genesis block has hash {} expected {}'
                             .format(header_hex_hash, cls.GENESIS_HASH))
 
         return header + bytes(1)
+
 
     @classmethod
     def hashX_from_script(cls, script):
@@ -195,9 +193,14 @@ class Coin:
         return header[4:36]
 
     @classmethod
-    def block(cls, raw_block):
+    def block_header(cls, block, height):
+        '''Returns the block header given a block and its height.'''
+        return block[:cls.static_header_len(height)]
+
+    @classmethod
+    def block(cls, raw_block, height):
         '''Return a Block namedtuple given a raw block and its height.'''
-        header = raw_block[:80]
+        header = cls.block_header(raw_block, height)
         txs = cls.DESERIALIZER(raw_block, start=len(header)).read_tx_block()
         return Block(raw_block, header, txs)
 
@@ -209,8 +212,6 @@ class Coin:
         For example 1 BSV is returned for 100 million satoshis.
         '''
         return Decimal(value) / cls.VALUE_PER_COIN
-
-
 
 
 class Ravencoin(Coin):
@@ -247,18 +248,6 @@ class Ravencoin(Coin):
             baseoffset = cls.KAWPOW_ACTIVATION_HEIGHT * cls.BASIC_HEADER_SIZE
             result = baseoffset + ((height - cls.KAWPOW_ACTIVATION_HEIGHT) * cls.KAWPOW_HEADER_SIZE)
         return result
-
-
-    @classmethod
-    def block(cls, raw_block):
-        '''Return a Block namedtuple given a raw block and its height.'''
-        timestamp = util.unpack_le_uint32_from(raw_block, 68)[0]
-        header = raw_block[:cls.BASIC_HEADER_SIZE] \
-            if timestamp < cls.KAWPOW_ACTIVATION_TIME \
-            else raw_block[:cls.KAWPOW_HEADER_SIZE]
-        assert header is not None
-        txs = cls.DESERIALIZER(raw_block, start=len(header)).read_tx_block()
-        return Block(raw_block, header, txs)
 
     @classmethod
     def header_hash(cls, header):
