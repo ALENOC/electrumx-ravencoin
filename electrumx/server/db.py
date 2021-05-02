@@ -535,6 +535,8 @@ class DB(object):
             headers.append(headers_concat[offset:offset + hlen])
             offset += hlen
 
+        return headers
+
     async def limited_history(self, hashX, *, limit=1000):
         '''Return an unpruned, sorted list of (tx_hash, height) tuples of
         confirmed transactions that touched the address, earliest in

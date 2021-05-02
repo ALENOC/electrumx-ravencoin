@@ -606,8 +606,10 @@ class BlockProcessor:
         # Value of the asset cache is:
         # HASHX + TX_NUMB + SATS IN U64 + 1 BYTE OF LEN + NAME
         # HASHX_LEN BYTES + 5 BYTES + 8 BYTES + 1 BYTE + VAR BYTES
-        def find_asset_undo_len(n):
-            if n == 0:
+        def find_asset_undo_len(max):
+            assert max <= len(asset_undo_info)
+
+            if max == 0:
                 return 0
             else:
                 def val_len(ptr):
@@ -617,11 +619,11 @@ class BlockProcessor:
                 last_val_ptr = 0
                 while True:
                     next_data = last_val_ptr + val_len(last_val_ptr)
-                    if next_data >= n:
+                    if next_data >= max:
                         break
                     last_val_ptr += val_len(last_val_ptr)
-                assert next_data == n
-                return n - last_val_ptr
+                assert next_data == max
+                return max - last_val_ptr
 
         assets = 0
         put_asset = self.asset_cache.__setitem__
