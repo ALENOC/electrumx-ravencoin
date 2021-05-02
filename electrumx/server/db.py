@@ -484,8 +484,8 @@ class DB(object):
             # Read some from disk
             disk_count = max(0, min(count, self.db_height + 1 - start_height))
             if disk_count:
-                offset = start_height * 80
-                size = disk_count * 80
+                offset = self.coin.static_header_offset(start_height)
+                size = self.coin.static_header_offset(start_height + disk_count) - offset
                 return self.headers_file.read(offset, size), disk_count
             return b'', 0
 
