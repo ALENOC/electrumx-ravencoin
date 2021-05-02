@@ -87,6 +87,7 @@ class Coin:
         assert cls.STATIC_BLOCK_HEADERS
         return height * cls.BASIC_HEADER_SIZE
 
+    @classmethod
     def static_header_len(cls, height):
         '''Given a header height return its length.'''
         return (cls.static_header_offset(height + 1)
