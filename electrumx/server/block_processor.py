@@ -493,14 +493,14 @@ class BlockProcessor:
                             # This is an ownership asset, just give it "1"
                             put_asset(tx_hash + to_le_uint32(idx),
                                   hashX + tx_numb + to_le_uint64(100_000_000) +
-                                      asset_name)
+                                      txout.pk_script[start:(start+1 + asset_name_len)])
                         else: # Not an owner asset
                             sat_amt = int.from_bytes(txout.pk_script[(start + 1 + asset_name_len):
                                                                      (start + 9 + asset_name_len)],
                                                      byteorder='little')
                             put_asset(tx_hash + to_le_uint32(idx),
                                       hashX + tx_numb + to_le_uint64(sat_amt) +
-                                      asset_name)
+                                      txout.pk_script[start:(start+1 + asset_name_len)])
                             if asset_info[0] != TX_TRANSFER_ASSET:
                                 div_amt = txout.pk_script[start + 9 + asset_name_len]
                                 reissue = False if txout.pk_script[start + 10 + asset_name_len] == 0 else True
@@ -547,6 +547,9 @@ class BlockProcessor:
         self.asset_count = asset_num
         self.tx_count = tx_num
         self.db.tx_counts.append(tx_num)
+
+        # Assets aren't always in tx's... remove None types
+        asset_undo_info = [i for i in asset_undo_info if i]
 
         return undo_info, asset_undo_info
 
@@ -596,6 +599,29 @@ class BlockProcessor:
         touched = self.touched
         undo_entry_len = 13 + HASHX_LEN
 
+        # n is our pointer.
+        # Items in our list are ordered, but we want them backwards.
+
+        # Value of the asset cache is:
+        # HASHX + TX_NUMB + SATS IN U64 + 1 BYTE OF LEN + NAME
+        # HASHX_LEN BYTES + 5 BYTES + 8 BYTES + 1 BYTE + VAR BYTES
+        def find_asset_undo_len(n):
+            if n == 0:
+                return 0
+            else:
+                def val_len(ptr):
+                    name_len = asset_undo_info[ptr+HASHX_LEN+13]
+                    return name_len + HASHX_LEN + 14
+
+                last_val_ptr = 0
+                while True:
+                    next_data = last_val_ptr + val_len(last_val_ptr)
+                    if next_data >= n:
+                        break
+                    last_val_ptr += val_len(last_val_ptr)
+                assert next_data == n
+                return n - last_val_ptr
+
         assets = 0
         put_asset = self.asset_cache.__setitem__
         spend_asset = self.spend_asset
@@ -608,7 +634,13 @@ class BlockProcessor:
                     continue
 
                 cache_value = spend_utxo(tx_hash, idx)
-                spend_asset(tx_hash, idx)
+
+                # Since we add assets in the UTXO's normally, when backing up
+                # Remove them in the spend.
+                if spend_asset(tx_hash, idx):
+                    assets += 1
+
+                # All assets will be in the normal utxo cache
                 touched.add(cache_value[:-13])
 
             # Restore the inputs
@@ -619,9 +651,11 @@ class BlockProcessor:
                 undo_item = undo_info[n:n + undo_entry_len]
                 put_utxo(txin.prev_hash + pack_le_uint32(txin.prev_idx), undo_item)
                 touched.add(undo_item[:-13])
-                asset_undo_item = asset_undo_info[asset_n:asset_n+undo_entry_len]
-                if asset_undo_item:
-                    asset_n -= undo_entry_len
+
+                asset_undo_entry_len = find_asset_undo_len(asset_n)
+                if asset_undo_entry_len > 0: #TODO: Find a better number check, but this should work
+                    asset_n -= asset_undo_entry_len
+                    asset_undo_item = asset_undo_info[asset_n:asset_n+asset_undo_entry_len]
                     put_asset(txin.prev_hash + pack_le_uint32(txin.prev_idx), asset_undo_item)
 
         assert n == 0
@@ -755,11 +789,11 @@ class BlockProcessor:
                     continue
 
             # Key: b'u' + address_hashX + tx_idx + tx_num
-            # Value: the asset name and amt
+            # Value: the asset amt and name
             udb_key = b'u' + hashX + hdb_key[-9:]
             value = self.db.asset_db.get(udb_key)
             if value:
-                # Remove both entries for this UTXO
+                # Remove both entries for this Asset
                 self.asset_deletes.append(hdb_key)
                 self.asset_deletes.append(udb_key)
                 return hashX + tx_num_packed + value
