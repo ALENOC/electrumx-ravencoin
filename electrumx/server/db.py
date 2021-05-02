@@ -449,6 +449,9 @@ class DB(object):
             self.flush_asset_db(batch, flush_data)
             self.flush_asset_state(batch)
 
+        with self.asset_info_db.write_batch() as batch:
+            self.flush_asset_info_db(batch, flush_data)
+
         elapsed = self.last_flush - start_time
         self.logger.info(f'backup flush #{self.history.flush_count:,d} took '
                          f'{elapsed:.1f}s.  Height {flush_data.height:,d} '
