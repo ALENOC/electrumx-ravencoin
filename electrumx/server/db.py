@@ -329,11 +329,15 @@ class DB(object):
 
         for key, value in flush_data.asset_meta_reissues.items():
             batch_delete(key)
+            print('Reissuing asset')
+            print(key)
             batch_put(key, value)
         flush_data.asset_meta_reissues.clear()
 
         batch_put = batch.put
         for key, value in flush_data.asset_meta_adds.items():
+            print('New asset')
+            print(key)
             batch_put(key, value)
         flush_data.asset_meta_adds.clear()
 
@@ -398,6 +402,8 @@ class DB(object):
             # suffix = tx_idx + tx_num
             hashX = value[:-13]
             suffix = key[-4:] + value[-13:-8]
+            print('Asset tx')
+            print(key)
             batch_put(b'h' + key[:4] + suffix, hashX)
             batch_put(b'u' + hashX + suffix, value[-8:])
         flush_data.adds.clear()
