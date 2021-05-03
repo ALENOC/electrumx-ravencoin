@@ -657,7 +657,7 @@ class BlockProcessor:
         assert n == 0
         assert asset_n == 0
         self.tx_count -= len(txs)
-        self.asset_count -= len(assets)
+        self.asset_count -= assets
 
     '''An in-memory UTXO cache, representing all changes to UTXO state
     since the last DB flush.
