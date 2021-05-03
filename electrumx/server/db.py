@@ -253,8 +253,6 @@ class DB(object):
                 self.flush_asset_db(batch, flush_data)
             self.flush_asset_state(batch)
 
-        self.flush_asset_state(batch)
-
         with self.asset_info_db.write_batch() as batch:
             if flush_utxos:
                 self.flush_asset_info_db(batch, flush_data)
@@ -331,6 +329,7 @@ class DB(object):
             batch_delete(key)
             print('Reissuing asset')
             print(key)
+            print('==========')
             batch_put(key, value)
         flush_data.asset_meta_reissues.clear()
 
@@ -338,6 +337,7 @@ class DB(object):
         for key, value in flush_data.asset_meta_adds.items():
             print('New asset')
             print(key)
+            print('==========')
             batch_put(key, value)
         flush_data.asset_meta_adds.clear()
 
@@ -361,10 +361,10 @@ class DB(object):
         # New Assets
         batch_put = batch.put
         for key, value in flush_data.asset_adds.items():
-            print('Asset tx')
-            print(key)
-            print(value)
-            print('================')
+            # print('Asset tx')
+            # print(key)
+            # print(value)
+            # print('================')
             # suffix = tx_idx + tx_num
             # value = hashx + tx_num + u64 sat val + namelen + asset name
             hashX = value[:HASHX_LEN]
@@ -853,9 +853,8 @@ class DB(object):
             for db_key, db_value in self.asset_db.iterator(prefix=prefix):
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
                 tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
-                value, = unpack_le_uint64(db_value)
                 tx_hash, height = self.fs_tx_hash(tx_num)
-                assets_append(ASSET(tx_num, tx_pos, tx_hash, height, value))
+                assets_append(ASSET(tx_num, tx_pos, tx_hash, height, db_value))
             return assets
 
         while True:
