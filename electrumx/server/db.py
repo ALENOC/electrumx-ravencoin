@@ -938,14 +938,7 @@ class DB(object):
 
     async def lookup_asset_meta(self, asset_name):
         def read_assets_meta():
-            assets = []
-            assets_append = assets.append
-            # Key: b'u' + address_hashX + tx_idx + tx_num
-            # Value: the UTXO value as a 64-bit unsigned integer
-            for db_key, _ in self.asset_info_db.iterator(prefix=asset_name):
-                assets_append(db_key)
-            return assets
-
+            return self.asset_info_db.get(asset_name)
         return await run_in_thread(read_assets_meta)
 
     async def lookup_assets(self, prevouts):
