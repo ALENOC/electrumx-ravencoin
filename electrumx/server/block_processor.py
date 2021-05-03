@@ -220,8 +220,9 @@ class BlockProcessor:
 
         self.asset_undo_infos = []
 
-        # A dict of the asset name -> asset data in json string form
-        self.asset_data = {}
+        # A dict of the asset name -> asset data
+        self.asset_data_new = {}
+        self.asset_data_reissued = {}
 
     async def run_with_lock(self, coro):
         # Shielded so that cancellations from shutdown don't lose work.  Cancellation will
@@ -339,7 +340,8 @@ class BlockProcessor:
                          self.tx_hashes, self.undo_infos, self.utxo_cache,
                          self.db_deletes, self.tip,
                          self.asset_cache, self.asset_deletes,
-                         self.asset_data, self.asset_undo_infos,
+                         self.asset_data_new, self.asset_data_reissued,
+                         self.asset_undo_infos,
                          self.asset_count)
 
     async def flush(self, flush_utxos):
@@ -358,13 +360,16 @@ class BlockProcessor:
         tx_hash_size = ((self.tx_count - self.db.fs_tx_count) * 32
                         + (self.height - self.db.fs_height) * 42)
 
+        #TODO Fix these approximations
         asset_cache_size = len(self.asset_cache) * 235 #Added 30 bytes for the max name length
-        asset_deletes_size = len(self.asset_cache) * 57
-        asset_data_size = len(self.asset_data) * 232
+        asset_deletes_size = len(self.asset_deletes) * 57
+        asset_data_new_size = len(self.asset_data_new) * 232
+        asset_data_reissue_size = len(self.asset_data_reissued) * 232
 
         utxo_MB = (db_deletes_size + utxo_cache_size) // one_MB
         hist_MB = (hist_cache_size + tx_hash_size) // one_MB
-        asset_MB = (asset_data_size + asset_deletes_size + asset_cache_size) // one_MB
+        asset_MB = (asset_data_new_size + asset_data_reissue_size +
+                    asset_deletes_size + asset_cache_size) // one_MB
 
         self.logger.info('our height: {:,d} daemon: {:,d} '
                          'UTXOs {:,d}MB hist {:,d}MB assets {:,d}MB'
@@ -419,6 +424,7 @@ class BlockProcessor:
         is_unspendable = (is_unspendable_genesis if height >= self.coin.GENESIS_ACTIVATION
                           else is_unspendable_legacy)
 
+        #TODO: Asset meta undo infos
         (undo_info, asset_undo_info) = self.advance_txs(block.transactions, is_unspendable)
 
         if height >= min_height:
@@ -443,7 +449,8 @@ class BlockProcessor:
         script_hashX = self.coin.hashX_from_script
         put_utxo = self.utxo_cache.__setitem__
         put_asset = self.asset_cache.__setitem__
-        put_asset_data = self.asset_data.__setitem__
+        put_asset_data_new = self.asset_data_new.__setitem__
+        put_asset_data_reissued = self.asset_data_reissued.__setitem__
         spend_utxo = self.spend_utxo
         spend_asset = self.spend_asset
         undo_info_append = undo_info.append
@@ -513,7 +520,7 @@ class BlockProcessor:
                                     asset_data = txout.pk_script[start+9+asset_name_len:start+11+asset_name_len]
                                     if has_ifps:
                                         asset_data += ifps
-                                    put_asset_data(asset_name, asset_data)
+                                    put_asset_data_new(asset_name, asset_data)
                                 else:
                                     # When reissuing
                                     ifps = txout.pk_script[
@@ -521,7 +528,7 @@ class BlockProcessor:
                                     asset_data = txout.pk_script[start+9+asset_name_len:start+11+asset_name_len]
                                     asset_data += b'\x01' # Always ifps ?
                                     asset_data += ifps
-                                    put_asset_data(asset_name, asset_data)
+                                    put_asset_data_reissued(asset_name, asset_data)
                     except Exception as ex:
                         print('Error checking asset')
                         print(txout.pk_script)
@@ -577,6 +584,8 @@ class BlockProcessor:
         await sleep(0)
 
     def _backup_txs(self, txs, is_unspendable):
+        #TODO: Asset meta undo infos
+
         # Prevout values, in order down the block (coinbase first if present)
         # undo_info is in reverse block order
         undo_info = self.db.read_undo_info(self.height)

@@ -50,7 +50,8 @@ class FlushData(object):
     # Assets
     asset_adds = attr.ib()
     asset_deletes = attr.ib()
-    asset_meta = attr.ib()
+    asset_meta_adds = attr.ib()
+    asset_meta_reissues = attr.ib()
     asset_undo_infos = attr.ib()
     asset_count = attr.ib()
 
@@ -215,7 +216,8 @@ class DB(object):
         assert not flush_data.asset_adds
         assert not flush_data.asset_deletes
         assert not flush_data.asset_undo_infos
-        assert not flush_data.asset_meta
+        assert not flush_data.asset_meta_adds
+        assert not flush_data.asset_meta_reissues
         self.history.assert_flushed()
 
     def flush_dbs(self, flush_data, flush_utxos, estimate_txs_remaining):
@@ -319,25 +321,26 @@ class DB(object):
 
     def flush_asset_info_db(self, batch, flush_data):
         start_time = time.monotonic()
-        changes = len(flush_data.asset_meta)
-
-        deletes = [key for key, _ in flush_data.asset_meta.items() if self.asset_info_db.get(key)]
-
-        dels = len(deletes)
+        adds = len(flush_data.asset_meta_adds)
+        reissues = len(flush_data.asset_meta_reissues)
 
         batch_delete = batch.delete
-        for key in deletes:
+        batch_put = batch.put
+
+        for key, value in flush_data.asset_meta_reissues:
             batch_delete(key)
+            batch_put(key, value)
+        flush_data.asset_meta_reissues.clear()
 
         batch_put = batch.put
         for key, value in flush_data.asset_meta.items():
             batch_put(key, value)
-        flush_data.asset_meta.clear()
+        flush_data.asset_meta_adds.clear()
 
         if self.asset_info_db.for_sync:
             elapsed = time.monotonic() - start_time
-            self.logger.info(f'{(changes-dels):,d} assets\' metadata created, '
-                             f'{dels:,d} assets\' metadata reissued '
+            self.logger.info(f'{adds:,d} assets\' metadata created, '
+                             f'{reissues:,d} assets\' metadata reissued '
                              f'{elapsed:.1f}s, committing...')
 
     def flush_asset_db(self, batch, flush_data):
@@ -351,11 +354,11 @@ class DB(object):
             batch_delete(key)
         flush_data.asset_deletes.clear()
 
-        # New UTXOs
+        # New Assets
         batch_put = batch.put
         for key, value in flush_data.asset_adds.items():
             # suffix = tx_idx + tx_num
-            # value = hashx + tx_num + u64 sat val + asset name
+            # value = hashx + tx_num + u64 sat val + namelen + asset name
             hashX = value[:HASHX_LEN]
             suffix = key[-4:] + value[HASHX_LEN:5+HASHX_LEN]
             batch_put(b'h' + key[:4] + suffix, hashX)
@@ -926,10 +929,16 @@ class DB(object):
         return await run_in_thread(lookup_utxos, hashX_pairs)
 
     async def lookup_asset_meta(self, asset_name):
-        db_value = self.asset_info_db.get(asset_name)
-        if not db_value:
-            return ""
-        return db_value
+        def read_assets_meta():
+            assets = []
+            assets_append = assets.append
+            # Key: b'u' + address_hashX + tx_idx + tx_num
+            # Value: the UTXO value as a 64-bit unsigned integer
+            for db_key, _ in self.utxo_db.iterator(prefix=asset_name):
+                assets_append(db_key)
+            return assets
+
+        return await run_in_thread(read_assets_meta)
 
     async def lookup_assets(self, prevouts):
         '''For each prevout, lookup it up in the DB and return a (hashX,
