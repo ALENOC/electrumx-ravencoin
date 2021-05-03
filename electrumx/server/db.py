@@ -333,7 +333,7 @@ class DB(object):
         flush_data.asset_meta_reissues.clear()
 
         batch_put = batch.put
-        for key, value in flush_data.asset_meta.items():
+        for key, value in flush_data.asset_meta_adds.items():
             batch_put(key, value)
         flush_data.asset_meta_adds.clear()
 

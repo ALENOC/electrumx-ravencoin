@@ -64,7 +64,7 @@ def is_null_global_restriction_asset_tx_data_script(script: bytes) -> bool:
 def is_null_asset_verifier_tx_data_script(script: bytes) -> bool:
     return len(script) > 3 and script[0] == OP_RVN_ASSET and script[1] == OP_RESERVED and script[2] != OP_RESERVED
 
-def search_for_rvn(script: bytes, start: int):
+def search_for_rvn(script: bytes, start: int): #TODO Use python
     index = -1
     if script[start] == RVN_R:
         if script[start+1] == RVN_V:
