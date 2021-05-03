@@ -337,7 +337,7 @@ class DB(object):
         if self.asset_info_db.for_sync:
             elapsed = time.monotonic() - start_time
             self.logger.info(f'{(changes-dels):,d} assets\' metadata created, '
-                             f'{dels:,d} assets\' metadata reissued'
+                             f'{dels:,d} assets\' metadata reissued '
                              f'{elapsed:.1f}s, committing...')
 
     def flush_asset_db(self, batch, flush_data):

@@ -560,7 +560,7 @@ class BlockProcessor:
         coin = self.coin
 
         # Check and update self.tip
-        block = coin.block(raw_block)
+        block = coin.block(raw_block, self.height)
         header_hash = coin.header_hash(block.header)
         if header_hash != self.tip:
             raise ChainError('backup block {} not tip {} at height {:,d}'
