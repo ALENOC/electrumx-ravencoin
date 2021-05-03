@@ -942,7 +942,7 @@ class DB(object):
             assets_append = assets.append
             # Key: b'u' + address_hashX + tx_idx + tx_num
             # Value: the UTXO value as a 64-bit unsigned integer
-            for db_key, _ in self.utxo_db.iterator(prefix=asset_name):
+            for db_key, _ in self.asset_info_db.iterator(prefix=asset_name):
                 assets_append(db_key)
             return assets
 
