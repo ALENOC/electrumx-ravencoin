@@ -1410,7 +1410,8 @@ class ElectrumX(SessionBase):
 
     async def asset_get_meta(self, name):
         self.bump_cost(1.0)
-        return await self.db.asset_info_db.get(name.encode('ascii'))
+        print(next(self.db.asset_info_db))
+        #return self.db.asset_info_db.get(name.encode('ascii'))
 
     async def compact_fee_histogram(self):
         self.bump_cost(1.0)
