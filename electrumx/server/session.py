@@ -1084,7 +1084,8 @@ class ElectrumX(SessionBase):
             return None
 
     async def hashX_listassets(self, hashX):
-        print(next(self.db.asset_db.iterator()))
+        assets = await self.db.all_assets(hashX)
+        print(assets)
         # assets = sorted(assets)
         # self.bump_cost(1.0 + len(assets) / 50)
         # TODO: mempool

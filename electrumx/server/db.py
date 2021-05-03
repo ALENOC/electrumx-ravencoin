@@ -367,10 +367,10 @@ class DB(object):
             # print('================')
             # suffix = tx_idx + tx_num
             # value = hashx + tx_num + u64 sat val + namelen + asset name
-            hashX = value[:HASHX_LEN]
-            suffix = key[-4:] + value[HASHX_LEN:5+HASHX_LEN]
-            batch_put(b'h' + key[:4] + suffix, hashX)
-            batch_put(b'u' + hashX + suffix, value[5+HASHX_LEN:])
+            hashX = value[:HASHX_LEN+1]
+            suffix = key[-4:] + value[HASHX_LEN:6+HASHX_LEN]
+            batch_put(b'h' + key[:5] + suffix, hashX)
+            batch_put(b'u' + hashX + suffix, value[6+HASHX_LEN:])
         flush_data.asset_adds.clear()
 
         # New undo information
@@ -851,6 +851,7 @@ class DB(object):
             assets_append = assets.append
             prefix = b'u' + hashX
             for db_key, db_value in self.asset_db.iterator(prefix=prefix):
+                print(db_value)
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
                 tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
