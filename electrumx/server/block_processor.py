@@ -22,7 +22,7 @@ from electrumx.server.daemon import DaemonError
 from electrumx.lib.hash import hash_to_hex_str, HASHX_LEN
 from electrumx.lib.script import is_unspendable_legacy, is_unspendable_genesis
 from electrumx.lib.util import (
-    class_logger, pack_le_uint32, pack_le_uint64, unpack_le_uint64, base_encode
+    class_logger, pack_le_uint32, pack_le_uint64, unpack_le_uint64
 )
 from electrumx.server.db import FlushData
 from electrumx.lib.assets import is_asset_script, TX_TRANSFER_ASSET, TX_NEW_ASSET, TX_REISSUE_ASSET
@@ -517,7 +517,7 @@ class BlockProcessor:
                                     has_ifps = False if txout.pk_script[start + 11 + asset_name_len] == 0 else True
                                     ifps = txout.pk_script[
                                            start + 12 + asset_name_len:start + 46 + asset_name_len] if has_ifps else None
-                                    asset_data = txout.pk_script[start+9+asset_name_len:start+11+asset_name_len]
+                                    asset_data = txout.pk_script[start+9+asset_name_len:start+12+asset_name_len]
                                     if has_ifps:
                                         asset_data += ifps
                                     put_asset_data_new(asset_name, asset_data)

@@ -27,7 +27,7 @@ from electrumx.lib.hash import hash_to_hex_str, HASHX_LEN
 from electrumx.lib.merkle import Merkle, MerkleCache
 from electrumx.lib.util import (
     formatted_time, pack_be_uint16, pack_be_uint32, pack_le_uint32,
-    unpack_le_uint32, unpack_be_uint32, unpack_le_uint64
+    unpack_le_uint32, unpack_be_uint32, unpack_le_uint64, base_encode
 )
 from electrumx.server.storage import db_class
 from electrumx.server.history import History
@@ -937,7 +937,20 @@ class DB(object):
 
     async def lookup_asset_meta(self, asset_name):
         def read_assets_meta():
-            return self.asset_info_db.get(asset_name)
+            b = self.asset_info_db.get(asset_name)
+            div_amt = b[0]
+            reissuable = b[1]
+            has_ipfs = b[2]
+            if has_ipfs:
+                ipfs_data = b[2:]
+            to_ret = {
+                'divisions': div_amt,
+                'reissuable': reissuable,
+                'has_ipfs': has_ipfs
+            }
+            if has_ipfs:
+                to_ret['ipfs'] = base_encode(ipfs_data,58)
+            return to_ret
         return await run_in_thread(read_assets_meta)
 
     async def lookup_assets(self, prevouts):
