@@ -321,7 +321,7 @@ class DB(object):
         start_time = time.monotonic()
         changes = len(flush_data.asset_meta)
 
-        deletes = [key for key, _ in flush_data.asset_meta.items() if asset_info_db.get(key)]
+        deletes = [key for key, _ in flush_data.asset_meta.items() if self.asset_info_db.get(key)]
 
         dels = len(deletes)
 
