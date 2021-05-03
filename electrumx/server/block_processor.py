@@ -510,24 +510,17 @@ class BlockProcessor:
                                     has_ifps = False if txout.pk_script[start + 11 + asset_name_len] == 0 else True
                                     ifps = txout.pk_script[
                                            start + 12 + asset_name_len:start + 46 + asset_name_len] if has_ifps else None
-                                    asset_data = {
-                                        'div_amt': div_amt,
-                                        'reissuable': reissue,
-                                        'has_ipfs': has_ifps
-                                    }
+                                    asset_data = txout.pk_script[start+9+asset_name_len:start+11+asset_name_len]
                                     if has_ifps:
-                                        asset_data['ipfs'] = ifps
+                                        asset_data += ifps
                                     put_asset_data(asset_name, asset_data)
                                 else:
                                     # When reissuing
                                     ifps = txout.pk_script[
                                            start + 11 + asset_name_len:start + 45 + asset_name_len]
-                                    asset_data = {
-                                        'div_amt': div_amt,
-                                        'reissuable': reissue,
-                                        'has_ipfs': True,
-                                        'ipfs': ifps
-                                    }
+                                    asset_data = txout.pk_script[start+9+asset_name_len:start+11+asset_name_len]
+                                    asset_data += b'\x01' # Always ifps ?
+                                    asset_data += ifps
                                     put_asset_data(asset_name, asset_data)
                     except Exception as ex:
                         print('Error checking asset')

@@ -321,21 +321,23 @@ class DB(object):
         start_time = time.monotonic()
         changes = len(flush_data.asset_meta)
 
+        deletes = [key for key, _ in flush_data.asset_meta.items() if asset_info_db.get(key)]
+
+        dels = len(deletes)
+
+        batch_delete = batch.delete
+        for key in deletes:
+            batch_delete(key)
+
         batch_put = batch.put
         for key, value in flush_data.asset_meta.items():
-            div_amt = value['div_amt'].to_bytes(1, 'little')
-            reissuable = b'x\01' if value['reissuable'] else b'x\00'
-            has_ipfs = b'x\01' if value['has_ipfs'] else b'x\00'
-            ipfs = value['ipfs'] if value['has_ipfs'] else None
-            new_val = div_amt + reissuable + has_ipfs
-            if ipfs:
-                new_val += ipfs
-            batch_put(key, new_val)
+            batch_put(key, value)
         flush_data.asset_meta.clear()
 
         if self.asset_info_db.for_sync:
             elapsed = time.monotonic() - start_time
-            self.logger.info(f'{changes:,d} assets\' metadata added or changed, '
+            self.logger.info(f'{(changes-dels):,d} assets\' metadata created, '
+                             f'{dels:,d} assets\' metadata reissued'
                              f'{elapsed:.1f}s, committing...')
 
     def flush_asset_db(self, batch, flush_data):
@@ -926,7 +928,7 @@ class DB(object):
     async def lookup_asset_meta(self, asset_name):
         db_value = self.asset_info_db.get(asset_name)
         if not db_value:
-            return None
+            return ""
         return db_value
 
     async def lookup_assets(self, prevouts):
