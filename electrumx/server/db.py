@@ -327,7 +327,7 @@ class DB(object):
         batch_delete = batch.delete
         batch_put = batch.put
 
-        for key, value in flush_data.asset_meta_reissues:
+        for key, value in flush_data.asset_meta_reissues.items():
             batch_delete(key)
             batch_put(key, value)
         flush_data.asset_meta_reissues.clear()
