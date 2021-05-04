@@ -361,16 +361,13 @@ class DB(object):
         # New Assets
         batch_put = batch.put
         for key, value in flush_data.asset_adds.items():
-            # print('Asset tx')
-            # print(key)
-            # print(value)
-            # print('================')
             # suffix = tx_idx + tx_num
+            # key tx_hash, tx_idx
             # value = hashx + tx_num + u64 sat val + namelen + asset name
-            hashX = value[:HASHX_LEN+1]
-            suffix = key[-4:] + value[HASHX_LEN:6+HASHX_LEN]
-            batch_put(b'h' + key[:5] + suffix, hashX)
-            batch_put(b'u' + hashX + suffix, value[6+HASHX_LEN:])
+            hashX = value[:HASHX_LEN]
+            suffix = key[-4:] + value[HASHX_LEN:5+HASHX_LEN]
+            batch_put(b'h' + key[:4] + suffix, hashX)
+            batch_put(b'u' + hashX + suffix, value[5+HASHX_LEN:])
         flush_data.asset_adds.clear()
 
         # New undo information
