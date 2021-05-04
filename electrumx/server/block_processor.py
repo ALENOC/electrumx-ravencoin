@@ -510,8 +510,8 @@ class BlockProcessor:
                                       hashX + tx_numb + to_le_uint64(sat_amt) +
                                       txout.pk_script[start:(start+1 + asset_name_len)])
                             if asset_info[0] != TX_TRANSFER_ASSET:
-                                div_amt = txout.pk_script[start + 9 + asset_name_len]
-                                reissue = False if txout.pk_script[start + 10 + asset_name_len] == 0 else True
+                                # div_amt = txout.pk_script[start + 9 + asset_name_len]
+                                # reissue = False if txout.pk_script[start + 10 + asset_name_len] == 0 else True
                                 if asset_info[0] != TX_REISSUE_ASSET:
                                     # This only happens when creating new assets
                                     has_ifps = False if txout.pk_script[start + 11 + asset_name_len] == 0 else True
@@ -523,25 +523,33 @@ class BlockProcessor:
                                     put_asset_data_new(asset_name, asset_data)
                                 else:
                                     # When reissuing
-                                    ifps = txout.pk_script[
-                                           start + 11 + asset_name_len:start + 45 + asset_name_len]
                                     div_amt = txout.pk_script[start + 9 + asset_name_len]
                                     reissuable = txout.pk_script[start + 10 + asset_name_len]
                                     asset_data = b''
                                     if div_amt == 0xff: # Unchanged division amount
                                         #Quicker check, but its more likely to be in the db
-                                        old_data = self.asset_data_new.get(asset_name)
+                                        old_data = self.asset_data_new.pop(asset_name, None)
                                         if old_data is None:
-                                            old_data = self.asset_data_reissued.get(asset_name)
+                                            old_data = self.asset_data_reissued.pop(asset_name, None)
                                         if old_data is None:
                                             old_data = self.db.asset_info_db.get(asset_name)
                                         assert old_data is not None #If reissuing, we should have it
                                         asset_data += old_data[0].to_bytes(1, 'big')
                                     else:
-                                        asset_data += div_amt
+                                        asset_data += div_amt.to_bytes(1, 'big')
                                     asset_data += reissuable.to_bytes(1, 'big')
-                                    asset_data += b'\x01' # Always ifps ?
-                                    asset_data += ifps
+
+                                    check_if_ipfs = txout.pk_script[start+11+asset_name_len]
+                                    if check_if_ipfs == 0x75: #End of script
+                                        asset_data += b'\0'
+                                    elif check_if_ipfs != 0:
+                                        # I am assuming that if a 0 comes next,
+                                        # it is the same as creating an asset
+                                        asset_data += b'\x01'
+                                        asset_data += txout.pk_script[
+                                           start + 11 + asset_name_len:start + 45 + asset_name_len]
+                                    else:
+                                        asset_data += b'\0'
                                     put_asset_data_reissued(asset_name, asset_data)
                     except Exception as ex:
                         print('Error checking asset')
