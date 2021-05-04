@@ -1413,6 +1413,10 @@ class ElectrumX(SessionBase):
         self.bump_cost(1.0)
         return await self.db.lookup_asset_meta(name.encode('ascii'))
 
+    async def test(self):
+        self.bump_cost(1.0)
+        return await self.db.test()
+
     async def compact_fee_histogram(self):
         self.bump_cost(1.0)
         return []
@@ -1445,6 +1449,7 @@ class ElectrumX(SessionBase):
             'server.peers.subscribe': self.peers_subscribe,
             'server.ping': self.ping,
             'server.version': self.server_version,
+            'test': self.test,
         }
 
         if ptuple >= (1, 4, 2):

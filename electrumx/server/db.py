@@ -835,6 +835,32 @@ class DB(object):
         with self.utxo_db.write_batch() as batch:
             self.write_utxo_state(batch)
 
+    async def test(self):
+        print('ASSETSu')
+        for _ in range(5):
+            key, value = next(self.asset_db.iterator(prefix=b'u'))
+            print(key)
+            print(value)
+            print('============')
+        print('ASSETSh')
+        for _ in range(5):
+            key, value = next(self.asset_db.iterator(prefix=b'h'))
+            print(key)
+            print(value)
+            print('============')
+        print('UTXOSu')
+        for _ in range(5):
+            key, value = next(self.utxo_db.iterator(prefix=b'u'))
+            print(key)
+            print(value)
+            print('============')
+        print('UTXOSh')
+        for _ in range(5):
+            key, value = next(self.utxo_db.iterator(prefix=b'h'))
+            print(key)
+            print(value)
+            print('============')
+
     async def all_assets(self, hashX):
         def read_assets():
             assets = []
