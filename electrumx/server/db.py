@@ -840,8 +840,8 @@ class DB(object):
             assets = []
             assets_append = assets.append
             prefix = b'u' + hashX
-            for i in range(5):
-                key, value = next(self.asset_db.iterator(prefix=b'u'))
+            for _ in range(5):
+                db_key, db_value = next(self.asset_db.iterator(prefix=b'u'))
                 print(key)
                 print(value)
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
