@@ -238,6 +238,15 @@ class DB(object):
         # Then history
         self.flush_history()
 
+        with self.asset_db.write_batch() as batch:
+            if flush_utxos:
+                self.flush_asset_db(batch, flush_data)
+            self.flush_asset_state(batch)
+
+        with self.asset_info_db.write_batch() as batch:
+            if flush_utxos:
+                self.flush_asset_info_db(batch, flush_data)
+
         # Flush state last as it reads the wall time.
         with self.utxo_db.write_batch() as batch:
             if flush_utxos:
@@ -247,15 +256,6 @@ class DB(object):
         # Update and put the wall time again - otherwise we drop the
         # time it took to commit the batch
         self.flush_state(self.utxo_db)
-
-        with self.asset_db.write_batch() as batch:
-            if flush_utxos:
-                self.flush_asset_db(batch, flush_data)
-            self.flush_asset_state(batch)
-
-        with self.asset_info_db.write_batch() as batch:
-            if flush_utxos:
-                self.flush_asset_info_db(batch, flush_data)
 
         elapsed = self.last_flush - start_time
         self.logger.info(f'flush #{self.history.flush_count:,d} took '
@@ -353,12 +353,14 @@ class DB(object):
 
         # New Assets
         batch_put = batch.put
-        for key, value in flush_data.adds.items():
+        for key, value in flush_data.asset_adds.items():
             # suffix = tx_idx + tx_num
-            hashX = value[:-13]
-            suffix = key[-4:] + value[-13:-8]
+            # key tx_hash (32), tx_idx (4)
+            # value = hashx (11) + tx_num (5) + u64 sat val(8)+ namelen(1) + asset name
+            hashX = value[:HASHX_LEN]
+            suffix = key[-4:] + value[HASHX_LEN:5+HASHX_LEN]
             batch_put(b'h' + key[:4] + suffix, hashX)
-            batch_put(b'u' + hashX + suffix, value[-8:])
+            batch_put(b'u' + hashX + suffix, value[5+HASHX_LEN:])
         flush_data.asset_adds.clear()
 
         # New undo information
@@ -839,6 +841,7 @@ class DB(object):
             assets_append = assets.append
             prefix = b'u' + hashX
             for db_key, db_value in self.asset_db.iterator(prefix=prefix):
+                print(self.utxo_db.get(db_key))
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
                 tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
@@ -861,6 +864,7 @@ class DB(object):
             # Value: the UTXO value as a 64-bit unsigned integer
             prefix = b'u' + hashX
             for db_key, db_value in self.utxo_db.iterator(prefix=prefix):
+                print(self.utxo_db.get(db_key))
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
                 tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
                 value, = unpack_le_uint64(db_value)
