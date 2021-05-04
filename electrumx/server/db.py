@@ -837,26 +837,30 @@ class DB(object):
 
     async def test(self):
         print('ASSETSu')
+        iter = self.asset_db.iterator(prefix=b'u')
         for _ in range(5):
-            key, value = next(self.asset_db.iterator(prefix=b'u'))
+            key, value = next(iter)
             print(key)
             print(value)
             print('============')
         print('ASSETSh')
+        iter = self.asset_db.iterator(prefix=b'h')
         for _ in range(5):
-            key, value = next(self.asset_db.iterator(prefix=b'h'))
+            key, value = next(iter)
             print(key)
             print(value)
             print('============')
         print('UTXOSu')
+        iter = self.utxo_db.iterator(prefix=b'u')
         for _ in range(5):
-            key, value = next(self.utxo_db.iterator(prefix=b'u'))
+            key, value = next(iter)
             print(key)
             print(value)
             print('============')
         print('UTXOSh')
+        iter = self.utxo_db.iterator(prefix=b'h')
         for _ in range(5):
-            key, value = next(self.utxo_db.iterator(prefix=b'h'))
+            key, value = next(i)
             print(key)
             print(value)
             print('============')
