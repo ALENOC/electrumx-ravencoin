@@ -840,6 +840,9 @@ class DB(object):
             assets = []
             assets_append = assets.append
             prefix = b'u' + hashX
+            tkey, tvalue = next(self.asset_db.iterator(prefix=b'u'))
+            print(tkey)
+            print(tvalue)
             for db_key, db_value in self.asset_db.iterator(prefix=prefix):
                 print(db_value)
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
@@ -935,7 +938,7 @@ class DB(object):
             reissuable = b[1]
             has_ipfs = b[2]
             if has_ipfs:
-                ipfs_data = b[2:]
+                ipfs_data = b[3:]
             to_ret = {
                 'divisions': div_amt,
                 'reissuable': reissuable,
@@ -943,7 +946,6 @@ class DB(object):
             }
             if has_ipfs:
                 to_ret['ipfs'] = base_encode(ipfs_data,58)
-                to_ret['ipfs_hex'] = ipfs_data.hex()
             return to_ret
         return await run_in_thread(read_assets_meta)
 

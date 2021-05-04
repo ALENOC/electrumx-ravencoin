@@ -499,6 +499,7 @@ class BlockProcessor:
                         asset_name = txout.pk_script[start+1:(start+1 + asset_name_len)]
                         if asset_info[1]:
                             # This is an ownership asset, just give it "1"
+                            # Ownership assets do not have any metadata, just assign it a value of 1
                             put_asset(tx_hash + to_le_uint32(idx),
                                   hashX + tx_numb + to_le_uint64(100_000_000) +
                                       txout.pk_script[start:(start+1 + asset_name_len)])
@@ -527,7 +528,7 @@ class BlockProcessor:
                                     reissuable = txout.pk_script[start + 10 + asset_name_len]
                                     asset_data = b''
                                     if div_amt == 0xff: # Unchanged division amount
-                                        #Quicker check, but its more likely to be in the db
+                                        #Quicker check, but it's far more likely to be in the db
                                         old_data = self.asset_data_new.pop(asset_name, None)
                                         if old_data is None:
                                             old_data = self.asset_data_reissued.pop(asset_name, None)
