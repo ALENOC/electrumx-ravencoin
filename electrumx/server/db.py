@@ -842,8 +842,8 @@ class DB(object):
             prefix = b'u' + hashX
             for _ in range(5):
                 db_key, db_value = next(self.asset_db.iterator(prefix=b'u'))
-                print(key)
-                print(value)
+                print(db_key)
+                print(db_value)
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
                 tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
