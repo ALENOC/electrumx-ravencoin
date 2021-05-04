@@ -525,7 +525,21 @@ class BlockProcessor:
                                     # When reissuing
                                     ifps = txout.pk_script[
                                            start + 11 + asset_name_len:start + 45 + asset_name_len]
-                                    asset_data = txout.pk_script[start+9+asset_name_len:start+11+asset_name_len]
+                                    div_amt = txout.pk_script[start + 9 + asset_name_len]
+                                    reissuable = txout.pk_script[start + 10 + asset_name_len]
+                                    asset_data = b''
+                                    if div_amt == 0xff: # Unchanged division amount
+                                        #Quicker check, but its more likely to be in the db
+                                        old_data = self.asset_data_new.get(asset_name)
+                                        if old_data is None:
+                                            old_data = self.asset_data_reissued.get(asset_name)
+                                        if old_data is None:
+                                            old_data = self.db.asset_info_db.get(asset_name)
+                                        assert old_data is not None #If reissuing, we should have it
+                                        asset_data += old_data[0].to_bytes(1, 'big')
+                                    else:
+                                        asset_data += div_amt
+                                    asset_data += reissuable.to_bytes(1, 'big')
                                     asset_data += b'\x01' # Always ifps ?
                                     asset_data += ifps
                                     put_asset_data_reissued(asset_name, asset_data)

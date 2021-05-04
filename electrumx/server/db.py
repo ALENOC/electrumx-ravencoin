@@ -326,18 +326,11 @@ class DB(object):
         batch_put = batch.put
 
         for key, value in flush_data.asset_meta_reissues.items():
-            batch_delete(key)
-            print('Reissuing asset')
-            print(key)
-            print('==========')
+            batch_delete(key) #TODO: Do I need to do this???
             batch_put(key, value)
         flush_data.asset_meta_reissues.clear()
 
-        batch_put = batch.put
         for key, value in flush_data.asset_meta_adds.items():
-            print('New asset')
-            print(key)
-            print('==========')
             batch_put(key, value)
         flush_data.asset_meta_adds.clear()
 
@@ -936,6 +929,8 @@ class DB(object):
     async def lookup_asset_meta(self, asset_name):
         def read_assets_meta():
             b = self.asset_info_db.get(asset_name)
+            if not b:
+                return {}
             div_amt = b[0]
             reissuable = b[1]
             has_ipfs = b[2]
@@ -948,6 +943,7 @@ class DB(object):
             }
             if has_ipfs:
                 to_ret['ipfs'] = base_encode(ipfs_data,58)
+                to_ret['ipfs_hex'] = ipfs_data.hex()
             return to_ret
         return await run_in_thread(read_assets_meta)
 
