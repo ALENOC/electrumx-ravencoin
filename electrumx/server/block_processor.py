@@ -501,14 +501,14 @@ class BlockProcessor:
                             # This is an ownership asset, just give it "1"
                             # Ownership assets do not have any metadata, just assign it a value of 1
                             put_asset(tx_hash + to_le_uint32(idx),
-                                  hashX + tx_numb + to_le_uint64(100_000_000) +
+                                    hashX + tx_numb + to_le_uint64(100_000_000) +
                                       txout.pk_script[start:(start+1 + asset_name_len)])
                         else: # Not an owner asset
                             sat_amt = int.from_bytes(txout.pk_script[(start + 1 + asset_name_len):
                                                                      (start + 9 + asset_name_len)],
                                                      byteorder='little')
                             put_asset(tx_hash + to_le_uint32(idx),
-                                      hashX + tx_numb + to_le_uint64(sat_amt) +
+                                    hashX + tx_numb + to_le_uint64(sat_amt) +
                                       txout.pk_script[start:(start+1 + asset_name_len)])
                             if asset_info[0] != TX_TRANSFER_ASSET:
                                 # div_amt = txout.pk_script[start + 9 + asset_name_len]
