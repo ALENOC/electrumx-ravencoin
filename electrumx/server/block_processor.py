@@ -482,15 +482,22 @@ class BlockProcessor:
                 if is_unspendable(txout.pk_script):
                     continue
 
+                #ASSETS CHANGE THE SCRIPT!!!!!!!
+                #First find the type!
+                end_point = 23 \
+                    if txout.pk_script[0] == OP_HASH160 and \
+                        txout.pk_script[1] == 0x14 and txout.pk_script[22] == OP_EQUAL \
+                    else 25
+
                 # Get the hashX
-                hashX = script_hashX(txout.pk_script)
+                hashX = script_hashX(txout.pk_script[:end_point]) #Only hash the "normal" part
 
                 append_hashX(hashX)
                 put_utxo(tx_hash + to_le_uint32(idx),
                          hashX + tx_numb + to_le_uint64(txout.value))
 
-                # For testing purposes. TODO: Make gooder
                 asset_info = is_asset_script(txout.pk_script)
+                # For testing purposes. TODO: Make gooder
                 if asset_info is not None:
                     try:
                         asset_num += 1

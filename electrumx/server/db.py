@@ -835,53 +835,12 @@ class DB(object):
         with self.utxo_db.write_batch() as batch:
             self.write_utxo_state(batch)
 
-    async def test(self):
-        print('ASSETSu')
-        iter = self.asset_db.iterator(prefix=b'u')
-        for _ in range(5):
-            key, value = next(iter)
-            print(key)
-            print(value)
-            tx_num, = unpack_le_uint64(key[-5:] + bytes(3))
-            tx_hash, height = self.fs_tx_hash(tx_num)
-            b = bytearray(tx_hash)
-            b.reverse()
-            print(b.hex())
-            print('============')
-        print('ASSETSh')
-        iter = self.asset_db.iterator(prefix=b'h')
-        for _ in range(5):
-            key, value = next(iter)
-            print(key)
-            print(value)
-            print('============')
-        print('UTXOSu')
-        iter = self.utxo_db.iterator(prefix=b'u')
-        for _ in range(5):
-            key, value = next(iter)
-            print(key)
-            print(value)
-            tx_num, = unpack_le_uint64(key[-5:] + bytes(3))
-            tx_hash, height = self.fs_tx_hash(tx_num)
-            b = bytearray(tx_hash)
-            b.reverse()
-            print(b.hex())
-            print('============')
-        print('UTXOSh')
-        iter = self.utxo_db.iterator(prefix=b'h')
-        for _ in range(5):
-            key, value = next(iter)
-            print(key)
-            print(value)
-            print('============')
-
     async def all_assets(self, hashX):
         def read_assets():
             assets = []
             assets_append = assets.append
             prefix = b'u' + hashX
             for db_key, db_value in self.asset_db.iterator(prefix=prefix):
-                print(self.utxo_db.get(db_key))
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
                 tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)

@@ -1085,15 +1085,14 @@ class ElectrumX(SessionBase):
 
     async def hashX_listassets(self, hashX):
         assets = await self.db.all_assets(hashX)
-        print(assets)
-        # assets = sorted(assets)
-        # self.bump_cost(1.0 + len(assets) / 50)
-        # TODO: mempool
-        # return [{'tx_hash': hash_to_hex_str(asset.tx_hash),
-        #         'tx_pos': asset.tx_pos,
-        #         'height': asset.height,
-        #         'value': asset.name}
-        #        for asset in assets]
+        assets = sorted(assets)
+        self.bump_cost(1.0 + len(assets) / 50)
+        TODO: mempool
+        return [{'tx_hash': hash_to_hex_str(asset.tx_hash),
+                 'tx_pos': asset.tx_pos,
+                 'height': asset.height,
+                 'value': asset.name.hex()}
+                for asset in assets]
 
     async def hashX_listunspent(self, hashX):
         '''Return the list of UTXOs of a script hash, including mempool
@@ -1413,10 +1412,6 @@ class ElectrumX(SessionBase):
     async def asset_get_meta(self, name):
         self.bump_cost(1.0)
         return await self.db.lookup_asset_meta(name.encode('ascii'))
-
-    async def test(self):
-        self.bump_cost(1.0)
-        return await self.db.test()
 
     async def compact_fee_histogram(self):
         self.bump_cost(1.0)
