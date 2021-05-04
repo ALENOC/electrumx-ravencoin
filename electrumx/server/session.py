@@ -1162,8 +1162,7 @@ class ElectrumX(SessionBase):
         return await self.hashX_listunspent(hashX)
 
     async def scripthash_listassets(self, scripthash):
-        #hashX = scripthash_to_hashX(scripthash)
-        hashX = bytes.fromhex(scripthash)
+        hashX = scripthash_to_hashX(scripthash)
         return await self.hashX_listassets(hashX)
 
     async def scripthash_subscribe(self, scripthash):

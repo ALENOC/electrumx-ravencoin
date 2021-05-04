@@ -355,8 +355,8 @@ class DB(object):
         batch_put = batch.put
         for key, value in flush_data.asset_adds.items():
             # suffix = tx_idx + tx_num
-            # key tx_hash, tx_idx
-            # value = hashx + tx_num + u64 sat val + namelen + asset name
+            # key tx_hash (32), tx_idx (4)
+            # value = hashx (11) + tx_num (5) + u64 sat val(8)+ namelen(1) + asset name
             hashX = value[:HASHX_LEN]
             suffix = key[-4:] + value[HASHX_LEN:5+HASHX_LEN]
             batch_put(b'h' + key[:4] + suffix, hashX)
@@ -840,8 +840,16 @@ class DB(object):
             assets = []
             assets_append = assets.append
             prefix = b'u' + hashX
+            for i in range(5):
+                key, value = next(self.asset_db.iterator(prefix=b'u'))
+                print(key)
+                print(value)
+                tx_pos, = unpack_le_uint32(db_key[-9:-5])
+                tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
+                tx_hash, height = self.fs_tx_hash(tx_num)
+                print(tx_hash.hex())
+
             for db_key, db_value in self.asset_db.iterator(prefix=prefix):
-                print(db_value)
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
                 tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
@@ -862,11 +870,6 @@ class DB(object):
             utxos_append = utxos.append
             # Key: b'u' + address_hashX + tx_idx + tx_num
             # Value: the UTXO value as a 64-bit unsigned integer
-            tkey, tvalue = next(self.utxo_db.iterator(prefix=b'u'))
-            print('UTXO')
-            print(tkey)
-            print(tvalue)
-            print('===========')
             prefix = b'u' + hashX
             for db_key, db_value in self.utxo_db.iterator(prefix=prefix):
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
