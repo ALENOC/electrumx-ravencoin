@@ -841,8 +841,10 @@ class DB(object):
             assets_append = assets.append
             prefix = b'u' + hashX
             tkey, tvalue = next(self.asset_db.iterator(prefix=b'u'))
+            print('Asset')
             print(tkey)
             print(tvalue)
+            print('================')
             for db_key, db_value in self.asset_db.iterator(prefix=prefix):
                 print(db_value)
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
@@ -865,12 +867,18 @@ class DB(object):
             utxos_append = utxos.append
             # Key: b'u' + address_hashX + tx_idx + tx_num
             # Value: the UTXO value as a 64-bit unsigned integer
+            tkey, tvalue = next(self.utxo_db.iterator(prefix=b'u'))
+            print('UTXO')
+            print(tkey)
+            print(tvalue)
+            print('===========')
             prefix = b'u' + hashX
             for db_key, db_value in self.utxo_db.iterator(prefix=prefix):
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
                 tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
+                value, = unpack_le_uint64(db_value)
                 tx_hash, height = self.fs_tx_hash(tx_num)
-                utxos_append(UTXO(tx_num, tx_pos, tx_hash, height, dbvalue))
+                utxos_append(UTXO(tx_num, tx_pos, tx_hash, height, value))
             return utxos
 
         while True:
