@@ -842,6 +842,11 @@ class DB(object):
             key, value = next(iter)
             print(key)
             print(value)
+            tx_num, = unpack_le_uint64(key[-5:] + bytes(3))
+            tx_hash, height = self.fs_tx_hash(tx_num)
+            b = bytestring(tx_hash)
+            b.reverse()
+            print(b.hex())
             print('============')
         print('ASSETSh')
         iter = self.asset_db.iterator(prefix=b'h')
@@ -856,6 +861,11 @@ class DB(object):
             key, value = next(iter)
             print(key)
             print(value)
+            tx_num, = unpack_le_uint64(key[-5:] + bytes(3))
+            tx_hash, height = self.fs_tx_hash(tx_num)
+            b = bytestring(tx_hash)
+            b.reverse()
+            print(b.hex())
             print('============')
         print('UTXOSh')
         iter = self.utxo_db.iterator(prefix=b'h')
@@ -894,7 +904,6 @@ class DB(object):
             # Value: the UTXO value as a 64-bit unsigned integer
             prefix = b'u' + hashX
             for db_key, db_value in self.utxo_db.iterator(prefix=prefix):
-                print(self.utxo_db.get(db_key))
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
                 tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
                 value, = unpack_le_uint64(db_value)
