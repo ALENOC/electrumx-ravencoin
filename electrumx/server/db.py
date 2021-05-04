@@ -860,7 +860,7 @@ class DB(object):
         print('UTXOSh')
         iter = self.utxo_db.iterator(prefix=b'h')
         for _ in range(5):
-            key, value = next(i)
+            key, value = next(iter)
             print(key)
             print(value)
             print('============')
