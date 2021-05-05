@@ -53,6 +53,8 @@ class FlushData(object):
     asset_meta_adds = attr.ib()
     asset_meta_reissues = attr.ib()
     asset_undo_infos = attr.ib()
+    asset_meta_undos = attr.ib()
+    asset_meta_deletes = attr.ib()
     asset_count = attr.ib()
 
 
@@ -218,6 +220,8 @@ class DB(object):
         assert not flush_data.asset_undo_infos
         assert not flush_data.asset_meta_adds
         assert not flush_data.asset_meta_reissues
+        assert not flush_data.asset_meta_undos
+        assert not flush_data.asset_meta_deletes
         self.history.assert_flushed()
 
     def flush_dbs(self, flush_data, flush_utxos, estimate_txs_remaining):
@@ -323,16 +327,21 @@ class DB(object):
         reissues = len(flush_data.asset_meta_reissues)
 
         batch_delete = batch.delete
-        batch_put = batch.put
+        for key in flush_data.asset_meta_deletes:
+            batch_delete(key)
+        flush_data.asset_meta_deletes.clear()
 
+        batch_put = batch.put
         for key, value in flush_data.asset_meta_reissues.items():
-            batch_delete(key) #TODO: Do I need to do this???
             batch_put(key, value)
         flush_data.asset_meta_reissues.clear()
 
         for key, value in flush_data.asset_meta_adds.items():
             batch_put(key, value)
         flush_data.asset_meta_adds.clear()
+
+        self.flush_asset_meta_undos(batch_put, flush_data.asset_meta_undos)
+        flush_data.asset_meta_undos.clear()
 
         if self.asset_info_db.for_sync:
             elapsed = time.monotonic() - start_time
@@ -364,7 +373,7 @@ class DB(object):
         flush_data.asset_adds.clear()
 
         # New undo information
-        self.flush_asset_undo_infos(batch_put, flush_data.asset_undo_infos)
+        self.flush_undo_infos(batch_put, flush_data.asset_undo_infos)
         flush_data.asset_undo_infos.clear()
 
         if self.asset_db.for_sync:
@@ -572,6 +581,9 @@ class DB(object):
         '''DB key for undo information at the given height.'''
         return b'U' + pack_be_uint32(height)
 
+    def read_asset_meta_undo_info(self, height):
+        return self.asset_info_db.get(self.undo_key(height))
+
     def read_asset_undo_info(self, height):
         return self.asset_db.get(self.undo_key(height))
 
@@ -579,9 +591,10 @@ class DB(object):
         '''Read undo information from a file for the current height.'''
         return self.utxo_db.get(self.undo_key(height))
 
-    def flush_asset_undo_infos(self, batch_put, undo_infos):
+    def flush_asset_meta_undos(self, batch_put, undo_infos):
         for undo_info, height in undo_infos:
-            batch_put(self.undo_key(height), b''.join(undo_info))
+            if len(undo_info) > 0:
+                batch_put(self.undo_key(height), b''.join(undo_info))
 
     def flush_undo_infos(self, batch_put, undo_infos):
         '''undo_infos is a list of (undo_info, height) pairs.'''
@@ -865,11 +878,14 @@ class DB(object):
             # Value: the UTXO value as a 64-bit unsigned integer
             prefix = b'u' + hashX
             for db_key, db_value in self.utxo_db.iterator(prefix=prefix):
-                tx_pos, = unpack_le_uint32(db_key[-9:-5])
-                tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
                 value, = unpack_le_uint64(db_value)
-                tx_hash, height = self.fs_tx_hash(tx_num)
-                utxos_append(UTXO(tx_num, tx_pos, tx_hash, height, value))
+                if value > 0:
+                    # Values of 0 will only be assets.
+                    # Get them from all_assets
+                    tx_pos, = unpack_le_uint32(db_key[-9:-5])
+                    tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
+                    tx_hash, height = self.fs_tx_hash(tx_num)
+                    utxos_append(UTXO(tx_num, tx_pos, tx_hash, height, value))
             return utxos
 
         while True:

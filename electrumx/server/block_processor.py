@@ -224,6 +224,9 @@ class BlockProcessor:
         self.asset_data_new = {}
         self.asset_data_reissued = {}
 
+        self.asset_data_undo_infos = []
+        self.asset_data_deletes = []
+
     async def run_with_lock(self, coro):
         # Shielded so that cancellations from shutdown don't lose work.  Cancellation will
         # cause fetch_and_process_blocks to block on the lock in flush(), the task completes,
@@ -341,8 +344,8 @@ class BlockProcessor:
                          self.db_deletes, self.tip,
                          self.asset_cache, self.asset_deletes,
                          self.asset_data_new, self.asset_data_reissued,
-                         self.asset_undo_infos,
-                         self.asset_count)
+                         self.asset_undo_infos, self.asset_data_undo_infos,
+                         self.asset_data_deletes, self.asset_count)
 
     async def flush(self, flush_utxos):
         self.db.flush_dbs(self.flush_data(), flush_utxos, self.estimate_txs_remaining)
@@ -352,6 +355,9 @@ class BlockProcessor:
         '''Flush a cache if it gets too big.'''
         # Good average estimates based on traversal of subobjects and
         # requesting size from Python (see deep_getsizeof).
+
+        # TODO: Add undo info checks
+
         one_MB = 1000*1000
         utxo_cache_size = len(self.utxo_cache) * 205
         db_deletes_size = len(self.db_deletes) * 57
@@ -425,11 +431,12 @@ class BlockProcessor:
                           else is_unspendable_legacy)
 
         #TODO: Asset meta undo infos
-        (undo_info, asset_undo_info) = self.advance_txs(block.transactions, is_unspendable)
+        (undo_info, asset_undo_info, asset_meta_undo_info) = self.advance_txs(block.transactions, is_unspendable)
 
         if height >= min_height:
             self.undo_infos.append((undo_info, height))
             self.asset_undo_infos.append((asset_undo_info, height))
+            self.asset_data_undo_infos.append((asset_meta_undo_info, height))
             self.db.write_raw_block(block.raw, height)
 
         self.height = height
@@ -444,6 +451,7 @@ class BlockProcessor:
         # Use local vars for speed in the loops
         undo_info = []
         asset_undo_info = []
+        asset_meta_undo_info = []
         tx_num = self.tx_count
         asset_num = self.asset_count
         script_hashX = self.coin.hashX_from_script
@@ -455,6 +463,7 @@ class BlockProcessor:
         spend_asset = self.spend_asset
         undo_info_append = undo_info.append
         asset_undo_info_append = asset_undo_info.append
+        asset_meta_undo_info_append = asset_meta_undo_info.append
         update_touched = self.touched.update
         hashXs_by_tx = []
         append_hashXs = hashXs_by_tx.append
@@ -531,20 +540,28 @@ class BlockProcessor:
                                     asset_data = txout.pk_script[start+9+asset_name_len:start+12+asset_name_len]
                                     if has_ifps:
                                         asset_data += ifps
+                                    asset_meta_undo_info_append(
+                                        asset_name_len.to_bytes(1, 'big')+asset_name+b'\0')
                                     put_asset_data_new(asset_name, asset_data)
                                 else:
                                     # When reissuing
                                     div_amt = txout.pk_script[start + 9 + asset_name_len]
                                     reissuable = txout.pk_script[start + 10 + asset_name_len]
                                     asset_data = b''
+
+                                    # Quicker check, but it's far more likely to be in the db
+                                    old_data = self.asset_data_new.pop(asset_name, None)
+                                    if old_data is None:
+                                        old_data = self.asset_data_reissued.pop(asset_name, None)
+                                    if old_data is None:
+                                        old_data = self.db.asset_info_db.get(asset_name)
+                                    assert old_data is not None  # If reissuing, we should have it
+
+                                    asset_meta_undo_info_append(
+                                        asset_name_len.to_bytes(1, 'big') + asset_name +
+                                        len(old_data).to_bytes(1, 'big') + old_data)
+
                                     if div_amt == 0xff: # Unchanged division amount
-                                        #Quicker check, but it's far more likely to be in the db
-                                        old_data = self.asset_data_new.pop(asset_name, None)
-                                        if old_data is None:
-                                            old_data = self.asset_data_reissued.pop(asset_name, None)
-                                        if old_data is None:
-                                            old_data = self.db.asset_info_db.get(asset_name)
-                                        assert old_data is not None #If reissuing, we should have it
                                         asset_data += old_data[0].to_bytes(1, 'big')
                                     else:
                                         asset_data += div_amt.to_bytes(1, 'big')
@@ -585,7 +602,7 @@ class BlockProcessor:
         # Assets aren't always in tx's... remove None types
         asset_undo_info = [i for i in asset_undo_info if i]
 
-        return undo_info, asset_undo_info
+        return undo_info, asset_undo_info, asset_meta_undo_info
 
     async def _backup_block(self, raw_block):
         '''Backup the raw block and flush.
@@ -623,9 +640,22 @@ class BlockProcessor:
         # undo_info is in reverse block order
         undo_info = self.db.read_undo_info(self.height)
         asset_undo_info = self.db.read_asset_undo_info(self.height)
-        if undo_info is None:
+        if undo_info is None or asset_undo_info is None:
             raise ChainError('no undo information found for height {:,d}'
                              .format(self.height))
+
+        asset_meta_undo_info = self.db.read_asset_meta_undo_info(self.height)
+        while asset_meta_undo_info: # Stops when None or empty
+            name_len = asset_meta_undo_info[0]
+            name = asset_meta_undo_info[1:name_len+1]
+            data_len = asset_meta_undo_info[name_len+1]
+            if data_len == 0:
+                self.asset_data_deletes.append(name)
+            else:
+                data = asset_meta_undo_info[name_len+1:name_len+1+data_len]
+                self.asset_data_new[name] = data
+            asset_meta_undo_info = asset_meta_undo_info[name_len+2+data_len:]
+
         n = len(undo_info)
         asset_n = len(asset_undo_info)
 
@@ -639,8 +669,8 @@ class BlockProcessor:
         # Items in our list are ordered, but we want them backwards.
 
         # Value of the asset cache is:
-        # HASHX + TX_NUMB + SATS IN U64 + 1 BYTE OF LEN + NAME
-        # HASHX_LEN BYTES + 5 BYTES + 8 BYTES + 1 BYTE + VAR BYTES
+        # tx_hash + u32 idx + HASHX + TX_NUMB + SATS IN U64 + 1 BYTE OF LEN + NAME
+        # 32 + 4 + HASHX_LEN BYTES + 5 BYTES + 8 BYTES + 1 BYTE + VAR BYTES
         def find_asset_undo_len(max):
             assert max <= len(asset_undo_info)
 
@@ -648,8 +678,8 @@ class BlockProcessor:
                 return 0
             else:
                 def val_len(ptr):
-                    name_len = asset_undo_info[ptr+HASHX_LEN+13]
-                    return name_len + HASHX_LEN + 14
+                    name_len = asset_undo_info[ptr+HASHX_LEN+13+32+4]
+                    return name_len + HASHX_LEN + 14 + 32 + 4
 
                 last_val_ptr = 0
                 while True:
@@ -683,6 +713,8 @@ class BlockProcessor:
 
             # Restore the inputs
             for txin in reversed(tx.inputs):
+                prev_idx_bytes = pack_le_uint32(txin.prev_idx)
+
                 if txin.is_generation():
                     continue
                 n -= undo_entry_len
@@ -691,10 +723,12 @@ class BlockProcessor:
                 touched.add(undo_item[:-13])
 
                 asset_undo_entry_len = find_asset_undo_len(asset_n)
-                if asset_undo_entry_len > 0: #TODO: Find a better number check, but this should work
-                    asset_n -= asset_undo_entry_len
-                    asset_undo_item = asset_undo_info[asset_n:asset_n+asset_undo_entry_len]
-                    put_asset(txin.prev_hash + pack_le_uint32(txin.prev_idx), asset_undo_item)
+                new_asset_n = asset_n - asset_undo_entry_len
+                if new_asset_n >= 0 and asset_undo_entry_len > 0:
+                    undo_item = asset_undo_info[asset_n:asset_n+asset_undo_entry_len]
+                    if undo_item[:32] == tx_hash and undo_item[32:36] == prev_idx_bytes:
+                        put_asset(txin.prev_hash + prev_idx_bytes, undo_item[36:])
+                        asset_n = new_asset_n
 
         assert n == 0
         assert asset_n == 0
@@ -805,7 +839,7 @@ class BlockProcessor:
         idx_packed = pack_le_uint32(tx_idx)
         cache_value = self.asset_cache.pop(tx_hash + idx_packed, None)
         if cache_value:
-            return cache_value
+            return tx_hash+tx_idx+cache_value
 
         # Spend it from the DB.
 
@@ -834,7 +868,7 @@ class BlockProcessor:
                 # Remove both entries for this Asset
                 self.asset_deletes.append(hdb_key)
                 self.asset_deletes.append(udb_key)
-                return hashX + tx_num_packed + value
+                return tx_hash + tx_idx + hashX + tx_num_packed + value
 
         # Asset doesn't need to be found
         # raise ChainError('UTXO {} / {:,d} not found in "h" table'
