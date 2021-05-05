@@ -339,7 +339,7 @@ class MemPool(object):
                             ret[name] -= v
                 for hX, v, is_asset, name in tx.out_pairs:
                     if hX == hashX and is_asset:
-                        if name in in ret:
+                        if name not in ret:
                             ret[name] = v
                         else:
                             ret[name] += v
