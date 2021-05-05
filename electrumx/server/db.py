@@ -32,7 +32,7 @@ from electrumx.lib.util import (
 from electrumx.server.storage import db_class
 from electrumx.server.history import History
 
-ASSET = namedtuple("ASSET", "tx_num tx_pos tx_hash height name")
+ASSET = namedtuple("ASSET", "tx_num tx_pos tx_hash height name value")
 UTXO = namedtuple("UTXO", "tx_num tx_pos tx_hash height value")
 
 
@@ -844,7 +844,9 @@ class DB(object):
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
                 tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
-                assets_append(ASSET(tx_num, tx_pos, tx_hash, height, db_value))
+                value, = unpack_le_uint64(db_value[:8])
+                name = db_value[9:].decode('ascii')
+                assets_append(ASSET(tx_num, tx_pos, tx_hash, height, name, value))
             return assets
 
         while True:

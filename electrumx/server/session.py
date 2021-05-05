@@ -1091,7 +1091,8 @@ class ElectrumX(SessionBase):
         return [{'tx_hash': hash_to_hex_str(asset.tx_hash),
                  'tx_pos': asset.tx_pos,
                  'height': asset.height,
-                 'value': asset.name.hex()}
+                 'name': asset.name,
+                 'value': asset.value}
                 for asset in assets]
 
     async def hashX_listunspent(self, hashX):
@@ -1162,7 +1163,6 @@ class ElectrumX(SessionBase):
 
     async def scripthash_listassets(self, scripthash):
         hashX = scripthash_to_hashX(scripthash)
-        print(hashX)
         return await self.hashX_listassets(hashX)
 
     async def scripthash_subscribe(self, scripthash):
