@@ -1445,7 +1445,6 @@ class ElectrumX(SessionBase):
             'server.peers.subscribe': self.peers_subscribe,
             'server.ping': self.ping,
             'server.version': self.server_version,
-            'test': self.test,
         }
 
         if ptuple >= (1, 4, 2):

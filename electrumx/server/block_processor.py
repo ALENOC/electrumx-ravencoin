@@ -482,17 +482,18 @@ class BlockProcessor:
                 if is_unspendable(txout.pk_script):
                     continue
 
-                #ASSETS CHANGE THE SCRIPT!!!!!!!
-                #THIS TOOK ME SO FUCKING LONG TO FIND!!!!
-                #GOD DAMN HASHES
-                #First find the type!
+                # ASSETS CHANGE THE SCRIPT!!!!!!!
+                # THIS TOOK ME SO FUCKING LONG TO FIND!!!!
+                # GOD DAMN HASHES
+                # TODO: Is there a reason why the address itself isn't used?
+                # First find the type!
                 end_point = 23 \
                     if txout.pk_script[0] == 0xa9 and \
                         txout.pk_script[1] == 0x14 and txout.pk_script[22] == 0x87 \
                     else 25
 
                 # Get the hashX
-                hashX = script_hashX(txout.pk_script[:end_point]) #Only hash the "normal" part
+                hashX = script_hashX(txout.pk_script[:end_point]) # Only hash the "normal" part
 
                 append_hashX(hashX)
                 put_utxo(tx_hash + to_le_uint32(idx),
