@@ -844,7 +844,7 @@ class BlockProcessor:
         idx_packed = pack_le_uint32(tx_idx)
         cache_value = self.asset_cache.pop(tx_hash + idx_packed, None)
         if cache_value:
-            return tx_hash+tx_idx+cache_value
+            return tx_hash+idx_packed+cache_value
 
         # Spend it from the DB.
 
@@ -873,7 +873,7 @@ class BlockProcessor:
                 # Remove both entries for this Asset
                 self.asset_deletes.append(hdb_key)
                 self.asset_deletes.append(udb_key)
-                return tx_hash + tx_idx + hashX + tx_num_packed + value
+                return tx_hash + idx_packed + hashX + tx_num_packed + value
 
         # Asset doesn't need to be found
         # raise ChainError('UTXO {} / {:,d} not found in "h" table'
