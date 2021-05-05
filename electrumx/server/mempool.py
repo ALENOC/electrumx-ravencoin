@@ -18,13 +18,14 @@ from aiorpcx import TaskGroup, run_in_thread, sleep
 
 from electrumx.lib.hash import hash_to_hex_str, hex_str_to_hash
 from electrumx.lib.util import class_logger, chunks
-from electrumx.server.db import UTXO
+from electrumx.lib.assets import is_asset_script
+from electrumx.server.db import UTXO, ASSET
 
 
 @attr.s(slots=True)
 class MemPoolTx(object):
     prevouts = attr.ib()
-    # A pair is a (hashX, value) tuple
+    # (hashX, value, is_asset, asset_name) tuple
     in_pairs = attr.ib()
     out_pairs = attr.ib()
     fee = attr.ib()
@@ -160,8 +161,8 @@ class MemPool(object):
             tx.in_pairs = tuple(in_pairs)
             # Avoid negative fees if dealing with generation-like transactions
             # because some in_parts would be missing
-            tx.fee = max(0, (sum(v for _, v in tx.in_pairs) -
-                             sum(v for _, v in tx.out_pairs)))
+            tx.fee = max(0, (sum((v if not is_asset else 0) for _, v, is_asset, _ in tx.in_pairs) -
+                             sum((v if not is_asset else 0) for _, v, is_asset, _ in tx.out_pairs)))
             txs[tx_hash] = tx
 
             for hashX, _value in itertools.chain(tx.in_pairs, tx.out_pairs):
@@ -210,6 +211,7 @@ class MemPool(object):
         for tx_hash in set(txs).difference(all_hashes):
             tx = txs.pop(tx_hash)
             tx_hashXs = set(hashX for hashX, value in tx.in_pairs)
+            tx_hashXs.update(hashX for hashX, value in tx.in_assets)
             tx_hashXs.update(hashX for hashX, value in tx.out_pairs)
             for hashX in tx_hashXs:
                 hashXs[hashX].remove(tx_hash)
@@ -248,6 +250,8 @@ class MemPool(object):
         hex_hashes_iter = (hash_to_hex_str(hash) for hash in hashes)
         raw_txs = await self.api.raw_transactions(hex_hashes_iter)
 
+        # TODO: Newly created asset data will not be shown
+
         def deserialize_txs():    # This function is pure
             to_hashX = self.coin.hashX_from_script
             deserializer = self.coin.DESERIALIZER
@@ -264,8 +268,34 @@ class MemPool(object):
                 txin_pairs = tuple((txin.prev_hash, txin.prev_idx)
                                    for txin in tx.inputs
                                    if not txin.is_generation())
-                txout_pairs = tuple((to_hashX(txout.pk_script), txout.value)
-                                    for txout in tx.outputs)
+                txout_tuple_list = []
+                for txout in tx.outputs:
+                    value = txout.value
+
+                    end_point = 23 \
+                        if txout.pk_script[0] == 0xa9 and \
+                           txout.pk_script[1] == 0x14 and txout.pk_script[22] == 0x87 \
+                        else 25
+
+                    hashX = script_hashX(txout.pk_script[:end_point])
+
+                    asset_info = is_asset_script(txout.pk_script)
+
+                    if asset_info is None:
+                        txout_tuple_list.append((hashX, value, False, None))
+                    else:
+                        start = asset_info[2]
+                        asset_name_len = txout.pk_script[start]
+                        asset_name = txout.pk_script[start + 1:(start + 1 + asset_name_len)]
+                        if asset_info[1]:
+                            txout_tuple_list.append((hashX, 100_000_000, True, asset_name.encode('ascii')))
+                        else:  # Not an owner asset
+                            sat_amt = int.from_bytes(txout.pk_script[(start + 1 + asset_name_len):
+                                                                     (start + 9 + asset_name_len)],
+                                                     byteorder='little')
+                            txout_tuple_list.append((hashX, sat_amt, True, asset_name.encode('ascii')))
+
+                txout_pairs = tuple(txout_tuple_list)
                 txs[tx_hash] = MemPoolTx(txin_pairs, None, txout_pairs,
                                          0, tx_size)
             return txs
@@ -296,6 +326,26 @@ class MemPool(object):
             await group.spawn(self._refresh_hashes(synchronized_event))
             await group.spawn(self._logging(synchronized_event))
 
+    async def asset_balance_delta(self, hashX):
+        ret = {}
+        if hashX in self.hashXs:
+            for hash_ in self.hashXs[hashX]:
+                tx = self.txs[hash_]
+                for hX, v, is_asset, name in tx.in_pairs:
+                    if hX == hashX and is_asset:
+                        if name not in ret:
+                            ret[name] = -v
+                        else:
+                            ret[name] -= v
+                for hX, v, is_asset, name in tx.out_pairs:
+                    if hX == hashX and is_asset:
+                        if name in in ret:
+                            ret[name] = v
+                        else:
+                            ret[name] += v
+
+        return ret
+
     async def balance_delta(self, hashX):
         '''Return the unconfirmed amount in the mempool for hashX.
 
@@ -305,8 +355,8 @@ class MemPool(object):
         if hashX in self.hashXs:
             for hash_ in self.hashXs[hashX]:
                 tx = self.txs[hash_]
-                value -= sum(v for h168, v in tx.in_pairs if h168 == hashX)
-                value += sum(v for h168, v in tx.out_pairs if h168 == hashX)
+                value -= sum(v for h168, v, is_asset, _ in tx.in_pairs if h168 == hashX and not is_asset)
+                value += sum(v for h168, v, is_asset, _ in tx.out_pairs if h168 == hashX and not is_asset)
         return value
 
     async def potential_spends(self, hashX):
@@ -341,7 +391,16 @@ class MemPool(object):
         utxos = []
         for tx_hash in self.hashXs.get(hashX, ()):
             tx = self.txs.get(tx_hash)
-            for pos, (hX, value) in enumerate(tx.out_pairs):
-                if hX == hashX:
+            for pos, (hX, value, is_asset, _) in enumerate(tx.out_pairs):
+                if hX == hashX and not is_asset:
                     utxos.append(UTXO(-1, pos, tx_hash, 0, value))
         return utxos
+
+    async def unordered_ASSETs(self, hashX):
+        assets = []
+        for tx_hash in self.hashXs.get(hashX, ()):
+            tx = self.txs.get(tx_hash)
+            for pos, (hX, value, is_asset, name) in enumerate(tx.out_pairs):
+                if hX == hashX and is_asset:
+                    assets.append(ASSET(-1, pos, tx_hash, 0, name, value))
+        return assets

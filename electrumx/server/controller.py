@@ -35,10 +35,11 @@ class Notifications(object):
     def __init__(self):
         self._touched_mp = {}
         self._touched_bp = {}
+        self._reissued_assets = {}
         self._highest_block = -1
 
     async def _maybe_notify(self):
-        tmp, tbp = self._touched_mp, self._touched_bp
+        tmp, tbp, tassets = self._touched_mp, self._touched_bp, self._reissued_assets
         common = set(tmp).intersection(tbp)
         if common:
             height = max(common)
@@ -54,9 +55,12 @@ class Notifications(object):
             del tmp[old]
         for old in [h for h in tbp if h <= height]:
             touched.update(tbp.pop(old))
-        await self.notify(height, touched)
+        assets = tassets.pop(height)
+        for old in [h for h in tassets if h <= height]:
+            del tassets[old]
+        await self.notify(height, touched, assets)
 
-    async def notify(self, height, touched):
+    async def notify(self, height, touched, assets):
         pass
 
     async def start(self, height, notify_func):
@@ -68,8 +72,9 @@ class Notifications(object):
         self._touched_mp[height] = touched
         await self._maybe_notify()
 
-    async def on_block(self, touched, height):
+    async def on_block(self, touched, height, reissued):
         self._touched_bp[height] = touched
+        self._reissued_assets[height] = reissued
         self._highest_block = height
         await self._maybe_notify()
 

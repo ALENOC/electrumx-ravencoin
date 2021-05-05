@@ -227,6 +227,9 @@ class BlockProcessor:
         self.asset_data_undo_infos = []
         self.asset_data_deletes = []
 
+        # To notify clients about reissuances
+        self.asset_touched = set()
+
     async def run_with_lock(self, coro):
         # Shielded so that cancellations from shutdown don't lose work.  Cancellation will
         # cause fetch_and_process_blocks to block on the lock in flush(), the task completes,
@@ -418,9 +421,10 @@ class BlockProcessor:
                 await self.flush(flush_arg)
 
         if self._caught_up_event.is_set():
-            await self.notifications.on_block(self.touched, self.height)
+            await self.notifications.on_block(self.touched, self.height, self.asset_touched)
 
         self.touched = set()
+        self.asset_touched = set()
 
     async def _advance_block(self, block):
         '''Advance once block.  It is already verified they correctly connect onto our tip.'''
@@ -578,6 +582,7 @@ class BlockProcessor:
                                            start + 11 + asset_name_len:start + 45 + asset_name_len]
                                     else:
                                         asset_data += b'\0'
+                                    self.asset_touched.update(asset_name)
                                     put_asset_data_reissued(asset_name, asset_data)
                     except Exception as ex:
                         print('Error checking asset')
@@ -653,7 +658,7 @@ class BlockProcessor:
                 self.asset_data_deletes.append(name)
             else:
                 data = asset_meta_undo_info[name_len+1:name_len+1+data_len]
-                self.asset_data_new[name] = data
+                self.asset_data_reissued[name] = data
             asset_meta_undo_info = asset_meta_undo_info[name_len+2+data_len:]
 
         n = len(undo_info)

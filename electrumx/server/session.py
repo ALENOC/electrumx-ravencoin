@@ -762,7 +762,7 @@ class SessionManager:
             raise result
         return result, cost
 
-    async def _notify_sessions(self, height, touched):
+    async def _notify_sessions(self, height, touched, assets):
         '''Notify sessions about height changes and touched addresses.'''
         height_changed = height != self.notified_height
         if height_changed:
@@ -773,7 +773,7 @@ class SessionManager:
                 del cache[hashX]
 
         for session in self.sessions:
-            await self._task_group.spawn(session.notify, touched, height_changed)
+            await self._task_group.spawn(session.notify, touched, height_changed, assets)
 
     def _ip_addr_group_name(self, session):
         host = session.remote_address().host
@@ -857,7 +857,7 @@ class SessionBase(RPCSession):
         self.recalc_concurrency()  # must be called after session_mgr.add_session
         self.request_handlers = {}
 
-    async def notify(self, touched, height_changed):
+    async def notify(self, touched, height_changed, assets):
         pass
 
     def remote_address_string(self, *, for_log=True):
@@ -916,6 +916,7 @@ class ElectrumX(SessionBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.subscribe_headers = False
+        self.subscribe_assets = False
         self.connection.max_response_size = self.env.max_send
         self.hashX_subs = {}
         self.sv_seen = False
@@ -978,20 +979,22 @@ class ElectrumX(SessionBase):
         self.mempool_statuses.pop(hashX, None)
         return self.hashX_subs.pop(hashX, None)
 
-    async def notify(self, touched, height_changed):
+    async def notify(self, touched, height_changed, assets):
         '''Wrap _notify_inner; websockets raises exceptions for unclear reasons.'''
         try:
-            await self._notify_inner(touched, height_changed)
+            await self._notify_inner(touched, height_changed, assets)
         except Exception:   # pylint:disable=W0703
             self.logger.exception('unexpected exception notifying client')
 
-    async def _notify_inner(self, touched, height_changed):
+    async def _notify_inner(self, touched, height_changed, assets):
         '''Notify the client about changes to touched addresses (from mempool
         updates or new blocks) and height.
         '''
         if height_changed and self.subscribe_headers:
             args = (await self.subscribe_headers_result(), )
             await self.send_notification('blockchain.headers.subscribe', args)
+
+        # TODO: Notify assets
 
         touched = touched.intersection(self.hashX_subs)
         if touched or (height_changed and self.mempool_statuses):
@@ -1086,14 +1089,17 @@ class ElectrumX(SessionBase):
     async def hashX_listassets(self, hashX):
         assets = await self.db.all_assets(hashX)
         assets = sorted(assets)
+        assets.extend(await self.mempool.unordered_ASSETs(hashX))
         self.bump_cost(1.0 + len(assets) / 50)
-        TODO: mempool
+        spends = await self.mempool.potential_spends(hashX)
+
         return [{'tx_hash': hash_to_hex_str(asset.tx_hash),
                  'tx_pos': asset.tx_pos,
                  'height': asset.height,
                  'name': asset.name,
                  'value': asset.value}
-                for asset in assets]
+                for asset in assets
+                if (asset.tx_hash, asset.tx_pos) not in spends]
 
     async def hashX_listunspent(self, hashX):
         '''Return the list of UTXOs of a script hash, including mempool
@@ -1123,10 +1129,27 @@ class ElectrumX(SessionBase):
         self.bump_cost(1.0 + len(utxos) / 50)
         return {'confirmed': confirmed, 'unconfirmed': unconfirmed}
 
+    async def get_asset_balance(self, hashX):
+        assets = await self.db.all_assets(hashX)
+        confirmed = {}
+        for asset in assets:
+            if asset.name not in confirmed:
+                confirmed[asset.name] = asset.value
+            else:
+                confirmed[asset.name] += asset.value
+        unconfirmed = await self.mempool.asset_balance_delta(hashX)
+        self.bump_cost(1.0 + len(assets) / 50)
+        return {'confirmmed': confirmed, 'unconfirmed:' unconfirmed}
+
+
     async def scripthash_get_balance(self, scripthash):
         '''Return the confirmed and unconfirmed balance of a scripthash.'''
         hashX = scripthash_to_hashX(scripthash)
         return await self.get_balance(hashX)
+
+    async def scripthash_get_asset_balance(self, scripthash):
+        hashX = scripthash_to_hashX(scripthash)
+        return await self.get_asset_balance(hashX)
 
     async def unconfirmed_history(self, hashX):
         # Note unconfirmed history is unordered in electrum-server
@@ -1427,6 +1450,7 @@ class ElectrumX(SessionBase):
             'blockchain.headers.subscribe': self.headers_subscribe,
             'blockchain.relayfee': self.relayfee,
             'blockchain.scripthash.get_balance': self.scripthash_get_balance,
+            'blockchain.scripthash.get_asset_balance': self.scripthash_get_asset_balance,
             'blockchain.scripthash.get_history': self.scripthash_get_history,
             'blockchain.scripthash.get_mempool': self.scripthash_get_mempool,
             'blockchain.scripthash.listunspent': self.scripthash_listunspent,
