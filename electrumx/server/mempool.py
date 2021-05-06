@@ -292,12 +292,12 @@ class MemPool(object):
                         asset_name_len = txout.pk_script[start]
                         asset_name = txout.pk_script[start + 1:(start + 1 + asset_name_len)]
                         if asset_info[1]:
-                            txout_tuple_list.append((hashX, 100_000_000, True, asset_name.encode('ascii')))
+                            txout_tuple_list.append((hashX, 100_000_000, True, asset_name.decode('ascii')))
                         else:  # Not an owner asset
                             sat_amt = int.from_bytes(txout.pk_script[(start + 1 + asset_name_len):
                                                                      (start + 9 + asset_name_len)],
                                                      byteorder='little')
-                            txout_tuple_list.append((hashX, sat_amt, True, asset_name.encode('ascii')))
+                            txout_tuple_list.append((hashX, sat_amt, True, asset_name.decode('ascii')))
 
                 txout_pairs = tuple(txout_tuple_list)
                 txs[tx_hash] = MemPoolTx(txin_pairs, None, txout_pairs,
