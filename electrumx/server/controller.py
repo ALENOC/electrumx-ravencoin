@@ -70,6 +70,7 @@ class Notifications(object):
 
     async def on_mempool(self, touched, height):
         self._touched_mp[height] = touched
+        self._reissued_assets[height] = set()
         await self._maybe_notify()
 
     async def on_block(self, touched, height, reissued):
