@@ -717,8 +717,8 @@ class BlockProcessor:
                 asset_undo_entry_len = find_asset_undo_len(asset_n)
                 new_asset_n = asset_n - asset_undo_entry_len
                 if new_asset_n >= 0 and asset_undo_entry_len > 0:
-                    undo_item = asset_undo_info[asset_n:asset_n+asset_undo_entry_len]
-                    if undo_item[:32] == tx_hash and undo_item[32:36] == prev_idx_bytes:
+                    undo_item = asset_undo_info[new_asset_n:new_asset_n+asset_undo_entry_len]
+                    if undo_item[:32] == txin.prev_hash and undo_item[32:36] == prev_idx_bytes:
                         put_asset(txin.prev_hash + prev_idx_bytes, undo_item[36:])
                         asset_n = new_asset_n
 
