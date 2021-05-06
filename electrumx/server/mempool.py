@@ -214,9 +214,8 @@ class MemPool(object):
         # First handle txs that have disappeared
         for tx_hash in set(txs).difference(all_hashes):
             tx = txs.pop(tx_hash)
-            tx_hashXs = set(hashX for hashX, value in tx.in_pairs)
-            tx_hashXs.update(hashX for hashX, value in tx.in_assets)
-            tx_hashXs.update(hashX for hashX, value in tx.out_pairs)
+            tx_hashXs = set(hashX for hashX, value, _, _ in tx.in_pairs)
+            tx_hashXs.update(hashX for hashX, value, _, _ in tx.out_pairs)
             for hashX in tx_hashXs:
                 hashXs[hashX].remove(tx_hash)
                 if not hashXs[hashX]:
