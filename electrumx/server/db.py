@@ -944,7 +944,7 @@ class DB(object):
             return [lookup_utxo(*hashX_pair) for hashX_pair in hashX_pairs]
 
         hashX_pairs = await run_in_thread(lookup_hashXs)
-        return await run_in_thread(lookup_utxos, hashX_pairs)
+        return [i for i in await run_in_thread(lookup_utxos, hashX_pairs) if i]
 
     async def lookup_asset_meta(self, asset_name):
         def read_assets_meta():
@@ -1016,4 +1016,4 @@ class DB(object):
             return [lookup_asset(*hashX_pair) for hashX_pair in hashX_pairs]
 
         hashX_pairs = await run_in_thread(lookup_hashXs)
-        return await run_in_thread(lookup_assets, hashX_pairs)
+        return [i for i in await run_in_thread(lookup_assets, hashX_pairs) if i]
