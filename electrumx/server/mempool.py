@@ -277,7 +277,7 @@ class MemPool(object):
                            txout.pk_script[1] == 0x14 and txout.pk_script[22] == 0x87 \
                         else 25
 
-                    hashX = script_hashX(txout.pk_script[:end_point])
+                    hashX = to_hashX(txout.pk_script[:end_point])
 
                     asset_info = is_asset_script(txout.pk_script)
 
