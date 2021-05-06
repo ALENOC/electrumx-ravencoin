@@ -1139,7 +1139,7 @@ class ElectrumX(SessionBase):
                 confirmed[asset.name] += asset.value
         unconfirmed = await self.mempool.asset_balance_delta(hashX)
         self.bump_cost(1.0 + len(assets) / 50)
-        return {'confirmed': confirmed, 'unconfirmed:': unconfirmed}
+        return {'confirmed': confirmed, 'unconfirmed': unconfirmed}
 
 
     async def scripthash_get_balance(self, scripthash):
