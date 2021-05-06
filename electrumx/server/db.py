@@ -938,6 +938,8 @@ class DB(object):
                     # getting the hashXs and getting the UTXOs
                     return None
                 value, = unpack_le_uint64(db_value)
+                if value == 0:
+                    return None
                 return hashX, value
             return [lookup_utxo(*hashX_pair) for hashX_pair in hashX_pairs]
 
@@ -1006,7 +1008,11 @@ class DB(object):
                     # This can happen if the DB was updated between
                     # getting the hashXs and getting the UTXOs
                     return None
-                return hashX, db_value
+
+                value, = unpack_le_uint64(db_value[:8])
+                name = db_value[9:].decode('ascii')
+
+                return hashX, value, name
             return [lookup_asset(*hashX_pair) for hashX_pair in hashX_pairs]
 
         hashX_pairs = await run_in_thread(lookup_hashXs)

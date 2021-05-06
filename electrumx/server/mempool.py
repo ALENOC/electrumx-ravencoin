@@ -82,6 +82,10 @@ class MemPoolAPI(ABC):
         '''
 
     @abstractmethod
+    async def lookup_assets(self, prevouts):
+        pass
+
+    @abstractmethod
     async def on_mempool(self, touched, height):
         '''Called each time the mempool is synchronized.  touched is a set of
         hashXs touched since the previous call.  height is the
@@ -311,7 +315,15 @@ class MemPool(object):
         prevouts = tuple(prevout for tx in tx_map.values()
                          for prevout in tx.prevouts
                          if prevout[0] not in all_hashes)
-        utxos = await self.api.lookup_utxos(prevouts)
+
+        utxos = []
+
+        for hX, v in await self.api.lookup_utxos(prevouts):
+            utxos.append((hX, v, False, None))
+
+        for hX, v, name in await self.api.lookup_assets(prevouts):
+            utxos.append((hX, v, True, name))
+
         utxo_map = {prevout: utxo for prevout, utxo in zip(prevouts, utxos)}
 
         return self._accept_transactions(tx_map, utxo_map, touched)
