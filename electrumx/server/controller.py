@@ -66,7 +66,7 @@ class Notifications(object):
     async def start(self, height, notify_func):
         self._highest_block = height
         self.notify = notify_func
-        await self.notify(height, set())
+        await self.notify(height, set(), set())
 
     async def on_mempool(self, touched, height):
         self._touched_mp[height] = touched
