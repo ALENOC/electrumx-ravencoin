@@ -9,8 +9,6 @@
 '''Block prefetcher and chain processor.'''
 
 
-import logging
-
 import asyncio
 import time
 from asyncio import sleep
@@ -29,12 +27,12 @@ from electrumx.lib.assets import is_asset_script, TX_TRANSFER_ASSET, TX_NEW_ASSE
 
 # We can safely assume that TX's to these addresses will never come out
 # Therefore we don't need to store them in the database
-BURN_ADDRESSES_SCRIPTX = [
-    b'IB(?\x903\xc1\xdb\xe0\xfd}', # 'RXissueAssetXXXXXXXXXXXXXXXXXhhZGt'
-    b'\xb4K8\x1a\x1b\x7f\x98k\xe3\x869', # 'RXReissueAssetXXXXXXXXXXXXXXVEFAWu',
-    b'\x95\x90\x89*\xfaF|\xbaT\x11\xbb', # 'RXissueSubAssetXXXXXXXXXXXXXWcwhwL',
-    b'3\x7f\x1e\x0e\xe8)J\xf3;\x85|', #'RXissueUniqueAssetXXXXXXXXXXWEAe58',
-    b'\x11K\x89.t@eV\xe0\x93\xdd', # 'RXBurnXXXXXXXXXXXXXXXXXXXXXXWUo9FV',
+BURN_ADDRESSES = [
+    'RXissueAssetXXXXXXXXXXXXXXXXXhhZGt'
+    'RXReissueAssetXXXXXXXXXXXXXXVEFAWu',
+    'RXissueSubAssetXXXXXXXXXXXXXWcwhwL',
+    'RXissueUniqueAssetXXXXXXXXXXWEAe58',
+    'RXBurnXXXXXXXXXXXXXXXXXXXXXXWUo9FV',
 ]
 
 class Prefetcher:
@@ -72,7 +70,6 @@ class Prefetcher:
                 self.logger.info(f'ignoring daemon error: {e}')
             except CancelledError as e:
                 self.logger.info(f'cancelled; prefetcher stopping {e}')
-                logging.exception("Here is the error:")
                 raise
             except Exception:   # pylint:disable=W0703
                 self.logger.exception('ignoring unexpected exception')
@@ -515,84 +512,74 @@ class BlockProcessor:
                 asset_info = is_asset_script(txout.pk_script)
                 # For testing purposes. TODO: Make gooder
                 if asset_info is not None:
-                    try:
-                        asset_num += 1
-                        start = asset_info[2]
-                        asset_name_len = txout.pk_script[start]
-                        asset_name = txout.pk_script[start+1:(start+1 + asset_name_len)]
-                        if asset_info[1]:
-                            # This is an ownership asset, just give it "1"
-                            # Ownership assets do not have any metadata, just assign it a value of 1
-                            put_asset(tx_hash + to_le_uint32(idx),
-                                    hashX + tx_numb + to_le_uint64(100_000_000) +
-                                      txout.pk_script[start:(start+1 + asset_name_len)])
-                        else: # Not an owner asset
-                            sat_amt = int.from_bytes(txout.pk_script[(start + 1 + asset_name_len):
-                                                                     (start + 9 + asset_name_len)],
-                                                     byteorder='little')
-                            put_asset(tx_hash + to_le_uint32(idx),
-                                    hashX + tx_numb + to_le_uint64(sat_amt) +
-                                      txout.pk_script[start:(start+1 + asset_name_len)])
-                            if asset_info[0] != TX_TRANSFER_ASSET:
-                                # div_amt = txout.pk_script[start + 9 + asset_name_len]
-                                # reissue = False if txout.pk_script[start + 10 + asset_name_len] == 0 else True
-                                if asset_info[0] != TX_REISSUE_ASSET:
-                                    # This only happens when creating new assets
-                                    has_ifps = False if txout.pk_script[start + 11 + asset_name_len] == 0 else True
-                                    ifps = txout.pk_script[
-                                           start + 12 + asset_name_len:start + 46 + asset_name_len] if has_ifps else None
-                                    asset_data = txout.pk_script[start+9+asset_name_len:start+12+asset_name_len]
-                                    if has_ifps:
-                                        asset_data += ifps
-                                    asset_meta_undo_info_append(
-                                        asset_name_len.to_bytes(1, 'big')+asset_name+b'\0')
-                                    put_asset_data_new(asset_name, asset_data)
+                    asset_num += 1
+                    start = asset_info[2]
+                    asset_name_len = txout.pk_script[start]
+                    asset_name = txout.pk_script[start + 1:(start + 1 + asset_name_len)]
+                    if asset_info[1]:
+                        # This is an ownership asset, just give it "1"
+                        # Ownership assets do not have any metadata, just assign it a value of 1
+                        put_asset(tx_hash + to_le_uint32(idx),
+                                  hashX + tx_numb + to_le_uint64(100_000_000) +
+                                  txout.pk_script[start:(start + 1 + asset_name_len)])
+                    else:  # Not an owner asset
+                        sat_amt = int.from_bytes(txout.pk_script[(start + 1 + asset_name_len):
+                                                                 (start + 9 + asset_name_len)],
+                                                 byteorder='little')
+                        put_asset(tx_hash + to_le_uint32(idx),
+                                  hashX + tx_numb + to_le_uint64(sat_amt) +
+                                  txout.pk_script[start:(start + 1 + asset_name_len)])
+                        if asset_info[0] != TX_TRANSFER_ASSET:
+                            # div_amt = txout.pk_script[start + 9 + asset_name_len]
+                            # reissue = False if txout.pk_script[start + 10 + asset_name_len] == 0 else True
+                            if asset_info[0] != TX_REISSUE_ASSET:
+                                # This only happens when creating new assets
+                                has_ifps = False if txout.pk_script[start + 11 + asset_name_len] == 0 else True
+                                ifps = txout.pk_script[
+                                       start + 12 + asset_name_len:start + 46 + asset_name_len] if has_ifps else None
+                                asset_data = txout.pk_script[start + 9 + asset_name_len:start + 12 + asset_name_len]
+                                if has_ifps:
+                                    asset_data += ifps
+                                asset_meta_undo_info_append(
+                                    asset_name_len.to_bytes(1, 'big') + asset_name + b'\0')
+                                put_asset_data_new(asset_name, asset_data)
+                            else:
+                                # When reissuing
+                                div_amt = txout.pk_script[start + 9 + asset_name_len]
+                                reissuable = txout.pk_script[start + 10 + asset_name_len]
+                                asset_data = b''
+
+                                # Quicker check, but it's far more likely to be in the db
+                                old_data = self.asset_data_new.pop(asset_name, None)
+                                if old_data is None:
+                                    old_data = self.asset_data_reissued.pop(asset_name, None)
+                                if old_data is None:
+                                    old_data = self.db.asset_info_db.get(asset_name)
+                                assert old_data is not None  # If reissuing, we should have it
+
+                                asset_meta_undo_info_append(
+                                    asset_name_len.to_bytes(1, 'big') + asset_name +
+                                    len(old_data).to_bytes(1, 'big') + old_data)
+
+                                if div_amt == 0xff:  # Unchanged division amount
+                                    asset_data += old_data[0].to_bytes(1, 'big')
                                 else:
-                                    # When reissuing
-                                    div_amt = txout.pk_script[start + 9 + asset_name_len]
-                                    reissuable = txout.pk_script[start + 10 + asset_name_len]
-                                    asset_data = b''
+                                    asset_data += div_amt.to_bytes(1, 'big')
+                                asset_data += reissuable.to_bytes(1, 'big')
 
-                                    # Quicker check, but it's far more likely to be in the db
-                                    old_data = self.asset_data_new.pop(asset_name, None)
-                                    if old_data is None:
-                                        old_data = self.asset_data_reissued.pop(asset_name, None)
-                                    if old_data is None:
-                                        old_data = self.db.asset_info_db.get(asset_name)
-                                    assert old_data is not None  # If reissuing, we should have it
-
-                                    asset_meta_undo_info_append(
-                                        asset_name_len.to_bytes(1, 'big') + asset_name +
-                                        len(old_data).to_bytes(1, 'big') + old_data)
-
-                                    if div_amt == 0xff: # Unchanged division amount
-                                        asset_data += old_data[0].to_bytes(1, 'big')
-                                    else:
-                                        asset_data += div_amt.to_bytes(1, 'big')
-                                    asset_data += reissuable.to_bytes(1, 'big')
-
-                                    check_if_ipfs = txout.pk_script[start+11+asset_name_len]
-                                    if check_if_ipfs == 0x75: #End of script
-                                        asset_data += b'\0'
-                                    elif check_if_ipfs != 0:
-                                        # I am assuming that if a 0 comes next,
-                                        # it is the same as creating an asset
-                                        asset_data += b'\x01'
-                                        asset_data += txout.pk_script[
-                                           start + 11 + asset_name_len:start + 45 + asset_name_len]
-                                    else:
-                                        asset_data += b'\0'
-                                    self.asset_touched.update(asset_name)
-                                    put_asset_data_reissued(asset_name, asset_data)
-                    except Exception as ex:
-                        print('Error checking asset')
-                        print(txout.pk_script)
-                        print('Tx ID:')
-                        b = bytearray(tx_hash)
-                        b.reverse()
-                        print(bytes(b).hex())
-                        logging.exception('block_processor asset error')
-                        raise
+                                check_if_ipfs = txout.pk_script[start + 11 + asset_name_len]
+                                if check_if_ipfs == 0x75:  # End of script
+                                    asset_data += b'\0'
+                                elif check_if_ipfs != 0:
+                                    # I am assuming that if a 0 comes next,
+                                    # it is the same as creating an asset
+                                    asset_data += b'\x01'
+                                    asset_data += txout.pk_script[
+                                                  start + 11 + asset_name_len:start + 45 + asset_name_len]
+                                else:
+                                    asset_data += b'\0'
+                                self.asset_touched.update(asset_name)
+                                put_asset_data_reissued(asset_name, asset_data)
 
             append_hashXs(hashXs)
             update_touched(hashXs)
@@ -896,13 +883,9 @@ class BlockProcessor:
             await self._on_caught_up()
 
         while True:
-            try:
-                await self.blocks_event.wait()
-                self.blocks_event.clear()
-                await self.run_with_lock(process_event())
-            except Exception as ex:
-                logging.exception("Process blocks exception")
-                raise ex
+            await self.blocks_event.wait()
+            self.blocks_event.clear()
+            await self.run_with_lock(process_event())
 
     async def _on_caught_up(self):
         if not self._caught_up_event.is_set():
@@ -944,11 +927,7 @@ class BlockProcessor:
                 await group.spawn(self.prefetcher.main_loop(self.height))
                 await group.spawn(self._process_blocks())
 
-            print('Block_Processor fetch_and_process_blocks error:')
-            print('group.exception')
-            # Bruh
-            if group.exception is not None:
-                raise group.exception
+            raise group.exception
         # Don't flush for arbitrary exceptions as they might be a cause or consequence of
         # corrupted data
         except CancelledError:
