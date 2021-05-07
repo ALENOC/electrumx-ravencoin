@@ -543,7 +543,7 @@ class DB(object):
             headers.append(headers_concat[offset:offset + hlen])
             offset += hlen
 
-        return headers
+        return [self.coin.header_hash(header) for header in headers]
 
     async def limited_history(self, hashX, *, limit=1000):
         '''Return an unpruned, sorted list of (tx_hash, height) tuples of
