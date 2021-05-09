@@ -1052,7 +1052,7 @@ class ElectrumX(SessionBase):
 
     async def asset_status(self, asset):
         asset_data = self.session_mgr.db.lookup_asset_meta(asset.encode('ascii'))
-        self.bump_cost(cost + 0.1 + len(asset_data) * 0.00002)
+        self.bump_cost(0.1 + len(asset_data) * 0.00002)
 
         if asset_data:
             status = sha256(json.dumps(asset_data, sort_keys=True).encode('ascii')).hex()
