@@ -916,6 +916,7 @@ class ElectrumX(SessionBase):
         self.subscribe_assets = False
         self.connection.max_response_size = self.env.max_send
         self.hashX_subs = {}
+        self.asset_subs = set()
         self.sv_seen = False
         self.mempool_statuses = {}
         self.set_request_handlers(self.PROTOCOL_MIN)
@@ -991,7 +992,14 @@ class ElectrumX(SessionBase):
             args = (await self.subscribe_headers_result(), )
             await self.send_notification('blockchain.headers.subscribe', args)
 
-        # TODO: Notify assets
+        touched_assets = assets.intersection(self.asset_subs)
+        if touched_assets:
+            method = 'blockchain.asset.subscribe'
+            for asset in touched_assets:
+                status = self.asset_status(asset)
+                await self.send_notification(method, (asset, status))
+            es = '' if len(touched_assets) == 1 else 's'
+            self.logger.info(f'notified of {len(touched_assets):,d} reissued asset{es}')
 
         touched = touched.intersection(self.hashX_subs)
         if touched or (height_changed and self.mempool_statuses):
@@ -1041,6 +1049,17 @@ class ElectrumX(SessionBase):
         '''Return the server peers as a list of (ip, host, details) tuples.'''
         self.bump_cost(1.0)
         return self.peer_mgr.on_peers_subscribe(self.is_tor())
+
+    async def asset_status(self, asset):
+        asset_data = self.session_mgr.db.lookup_asset_meta(asset.encode('ascii'))
+        self.bump_cost(cost + 0.1 + len(asset_data) * 0.00002)
+
+        if asset_data:
+            status = sha256(json.dumps(asset_data, sort_keys=True).encode('ascii')).hex()
+        else:
+            status = None
+
+        return status
 
     async def address_status(self, hashX):
         '''Returns an address status.
@@ -1117,6 +1136,15 @@ class ElectrumX(SessionBase):
         # Store the subscription only after address_status succeeds
         result = await self.address_status(hashX)
         self.hashX_subs[hashX] = alias
+        return result
+
+    async def asset_subscribe(self, asset):
+        if len(asset) > 31:
+            raise RPCError(
+                BAD_REQUEST, f'asset name greater than 31 characters'
+            ) from None
+        result = await self.asset_status(asset)
+        self.asset_subs.update(asset)
         return result
 
     async def get_balance(self, hashX):
@@ -1430,6 +1458,10 @@ class ElectrumX(SessionBase):
             return hash_to_hex_str(tx_hash)
 
     async def asset_get_meta(self, name):
+        if len(name) > 31:
+            raise RPCError(
+                BAD_REQUEST, f'asset name greater than 31 characters'
+            ) from None
         self.bump_cost(1.0)
         return await self.db.lookup_asset_meta(name.encode('ascii'))
 
@@ -1458,6 +1490,7 @@ class ElectrumX(SessionBase):
             'blockchain.transaction.get_merkle': self.transaction_merkle,
             'blockchain.transaction.id_from_pos': self.transaction_id_from_pos,
             'blockchain.asset.get_meta': self.asset_get_meta,
+            'blockchain.asset.subscribe': self.asset_subscribe,
             'mempool.get_fee_histogram': self.compact_fee_histogram,
             'server.add_peer': self.add_peer,
             'server.banner': self.banner,
