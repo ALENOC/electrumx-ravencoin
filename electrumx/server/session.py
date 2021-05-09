@@ -1051,7 +1051,7 @@ class ElectrumX(SessionBase):
         return self.peer_mgr.on_peers_subscribe(self.is_tor())
 
     async def asset_status(self, asset):
-        asset_data = self.session_mgr.db.lookup_asset_meta(asset.encode('ascii'))
+        asset_data = await self.session_mgr.db.lookup_asset_meta(asset.encode('ascii'))
         self.bump_cost(0.1 + len(asset_data) * 0.00002)
 
         if asset_data:
