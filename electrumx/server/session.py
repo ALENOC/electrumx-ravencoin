@@ -1055,7 +1055,16 @@ class ElectrumX(SessionBase):
         self.bump_cost(0.1 + len(asset_data) * 0.00002)
 
         if asset_data:
-            status = sha256(json.dumps(asset_data, sort_keys=True).encode('ascii')).hex()
+
+            div_amt = asset_data['divisions']
+            reissuable = ['reissuable']
+            has_ipfs = ['has_ipfs']
+
+            h = ''.join([str(div_amt), str(reissuable), str(has_ipfs)])
+            if 'ipfs' in asset_data:
+                h += asset_data['ipfs']
+
+            status = sha256(h.encode('ascii')).hex()
         else:
             status = None
 
