@@ -913,7 +913,6 @@ class ElectrumX(SessionBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.subscribe_headers = False
-        self.subscribe_assets = False
         self.connection.max_response_size = self.env.max_send
         self.hashX_subs = {}
         self.asset_subs = set()

@@ -242,7 +242,7 @@ class Ravencoin(Coin):
     @classmethod
     def static_header_offset(cls, height):
         '''Given a header height return its offset in the headers file.'''
-        if cls.KAWPOW_ACTIVATION_HEIGHT < 0 or height <= cls.KAWPOW_ACTIVATION_HEIGHT:
+        if cls.KAWPOW_ACTIVATION_HEIGHT < 0 or height < cls.KAWPOW_ACTIVATION_HEIGHT:
             result = height * cls.BASIC_HEADER_SIZE
         else:  # RVN block header size increased with kawpow fork
             baseoffset = cls.KAWPOW_ACTIVATION_HEIGHT * cls.BASIC_HEADER_SIZE

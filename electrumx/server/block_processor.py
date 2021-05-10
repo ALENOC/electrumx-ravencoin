@@ -578,7 +578,8 @@ class BlockProcessor:
                                                   start + 11 + asset_name_len:start + 45 + asset_name_len]
                                 else:
                                     asset_data += b'\0'
-                                self.asset_touched.update(asset_name)
+                                if asset_name[-1] != 33: # Not an ownership asset
+                                    self.asset_touched.update(asset_name)
                                 put_asset_data_reissued(asset_name, asset_data)
 
             append_hashXs(hashXs)
