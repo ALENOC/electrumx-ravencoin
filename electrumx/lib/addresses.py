@@ -19,10 +19,10 @@ def hash_160(x: bytes) -> bytes:
         md = ripemd.new(sha256(x))
         return md.digest()
 
-def hash160_to_b58_address(h160: bytes, addrtype: int) -> str:
-    s = bytes([addrtype]) + h160
+def hash160_to_b58_address(h160: bytes, addrtype: bytes) -> str:
+    s = addrtype + h160
     s = s + double_sha256(s)[0:4]
     return base_encode(s, base=58)
 
-def public_key_to_address(public_key: bytes, addrtype) -> str:
+def public_key_to_address(public_key: bytes, addrtype: bytes) -> str:
     return hash160_to_b58_address(hash_160(public_key), addrtype)
