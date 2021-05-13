@@ -84,24 +84,26 @@ def is_asset_script(script: bytes):
     Returns None otherwise.
     '''
     if len(script) > 31:
-        script_type = TX_SCRIPTHASH \
-            if script[0] == OP_HASH160 and script[1] == 0x14 and script[22] == OP_EQUAL \
-            else TX_PUBKEYHASH
+        try:
+            script_type = TX_SCRIPTHASH \
+                if script[0] == OP_HASH160 and script[1] == 0x14 and script[22] == OP_EQUAL \
+                else TX_PUBKEYHASH
 
-        index = -1
-        if script_type == TX_SCRIPTHASH and script[23] == OP_RVN_ASSET:
-            index = search_for_rvn(script, 25)
-        elif script[25] == OP_RVN_ASSET:
-            index = search_for_rvn(script, 27)
+            index = -1
+            if script_type == TX_SCRIPTHASH and script[23] == OP_RVN_ASSET:
+                index = search_for_rvn(script, 25)
+            elif script[25] == OP_RVN_ASSET:
+                index = search_for_rvn(script, 27)
 
-        if index > 0:
-            if script[index] == RVN_T:
-                return TX_TRANSFER_ASSET, False, (index + 1)
-            elif script[index] == RVN_Q and len(script) > 39:
-                return TX_NEW_ASSET, False, (index + 1)
-            elif script[index] == RVN_O:
-                return TX_NEW_ASSET, True, (index + 1)
-            elif script[index] == RVN_R:
-                return TX_REISSUE_ASSET, False, (index + 1)
-
+            if index > 0:
+                if script[index] == RVN_T:
+                    return TX_TRANSFER_ASSET, False, (index + 1)
+                elif script[index] == RVN_Q and len(script) > 39:
+                    return TX_NEW_ASSET, False, (index + 1)
+                elif script[index] == RVN_O:
+                    return TX_NEW_ASSET, True, (index + 1)
+                elif script[index] == RVN_R:
+                    return TX_REISSUE_ASSET, False, (index + 1)
+        except:
+            return None
     return None

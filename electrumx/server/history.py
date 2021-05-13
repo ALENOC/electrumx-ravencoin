@@ -196,6 +196,7 @@ class History(object):
         chunks = util.chunks
         for _key, hist in self.db.iterator(prefix=hashX):
             for tx_numb in chunks(hist, 5):
+                print(tx_numb)
                 if limit == 0:
                     return
                 tx_num, = unpack_le_uint64(tx_numb + bytes(3))

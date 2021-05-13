@@ -24,6 +24,7 @@ from electrumx.lib.util import (
 )
 from electrumx.server.db import FlushData
 from electrumx.lib.assets import is_asset_script, TX_TRANSFER_ASSET, TX_NEW_ASSET, TX_REISSUE_ASSET
+from electrumx.lib.addresses import public_key_to_address
 
 # We can safely assume that TX's to these addresses will never come out
 # Therefore we don't need to store them in the database
@@ -431,7 +432,6 @@ class BlockProcessor:
         is_unspendable = (is_unspendable_genesis if height >= self.coin.GENESIS_ACTIVATION
                           else is_unspendable_legacy)
 
-        #TODO: Asset meta undo infos
         (undo_info, asset_undo_info, asset_meta_undo_info) = self.advance_txs(block.transactions, is_unspendable)
 
         if height >= min_height:
@@ -478,7 +478,7 @@ class BlockProcessor:
 
             # Spend the inputs
             for txin in tx.inputs:
-                if txin.is_generation():
+                if txin.is_generation(): # Don't spend block rewards
                     continue
                 cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
                 asset_cache_value = spend_asset(txin.prev_hash, txin.prev_idx)
@@ -497,6 +497,7 @@ class BlockProcessor:
                 # GOD DAMN HASHES
                 # TODO: Is there a reason why the address itself isn't used?
                 # First find the type!
+
                 end_point = 23 \
                     if txout.pk_script[0] == 0xa9 and \
                         txout.pk_script[1] == 0x14 and txout.pk_script[22] == 0x87 \
@@ -504,6 +505,18 @@ class BlockProcessor:
 
                 # Get the hashX
                 hashX = script_hashX(txout.pk_script[:end_point]) # Only hash the "normal" part
+
+                # Convert depricated script pubkeys into script pubkeyhashes for db purposes
+                pubkey_len = txout.pk_script[0]
+                if len(spend_utxo.script) > pubkey_len + 1 and txout.script[pubkey_len + 1] == 0xac:
+                    pubkey = txout.script[1:pubkey_len + 1]
+                    try:
+                        addr = public_key_to_address(pubkey, self.coin.P2PKH_VERBYTE)
+                        print('Found pubkey {}'.format(addr))
+                        hashX = self.coin.address_to_hashX(addr)
+                    except:
+                        print('There was an error getting pubkey')
+                        pass
 
                 append_hashX(hashX)
                 put_utxo(tx_hash + to_le_uint32(idx),
