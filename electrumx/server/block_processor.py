@@ -511,10 +511,8 @@ class BlockProcessor:
                     pubkey = txout.pk_script[1:pubkey_len + 1]
                     try:
                         addr = public_key_to_address(pubkey, self.coin.P2PKH_VERBYTE)
-                        print('found pubkey addr: {}'.format(addr))
                         hashX = self.coin.address_to_hashX(addr)
                     except:
-                        logging.exception("Here's the pubkey error:")
                         pass
 
                 append_hashX(hashX)
