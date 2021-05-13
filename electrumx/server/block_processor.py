@@ -507,7 +507,7 @@ class BlockProcessor:
 
                 # Convert depricated script pubkeys into script pubkeyhashes for db purposes
                 pubkey_len = txout.pk_script[0]
-                if len(spend_utxo.script) > pubkey_len + 1 and txout.script[pubkey_len + 1] == 0xac:
+                if len(txout.script) > pubkey_len + 1 and txout.script[pubkey_len + 1] == 0xac:
                     pubkey = txout.script[1:pubkey_len + 1]
                     try:
                         addr = public_key_to_address(pubkey, self.coin.P2PKH_VERBYTE)
