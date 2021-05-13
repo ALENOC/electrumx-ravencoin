@@ -6,7 +6,7 @@ back into pubkeyhash scripts for db purposes.
 
 import hashlib
 from . import ripemd
-from .hash import sha256d
+from .hash import sha256, double_sha256
 from .util import base_encode
 
 def hash_160(x: bytes) -> bytes:

@@ -495,9 +495,7 @@ class BlockProcessor:
                 # ASSETS CHANGE THE SCRIPT!!!!!!!
                 # THIS TOOK ME SO FUCKING LONG TO FIND!!!!
                 # GOD DAMN HASHES
-                # TODO: Is there a reason why the address itself isn't used?
                 # First find the type!
-
                 end_point = 23 \
                     if txout.pk_script[0] == 0xa9 and \
                         txout.pk_script[1] == 0x14 and txout.pk_script[22] == 0x87 \
@@ -512,10 +510,8 @@ class BlockProcessor:
                     pubkey = txout.script[1:pubkey_len + 1]
                     try:
                         addr = public_key_to_address(pubkey, self.coin.P2PKH_VERBYTE)
-                        print('Found pubkey {}'.format(addr))
                         hashX = self.coin.address_to_hashX(addr)
                     except:
-                        print('There was an error getting pubkey')
                         pass
 
                 append_hashX(hashX)
