@@ -35,7 +35,7 @@ A typical example would be similar to this template::
 blockchain.address.get_balance
 ==============================
 
-Return the confirmed and unconfirmed balances of a bitcoin address.
+Return the confirmed and unconfirmed balances of a ravencoin address.
 
 **Signature**
 

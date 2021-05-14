@@ -2,7 +2,7 @@ Features
 ========
 
 - Efficient, lightweight reimplementation of electrum-server
-- Fast synchronization of bitcoin mainnet from Genesis.  Recent
+- Fast synchronization of ravencoin mainnet from Genesis.  Recent
   hardware should synchronize in well under 24 hours.  The fastest
   time to height 448k (mid January 2017) reported is under 4h 30m.  On
   the same hardware JElectrum would take around 4 days and
@@ -74,8 +74,8 @@ Roadmap
 * protocol improvements targeting better client and server scalability
   to large wallets (100k addresses) and address histories.  Some
   aspects of the current protocol are very inefficient.
-* investigate speaking the Bitcoin protocol and connecting to the
-  Bitcoin network directly for some queries.  This could lead to
+* investigate speaking the Ravencoin protocol and connecting to the
+  Ravencoin network directly for some queries.  This could lead to
   ElectrumX being runnable with a node without a tx index, or a
   pruning node, or not needing to run a node at all.  ElectrumX would
   store all blocks itself and index the transactions therein.

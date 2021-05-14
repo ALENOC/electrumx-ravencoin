@@ -2,6 +2,206 @@
  Protocol Methods
 ==================
 
+blockchain.scripthash.get_asset_balance
+=======================================
+
+Return the confirmed and unconfirmed asset balances of a :ref:`script hash
+<script hashes>`.
+
+**Signature**
+
+  .. function:: blockchain.scripthash.get_asset_balance(scripthash)
+  .. versionadded:: 1.8
+
+  *scripthash*
+
+    The script hash as a hexadecimal string.
+
+**Result**
+
+  A dictionary with keys `confirmed` and `unconfirmed`.  The value of
+  each is a dictionary with the key being the asset name and the value
+  being the appropriate balance in minimum coin units (satoshis).
+
+**Result Example**
+
+::
+
+  {
+    "confirmed": {
+      "asset1": 100000000,
+      "asset2": 200000000
+    },
+    "unconfirmed": {
+      "asset3": 300000000
+    }
+  }
+
+blockchain.scripthash.listassets
+=================================
+
+Return an ordered list of asset UTXOs sent to a script hash.
+
+**Signature**
+
+  .. function:: blockchain.scripthash.listassets(scripthash)
+  .. versionadded:: 1.8
+
+  *scripthash*
+
+    The script hash as a hexadecimal string.
+
+**Result**
+
+  A list of unspent asset outputs in blockchain order.  This function takes
+  the mempool into account.  Mempool transactions paying to the
+  address are included at the end of the list in an undefined order.
+  Any output that is spent in the mempool does not appear.  Each
+  output is a dictionary with the following keys:
+
+  * *height*
+
+    The integer height of the block the transaction was confirmed in.
+    ``0`` if the transaction is in the mempool.
+
+  * *tx_pos*
+
+    The zero-based index of the output in the transaction's list of
+    outputs.
+
+  * *tx_hash*
+
+    The output's transaction hash as a hexadecimal string.
+
+  * *name*
+
+    The asset's name
+
+  * *value*
+
+    The output's value in minimum coin units (satoshis).
+
+**Result Example**
+
+::
+
+  [
+    {
+      "tx_pos": 0,
+      "value": 45318048,
+      "tx_hash": "9f2c45a12db0144909b5db269415f7319179105982ac70ed80d76ea79d923ebf",
+      "name": "asset1",
+      "height": 437146
+    },
+    {
+      "tx_pos": 0,
+      "value": 919195,
+      "tx_hash": "3d2290c93436a3e964cfc2f0950174d8847b1fbe3946432c4784e168da0f019f",
+      "name": "asset2",
+      "height": 441696
+    }
+  ]
+
+blockchain.asset.get_meta
+=================================
+
+Return metadata associated with a certain asset.
+
+**Signature**
+
+  .. function:: blockchain.asset.get_meta(asset)
+  .. versionadded:: 1.8
+
+  *asset*
+
+    The name of the asset as an ascii compliant string.
+
+**Result**
+
+  Each result is a dictionary with the following keys:
+
+  * *divisions*
+
+    A number from 0-8.
+    The number of sub-divisions this asset can be split into.
+    0 means whole numbers, 1 means tenths, 2 means hundredths, etc.
+
+  * *reissuable*
+
+    A number from 0-1.
+    Whether the owner of this asset's ownership asset can change its
+    metadata.
+
+  * *has_ipfs*
+
+    A number from 0-1.
+    Whether this asset has an associated IPFS hash.
+
+  * *ipfs*
+
+    Only if *has_ipfs* is 1.
+    The base58 encoded IPFS hash associated with this asset.
+
+**Result Example**
+
+::
+
+  {
+    "divisions": 0,
+    "has_ipfs": 1,
+    "ipfs": "QmeGgd16sWq6TNfXy8xzwQWRhv1vZUjP1LBxVnfaHaoV25",
+    "reissuable": 0
+  }
+
+.. _subscribed:
+
+blockchain.asset.subscribe
+===============================
+
+Subscribe to an asset.
+
+**Signature**
+
+  .. function:: blockchain.asset.subscribe(asset)
+  .. versionadded:: 1.8
+
+  *asset*
+
+    The name of the asset as an ascii compliant string.
+
+**Result**
+
+  The :ref:`status <status>` of the asset.
+
+**Notifications**
+
+  The client will receive a notification when the :ref:`status <status>` of the script
+  hash changes.  Its signature is
+
+    .. function:: blockchain.asset.subscribe(asset, status)
+       :noindex:
+
+blockchain.scripthash.unsubscribe
+=================================
+
+Unsubscribe from an asset, preventing future notifications if its :ref:`status
+<status>` changes.
+
+**Signature**
+
+  .. function:: blockchain.asset.subscribe(asset)
+  .. versionadded:: 1.8
+
+  *asset*
+
+    The name of the asset as an ascii compliant string.
+
+**Result**
+
+  Returns :const:`True` if the asset was subscribed to, otherwise :const:`False`.
+  Note that :const:`False` might be returned even for something subscribed to earlier,
+  because the server can drop subscriptions in rare circumstances.
+
 blockchain.block.header
 =======================
 

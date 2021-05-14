@@ -2,6 +2,12 @@
  ChangeLog
 ===========
 
+Version 1.18.1 RVN (14 May 2021)
+============================
+
+* Added Ravencoin specific protocol
+* Added Ravencoin asset support
+* PUBKEYSIGs are now picked up by the server
 
 Version 1.18.1 (26 Apr 2021)
 ============================

@@ -31,13 +31,13 @@ Handles JSON Electrum client connections over TCP or SSL.  One
 instance per client session.  Should be the only component concerned
 with the details of the Electrum wire protocol.
 
-Not started until the Block Processor has caught up with bitcoind.
+Not started until the Block Processor has caught up with ravend.
 
 Daemon
 ------
 
-Encapsulates the RPC wire protocol with bitcoind for the whole server.
-Transparently handles temporary bitcoind connection errors, and fails
+Encapsulates the RPC wire protocol with ravend for the whole server.
+Transparently handles temporary ravend connection errors, and fails
 over if necessary.
 
 Notifies the Mempool when the list of mempool transaction hashes is
@@ -62,14 +62,14 @@ Prefetcher
 ----------
 
 Cooperates with the Block Processor to asynchronously prefetch blocks
-from bitcoind.  Once it has caught up it additionally asks the Daemon
-to refresh its view of bitcoind's mempool transaction hashes.  Serves
+from ravend.  Once it has caught up it additionally asks the Daemon
+to refresh its view of ravend's mempool transaction hashes.  Serves
 blocks to the Block Processor via a queue.
 
 Mempool
 -------
 
-Handles all the details of maintaining a representation of bitcoind's
+Handles all the details of maintaining a representation of ravend's
 mempool state.  Obtains the list of current mempool transaction hashes
 from the Daemon when notified by the Prefetcher.
 

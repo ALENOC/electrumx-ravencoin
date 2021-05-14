@@ -105,7 +105,7 @@ Here are some examples of valid services::
   rpc://                                # RPC protocol, default host and port
 
 .. note:: ElectrumX will not serve any incoming connections until it has fully caught up
-          with your bitcoin daemon.  The only exception is local **RPC** connections,
+          with your ravencoin daemon.  The only exception is local **RPC** connections,
           which are served at any time after the server has initialized.
 
 .. envvar:: SERVICES
@@ -330,7 +330,7 @@ raise them.
   milliseconds, and :envvar:`INITIAL_CONCURRENT` to :const:`10` concurrent requests.
 
   The server prices each request made to it based upon an estimate of the resources needed
-  to process it.  Factors include whether the request uses bitcoind, how much bandwidth
+  to process it.  Factors include whether the request uses ravend, how much bandwidth
   it uses, and how hard it hits the databases.
 
   To set a base for the units, a :func:`blockchain.scripthash.subscribe` subscription to

@@ -27,15 +27,16 @@ DB Engine        A database engine package is required; two are
 Some coins need an additional package, typically for their block hash
 functions.  For example, `x11_hash`_ is required for DASH.
 
-You **must** to be running a non-pruning bitcoin daemon with::
+You **must** to be running a non-pruning ravencoin daemon with::
 
   txindex=1
+  assetindex=1
 
 set in its configuration file.  If you have an existing installation
-of bitcoind and have not previously set this you will need to reindex
+of ravend and have not previously set this you will need to reindex
 the blockchain with::
 
-  bitcoind -reindex
+  ravend -reindex
 
 which can take some time.
 
@@ -51,11 +52,11 @@ used to either.
 When building the database from the genesis block, ElectrumX has to
 flush large quantities of data to disk and its DB.  You will have a
 better experience if the database directory is on an SSD than on an
-HDD.  Currently to around height 611,600 of the Bitcoin blockchain the
+HDD.  Currently to around height 1,750,000 of the Ravencoin blockchain the
 final size of the leveldb database, and other ElectrumX file metadata
-comes to just over 46.9GB (43.7 GiB).  LevelDB needs a bit more for
+comes to just over 3GB.  LevelDB needs a bit more for
 brief periods, and the block chain is only getting longer, so I would
-recommend having at least 70-80GB of free space before starting.
+recommend having at least 5GB of free space before starting.
 
 Database Engine
 ===============

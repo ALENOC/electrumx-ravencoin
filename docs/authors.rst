@@ -14,3 +14,7 @@ Authors
 * John Jegutanis
 
   Alt-chain integrations.
+
+* kralverde
+
+  Ravencoin conversion
