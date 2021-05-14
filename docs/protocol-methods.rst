@@ -181,7 +181,7 @@ Subscribe to an asset.
     .. function:: blockchain.asset.subscribe(asset, status)
        :noindex:
 
-blockchain.scripthash.unsubscribe
+blockchain.asset.unsubscribe
 =================================
 
 Unsubscribe from an asset, preventing future notifications if its :ref:`status

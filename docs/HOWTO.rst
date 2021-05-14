@@ -79,7 +79,7 @@ Install the prerequisites above.
 
 Check out the code from Github::
 
-    git clone https://github.com/kyuupichan/electrumx.git
+    git clone https://github.com/Electrum-RVN-SIG/electrumx-ravencoin.git
     cd electrumx
 
 You can install with :file:`setup.py` or run the code from the source

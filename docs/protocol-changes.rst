@@ -166,3 +166,17 @@ New methods
 -----------
 
   * :func:`blockchain.scipthash.unsubscribe` to unsubscribe from a script hash.
+
+
+Version 1.8.0
+=============
+
+New methods
+-----------
+
+  * :func:`blockchain.scripthash.get_asset_balance`
+  * :func:`blockchain.scripthash.listassets`
+  * :func:`blockchain.asset.get_meta`
+  * :func:`blockchain.asset.subscribe`
+  * :func:`blockchain.asset.unsubscribe`
+
