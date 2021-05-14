@@ -175,8 +175,8 @@ Subscribe to an asset.
 
 **Notifications**
 
-  The client will receive a notification when the :ref:`status <status>` of the script
-  hash changes.  Its signature is
+  The client will receive a notification when the :ref:`status <status>` of the asset
+  changes.  Its signature is
 
     .. function:: blockchain.asset.subscribe(asset, status)
        :noindex:

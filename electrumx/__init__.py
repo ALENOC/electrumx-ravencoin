@@ -1,4 +1,4 @@
-version = 'ElectrumX Ravencoin 1.18.1'
+version = 'ElectrumX Ravencoin 1.8'
 version_short = version.split()[-1]
 
 from electrumx.server.controller import Controller
