@@ -7,14 +7,13 @@ with open('requirements.txt', 'r') as f:
     requirements = f.read().splitlines()
 
 requirements = [i for i in requirements if "kawpow" not in i]
-print(requirements)
 
 setuptools.setup(
     name='electrumX',
     version=version,
     scripts=['electrumx_server', 'electrumx_rpc', 'electrumx_compact_history'],
     python_requires='>=3.8',
-    install_requires=requirements,
+    install_requires=["cmake"],
     extras_require={
         'rocksdb': ['python-rocksdb>=0.6.9'],
         'uvloop': ['uvloop>=0.14'],
