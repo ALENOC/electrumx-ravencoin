@@ -1,0 +1,7 @@
+cmake==3.18.4
+aiohttp==3.7.4
+pylru==1.2.0
+plyvel==1.3.0
+aiorpcx==0.18.7
+x16r_hash==1.0.1
+x16rv2_hash==1.0
