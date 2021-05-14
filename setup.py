@@ -6,6 +6,8 @@ version = electrumx.version.split(' ')[-1]
 with open('requirements.txt', 'r') as f:
     requirements = f.read().splitlines()
 
+requirements = [i for i in requirements if "kawpow" not in i]
+
 setuptools.setup(
     name='electrumX',
     version=version,
