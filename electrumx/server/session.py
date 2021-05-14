@@ -1338,7 +1338,7 @@ class ElectrumX(SessionBase):
         '''The minimum fee a low-priority tx must pay in order to be accepted
         to the daemon's memory pool.'''
         self.bump_cost(1.0)
-        return 0.000001
+        return 0.01
 
     async def estimatefee(self, _number):
         '''The estimated transaction fee per kilobyte to be paid for a
@@ -1348,7 +1348,7 @@ class ElectrumX(SessionBase):
         mode: CONSERVATIVE or ECONOMICAL estimation mode
         '''
         self.bump_cost(2.0)
-        return 0.00001
+        return 0.01
 
     async def ping(self):
         '''Serves as a connection keep-alive mechanism and for the client to
