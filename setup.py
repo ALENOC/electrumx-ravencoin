@@ -9,6 +9,7 @@ with open('requirements.txt', 'r') as f:
 requirements = [i for i in requirements if "kawpow" not in i]
 
 setuptools.setup(
+    autodock_mock_imports=["kawpow"],
     name='electrumX',
     version=version,
     scripts=['electrumx_server', 'electrumx_rpc', 'electrumx_compact_history'],
@@ -23,9 +24,9 @@ setuptools.setup(
     author='Neil Booth',
     author_email='kyuupichan@gmail.com',
     license='MIT Licence',
-    url='https://github.com/kyuupichan/electrumx',
-    long_description='Server implementation for the Electrum protocol',
-    download_url=('https://github.com/kyuupichan/electrumX/archive/'
+    url='https://github.com/Electrum-RVN-SIG/electrumx-ravencoin',
+    long_description='Ravencoin server implementation for the Electrum protocol',
+    download_url=('https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/archive/'
                   f'{version}.tar.gz'),
     classifiers=[
         'Development Status :: 5 - Production/Stable',
