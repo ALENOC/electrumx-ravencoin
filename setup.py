@@ -9,7 +9,6 @@ with open('requirements.txt', 'r') as f:
 requirements = [i for i in requirements if "kawpow" not in i]
 
 setuptools.setup(
-    autodock_mock_imports=["kawpow"],
     name='electrumX',
     version=version,
     scripts=['electrumx_server', 'electrumx_rpc', 'electrumx_compact_history'],

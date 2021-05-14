@@ -30,6 +30,7 @@ release = version
 # The short X.Y version
 version = version.split()[-1]
 
+autodock_mock_imports = ["kawpow"]
 
 # -- General configuration ---------------------------------------------------
 
