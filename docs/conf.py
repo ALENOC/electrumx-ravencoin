@@ -30,13 +30,13 @@ release = version
 # The short X.Y version
 version = version.split()[-1]
 
-class Mock(MagicMock):
-    @classmethod
-    def __getattr__(cls, name):
-        return MagicMock()
+# class Mock(MagicMock):
+#    @classmethod
+#    def __getattr__(cls, name):
+#        return MagicMock()
 
-MOCK_MODULES = ['kawpow']
-sys.modules.update((mod_name, Mock()) for mod_name in MOCK_MODULES)
+#MOCK_MODULES = ['kawpow']
+#sys.modules.update((mod_name, Mock()) for mod_name in MOCK_MODULES)
 
 # -- General configuration ---------------------------------------------------
 
