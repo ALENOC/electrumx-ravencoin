@@ -7,6 +7,7 @@ with open('requirements.txt', 'r') as f:
     requirements = f.read().splitlines()
 
 requirements = [i for i in requirements if "kawpow" not in i]
+print(requirements)
 
 setuptools.setup(
     name='electrumX',
