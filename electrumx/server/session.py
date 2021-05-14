@@ -908,7 +908,7 @@ class ElectrumX(SessionBase):
     '''A TCP server that handles incoming Electrum connections.'''
 
     PROTOCOL_MIN = (1, 4)
-    PROTOCOL_MAX = (1, 4, 2)
+    PROTOCOL_MAX = (1, 8)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1154,6 +1154,13 @@ class ElectrumX(SessionBase):
         result = await self.asset_status(asset)
         self.asset_subs.update(asset)
         return result
+
+    async def asset_unsubscribe(self, asset):
+        if len(asset) > 31:
+            raise RPCError(
+                BAD_REQUEST, f'asset name greater than 31 characters'
+            ) from None
+        return self.asset_subs.pop(asset, None) is not None
 
     async def get_balance(self, hashX):
         utxos = await self.db.all_utxos(hashX)
@@ -1487,18 +1494,14 @@ class ElectrumX(SessionBase):
             'blockchain.headers.subscribe': self.headers_subscribe,
             'blockchain.relayfee': self.relayfee,
             'blockchain.scripthash.get_balance': self.scripthash_get_balance,
-            'blockchain.scripthash.get_asset_balance': self.scripthash_get_asset_balance,
             'blockchain.scripthash.get_history': self.scripthash_get_history,
             'blockchain.scripthash.get_mempool': self.scripthash_get_mempool,
             'blockchain.scripthash.listunspent': self.scripthash_listunspent,
-            'blockchain.scripthash.listassets': self.scripthash_listassets,
             'blockchain.scripthash.subscribe': self.scripthash_subscribe,
             'blockchain.transaction.broadcast': self.transaction_broadcast,
             'blockchain.transaction.get': self.transaction_get,
             'blockchain.transaction.get_merkle': self.transaction_merkle,
             'blockchain.transaction.id_from_pos': self.transaction_id_from_pos,
-            'blockchain.asset.get_meta': self.asset_get_meta,
-            'blockchain.asset.subscribe': self.asset_subscribe,
             'mempool.get_fee_histogram': self.compact_fee_histogram,
             'server.add_peer': self.add_peer,
             'server.banner': self.banner,
@@ -1511,6 +1514,13 @@ class ElectrumX(SessionBase):
 
         if ptuple >= (1, 4, 2):
             handlers['blockchain.scripthash.unsubscribe'] = self.scripthash_unsubscribe
+
+        if ptuple >= (1, 8):
+            handlers['blockchain.scripthash.get_asset_balance'] = self.scripthash_get_asset_balance
+            handlers['blockchain.scripthash.listassets'] = self.scripthash_listassets
+            handlers['blockchain.asset.get_meta'] = self.asset_get_meta
+            handlers['blockchain.asset.subscribe'] = self.asset_subscribe
+            handlers['blockchain.asset.unsubscribe'] = self.asset_unsubscribe
 
         self.request_handlers = handlers
 

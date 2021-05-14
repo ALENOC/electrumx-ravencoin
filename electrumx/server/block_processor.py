@@ -498,7 +498,7 @@ class BlockProcessor:
                 # GOD DAMN HASHES
                 # First find the type!
                 end_point = 23 \
-                    if txout.pk_script[0] == 0xa9 and \
+                    if len(txout.pk_script) > 22 and txout.pk_script[0] == 0xa9 and \
                         txout.pk_script[1] == 0x14 and txout.pk_script[22] == 0x87 \
                     else 25
 
