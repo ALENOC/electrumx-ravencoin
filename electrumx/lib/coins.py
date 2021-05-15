@@ -225,7 +225,7 @@ class Ravencoin(Coin):
     GENESIS_HASH = ('0000006b444bc2f2ffe627be9d9e7e7a'
                     '0730000870ef6eb6da46c8eae389df90')
     DESERIALIZER = lib_tx.DeserializerSegWit
-    DEFAULT_MAX_SEND = 10_000_000
+    DEFAULT_MAX_SEND = 2_000_000
     X16RV2_ACTIVATION_TIME = 1569945600   # algo switch to x16rv2 at this timestamp
     KAWPOW_ACTIVATION_TIME = 1588788000  # kawpow algo activation time
     KAWPOW_ACTIVATION_HEIGHT = 1219736
@@ -236,8 +236,8 @@ class Ravencoin(Coin):
     RPC_PORT = 8766
     REORG_LIMIT = 100
     PEERS = [
-        'rvn4lyfe.com s50002',
-        # 'electrum3.rvn.rocks s50002',
+        # 'rvn4lyfe.com s50002',
+        'electrum3.rvn.rocks s50002',
     ]
 
     @classmethod
