@@ -101,6 +101,12 @@ class PeerManager:
         reported the given list of known peers, return the clearnet
         identity features to register, otherwise None.
         '''
+
+        print('PEER:')
+        print(peer)
+        print('REMOTE PEERS:')
+        print(remote_peers)
+
         # Announce ourself if not present.  Don't if disabled, we
         # are a non-public IP address, or to ourselves.
         if not self.env.peer_announce or peer in self.myselves:
@@ -350,6 +356,10 @@ class PeerManager:
         await self._note_peers(peers)
 
         features = self._features_to_register(peer, peers)
+
+        print('FEATURES:')
+        print(features)
+
         if features:
             self.logger.info(f'registering ourself with {peer}')
             # We only care to wait for the response
