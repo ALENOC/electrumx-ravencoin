@@ -237,6 +237,7 @@ class Ravencoin(Coin):
     REORG_LIMIT = 100
     PEERS = [
         'rvn4lyfe.com s50002',
+        # 'electrum3.rvn.rocks s50002',
     ]
 
     @classmethod
