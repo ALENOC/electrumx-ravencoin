@@ -130,6 +130,8 @@ class PeerManager:
     async def _import_peers(self):
         '''Import hard-coded peers from a file or the coin defaults.'''
         imported_peers = self.myselves.copy()
+        print('IMPORTED PEERS:')
+        print(imported_peers)
         # Add the hard-coded ones unless only reporting ourself
         if self.env.peer_discovery != self.env.PD_SELF:
             imported_peers.extend(Peer.from_real_name(real_name, 'coins.py')
