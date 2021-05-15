@@ -102,11 +102,6 @@ class PeerManager:
         identity features to register, otherwise None.
         '''
 
-        print('PEER:')
-        print(peer)
-        print('REMOTE PEERS:')
-        print(remote_peers)
-
         # Announce ourself if not present.  Don't if disabled, we
         # are a non-public IP address, or to ourselves.
         if not self.env.peer_announce or peer in self.myselves:
@@ -130,8 +125,6 @@ class PeerManager:
     async def _import_peers(self):
         '''Import hard-coded peers from a file or the coin defaults.'''
         imported_peers = self.myselves.copy()
-        print('IMPORTED PEERS:')
-        print(imported_peers)
         # Add the hard-coded ones unless only reporting ourself
         if self.env.peer_discovery != self.env.PD_SELF:
             imported_peers.extend(Peer.from_real_name(real_name, 'coins.py')
@@ -358,9 +351,6 @@ class PeerManager:
         await self._note_peers(peers)
 
         features = self._features_to_register(peer, peers)
-
-        print('FEATURES:')
-        print(features)
 
         if features:
             self.logger.info(f'registering ourself with {peer}')
