@@ -947,6 +947,7 @@ class BlockProcessor:
             self.logger.info('flushed cleanly')
         except Exception:
             logging.exception('Critical Block Processor Error:')
+            raise
 
     def force_chain_reorg(self, count):
         '''Force a reorg of the given number of blocks.
