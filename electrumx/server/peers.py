@@ -7,6 +7,7 @@
 
 '''Peer management.'''
 
+import logging
 import asyncio
 from ipaddress import IPv4Address, IPv6Address
 import random
@@ -150,15 +151,19 @@ class PeerManager:
         else:
             ports = [self.env.tor_proxy_port]
         while True:
-            self.logger.info(f'trying to detect proxy on "{host}" '
-                             f'ports {ports}')
-            proxy = await SOCKSProxy.auto_detect_at_host(host, ports, None)
-            if proxy:
-                self.proxy = proxy
-                self.logger.info(f'detected {proxy}')
-                return
-            self.logger.info('no proxy detected, will try later')
-            await sleep(900)
+            try:
+                self.logger.info(f'trying to detect proxy on "{host}" '
+                                 f'ports {ports}')
+                proxy = await SOCKSProxy.auto_detect_at_host(host, ports, None)
+                if proxy:
+                    self.proxy = proxy
+                    self.logger.info(f'detected {proxy}')
+                    return
+                self.logger.info('no proxy detected, will try later')
+                await sleep(900)
+            except:
+                logging.exception('Detect Proxy:')
+                raise
 
     async def _note_peers(self, peers, limit=2, check_ports=False, source=None):
         '''Add a limited number of peers that are not already present.'''

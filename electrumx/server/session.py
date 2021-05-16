@@ -7,6 +7,7 @@
 
 '''Classes for local RPC server and remote client TCP/SSL servers.'''
 
+import logging
 import codecs
 import itertools
 import json
@@ -209,32 +210,40 @@ class SessionManager:
         max_sessions = self.env.max_sessions
         low_watermark = max_sessions * 19 // 20
         while True:
-            await self.session_event.wait()
-            self.session_event.clear()
-            if not paused and len(self.sessions) >= max_sessions:
-                self.logger.info(f'maximum sessions {max_sessions:,d} '
-                                 f'reached, stopping new connections until '
-                                 f'count drops to {low_watermark:,d}')
-                await self._stop_servers(service for service in self.servers
-                                         if service.protocol != 'rpc')
-                paused = True
-            # Start listening for incoming connections if paused and
-            # session count has fallen
-            if paused and len(self.sessions) <= low_watermark:
-                self.logger.info('resuming listening for incoming connections')
-                await self._start_external_servers()
-                paused = False
+            try:
+                await self.session_event.wait()
+                self.session_event.clear()
+                if not paused and len(self.sessions) >= max_sessions:
+                    self.logger.info(f'maximum sessions {max_sessions:,d} '
+                                     f'reached, stopping new connections until '
+                                     f'count drops to {low_watermark:,d}')
+                    await self._stop_servers(service for service in self.servers
+                                             if service.protocol != 'rpc')
+                    paused = True
+                # Start listening for incoming connections if paused and
+                # session count has fallen
+                if paused and len(self.sessions) <= low_watermark:
+                    self.logger.info('resuming listening for incoming connections')
+                    await self._start_external_servers()
+                    paused = False
+            except:
+                logging.exception('Server Manager:')
+                raise
 
     async def _log_sessions(self):
         '''Periodically log sessions.'''
         log_interval = self.env.log_sessions
         if log_interval:
             while True:
-                await sleep(log_interval)
-                data = self._session_data(for_log=True)
-                for line in sessions_lines(data):
-                    self.logger.info(line)
-                self.logger.info(json.dumps(self._get_info()))
+                try:
+                    await sleep(log_interval)
+                    data = self._session_data(for_log=True)
+                    for line in sessions_lines(data):
+                        self.logger.info(line)
+                    self.logger.info(json.dumps(self._get_info()))
+                except:
+                    logging.exception('Logger')
+                    raise
 
     async def _disconnect_sessions(self, sessions, reason, *, force_after=1.0):
         if sessions:
@@ -246,47 +255,59 @@ class SessionManager:
     async def _clear_stale_sessions(self):
         '''Cut off sessions that haven't done anything for 10 minutes.'''
         while True:
-            await sleep(60)
-            stale_cutoff = time.time() - self.env.session_timeout
-            stale_sessions = [session for session in self.sessions
-                              if session.last_recv < stale_cutoff]
-            await self._disconnect_sessions(stale_sessions, 'closing stale')
-            del stale_sessions
+            try:
+                await sleep(60)
+                stale_cutoff = time.time() - self.env.session_timeout
+                stale_sessions = [session for session in self.sessions
+                                  if session.last_recv < stale_cutoff]
+                await self._disconnect_sessions(stale_sessions, 'closing stale')
+                del stale_sessions
+            except:
+                logging.exception('Clear Stale Sessions')
+                raise
 
     async def _handle_chain_reorgs(self):
         '''Clear caches on chain reorgs.'''
         while True:
-            await self.bp.backed_up_event.wait()
-            self.logger.info('reorg signalled; clearing tx_hashes and merkle caches')
-            self._reorg_count += 1
-            self._tx_hashes_cache.clear()
-            self._merkle_cache.clear()
+            try:
+                await self.bp.backed_up_event.wait()
+                self.logger.info('reorg signalled; clearing tx_hashes and merkle caches')
+                self._reorg_count += 1
+                self._tx_hashes_cache.clear()
+                self._merkle_cache.clear()
+            except:
+                logging.exception('Chain reorg')
+                raise
 
     async def _recalc_concurrency(self):
         '''Periodically recalculate session concurrency.'''
         session_class = self.env.coin.SESSIONCLS
         period = 300
         while True:
-            await sleep(period)
-            hard_limit = session_class.cost_hard_limit
+            try:
+                await sleep(period)
+                hard_limit = session_class.cost_hard_limit
 
-            # Reduce retained group cost
-            refund = period * hard_limit / 5000
-            dead_groups = []
-            for group in self.session_groups.values():
-                group.retained_cost = max(0.0, group.retained_cost - refund)
-                if group.retained_cost == 0 and not group.sessions:
-                    dead_groups.append(group)
-            # Remove dead groups
-            for group in dead_groups:
-                self.session_groups.pop(group.name)
+                # Reduce retained group cost
+                refund = period * hard_limit / 5000
+                dead_groups = []
+                for group in self.session_groups.values():
+                    group.retained_cost = max(0.0, group.retained_cost - refund)
+                    if group.retained_cost == 0 and not group.sessions:
+                        dead_groups.append(group)
+                # Remove dead groups
+                for group in dead_groups:
+                    self.session_groups.pop(group.name)
 
-            # Recalc concurrency for sessions where cost is changing gradually, and update
-            # cost_decay_per_sec.
-            for session in self.sessions:
-                # Subs have an on-going cost so decay more slowly with more subs
-                session.cost_decay_per_sec = hard_limit / (10000 + 5 * session.sub_count())
-                session.recalc_concurrency()
+                # Recalc concurrency for sessions where cost is changing gradually, and update
+                # cost_decay_per_sec.
+                for session in self.sessions:
+                    # Subs have an on-going cost so decay more slowly with more subs
+                    session.cost_decay_per_sec = hard_limit / (10000 + 5 * session.sub_count())
+                    session.recalc_concurrency()
+            except:
+                logging.error('Session concurrency')
+                raise
 
     def _get_info(self):
         '''A summary of server state.'''
