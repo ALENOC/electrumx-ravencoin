@@ -472,6 +472,8 @@ class BlockProcessor:
         to_le_uint32 = pack_le_uint32
         to_le_uint64 = pack_le_uint64
 
+        raise Exception()
+
         for tx, tx_hash in txs:
             hashXs = []
             append_hashX = hashXs.append
@@ -938,13 +940,15 @@ class BlockProcessor:
                 await group.spawn(self.prefetcher.main_loop(self.height))
                 await group.spawn(self._process_blocks())
 
-            raise group.exception
+            group.result()
         # Don't flush for arbitrary exceptions as they might be a cause or consequence of
         # corrupted data
         except CancelledError:
             self.logger.info('flushing to DB for a clean shutdown...')
             await self.run_with_lock(self.flush(True))
             self.logger.info('flushed cleanly')
+        except Exception:
+            logging.exception('Critical Block Processor Error:')
 
     def force_chain_reorg(self, count):
         '''Force a reorg of the given number of blocks.

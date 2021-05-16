@@ -331,6 +331,7 @@ class MemPool(object):
         async with TaskGroup() as group:
             await group.spawn(self._refresh_hashes(synchronized_event))
             await group.spawn(self._logging(synchronized_event))
+        group.result()
 
     async def asset_balance_delta(self, hashX):
         ret = {}
