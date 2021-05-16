@@ -621,7 +621,7 @@ class SessionManager:
                 await group.spawn(self._recalc_concurrency())
                 await group.spawn(self._log_sessions())
                 await group.spawn(self._manage_servers())
-            group.result()  # pylint:disable=W0104
+            group.result  # pylint:disable=W0104
         except CancelledError:
             pass
         except Exception:
