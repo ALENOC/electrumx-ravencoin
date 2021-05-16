@@ -472,8 +472,6 @@ class BlockProcessor:
         to_le_uint32 = pack_le_uint32
         to_le_uint64 = pack_le_uint64
 
-        raise Exception()
-
         for tx, tx_hash in txs:
             hashXs = []
             append_hashX = hashXs.append
