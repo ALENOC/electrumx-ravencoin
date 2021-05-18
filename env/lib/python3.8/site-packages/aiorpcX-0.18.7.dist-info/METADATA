@@ -1,0 +1,25 @@
+Metadata-Version: 2.1
+Name: aiorpcX
+Version: 0.18.7
+Summary: Generic async RPC implementation, including JSON-RPC
+Home-page: https://github.com/kyuupichan/aiorpcX
+Author: Neil Booth
+Author-email: kyuupichan@gmail.com
+License: MIT Licence
+Download-URL: https://github.com/kyuupichan/aiorpcX/archive/0.18.7.tar.gz
+Platform: UNKNOWN
+Classifier: Development Status :: 4 - Beta
+Classifier: Framework :: AsyncIO
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3.6
+Classifier: Topic :: Internet
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Requires-Python: >=3.6
+Provides-Extra: ws
+Requires-Dist: websockets ; extra == 'ws'
+
+Transport, protocol and framing-independent async RPC client and server implementation.  
+
+

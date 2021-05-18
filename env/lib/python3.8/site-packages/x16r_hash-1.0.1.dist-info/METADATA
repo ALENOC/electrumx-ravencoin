@@ -1,0 +1,20 @@
+Metadata-Version: 2.1
+Name: x16r-hash
+Version: 1.0.1
+Summary: Bindings for proof of work used by X16R
+Home-page: https://github.com/brian112358/x16r_hash
+Author: Brian Lee
+Author-email: brian112358@gmail.com
+Maintainer: Ravencoin community
+License: MIT
+Keywords: ravencoin,rvn
+Platform: UNKNOWN
+Description-Content-Type: text/markdown
+
+# x16r_hash
+Python module for the x16r hash function
+
+## Installation
+
+pip install x16r_hash
+

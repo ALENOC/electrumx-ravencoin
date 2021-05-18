@@ -1,0 +1,20 @@
+Metadata-Version: 2.1
+Name: x16rv2-hash
+Version: 1.0
+Summary: Bindings for proof of work used by X16Rv2
+Home-page: https://github.com/traysi/x16rv2_hash
+Author: Traysi Hylian
+Maintainer: Ravencoin community
+License: MIT
+Keywords: ravencoin,rvn,hashing,x16rv2
+Platform: UNKNOWN
+Description-Content-Type: text/markdown
+
+# x16rv2_hash
+Python module for the x16rv2 hash function
+
+## Installation
+
+pip install x16rv2_hash
+
+

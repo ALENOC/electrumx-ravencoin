@@ -422,11 +422,11 @@ You can then set the port as follows and advertise the service externally on the
     REPORT_SSL_PORT=110
 
 
-.. _`contrib/systemd/electrumx.service`: https://github.com/kyuupichan/electrumx/blob/master/contrib/systemd/electrumx.service
+.. _`contrib/systemd/electrumx.service`: https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/blob/master/contrib/systemd/electrumx.service
 .. _`daemontools`: http://cr.yp.to/daemontools.html
 .. _`runit`: http://smarden.org/runit/index.html
 .. _`aiohttp`: https://pypi.python.org/pypi/aiohttp
 .. _`pylru`: https://pypi.python.org/pypi/pylru
 .. _`x11_hash`: https://pypi.python.org/pypi/x11_hash
-.. _`contrib/raspberrypi3/install_electrumx.sh`: https://github.com/kyuupichan/electrumx/blob/master/contrib/raspberrypi3/install_electrumx.sh
-.. _`contrib/raspberrypi3/run_electrumx.sh`: https://github.com/kyuupichan/electrumx/blob/master/contrib/raspberrypi3/run_electrumx.sh
+.. _`contrib/raspberrypi3/install_electrumx.sh`: https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/blob/master/contrib/raspberrypi3/install_electrumx.sh
+.. _`contrib/raspberrypi3/run_electrumx.sh`: https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/blob/master/contrib/raspberrypi3/run_electrumx.sh
