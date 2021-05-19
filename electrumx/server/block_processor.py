@@ -939,6 +939,7 @@ class BlockProcessor:
                 await group.spawn(self._process_blocks())
 
             group.result
+
         # Don't flush for arbitrary exceptions as they might be a cause or consequence of
         # corrupted data
         except CancelledError:
