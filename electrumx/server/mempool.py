@@ -353,6 +353,8 @@ class MemPool(object):
 
         return ret
 
+        group.result    # pylint:disable=W0104
+
     async def balance_delta(self, hashX):
         '''Return the unconfirmed amount in the mempool for hashX.
 

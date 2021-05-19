@@ -145,3 +145,4 @@ class Controller(ServerBase):
                 await group.spawn(wait_for_catchup())
 
             group.result
+
