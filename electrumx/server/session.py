@@ -23,7 +23,8 @@ from asyncio import CancelledError
 import attr
 from aiorpcx import (
     RPCSession, JSONRPCAutoDetect, JSONRPCConnection, serve_rs, serve_ws, NewlineFramer,
-    TaskGroup, handler_invocation, RPCError, Request, sleep, Event, ReplyAndDisconnect
+    TaskGroup, handler_invocation, RPCError, Request, sleep, Event, ReplyAndDisconnect,
+    NoRemainingTasksError
 )
 import pylru
 
@@ -621,6 +622,16 @@ class SessionManager:
                 await group.spawn(self._recalc_concurrency())
                 await group.spawn(self._log_sessions())
                 await group.spawn(self._manage_servers())
+
+            counter = 0
+            while True:
+                counter += 1
+                try:
+                    group.next_result()
+                except NoRemainingTasksError:
+                    break
+                except:
+                    logging.exception("Coro #" + counter)
 
             group.result  # pylint:disable=W0104
         except CancelledError:
