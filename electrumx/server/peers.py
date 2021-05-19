@@ -207,23 +207,19 @@ class PeerManager:
     async def _monitor_peer(self, peer):
         # Stop monitoring if we were dropped (a duplicate peer)
         while peer in self.peers:
-            try:
-                if await self._should_drop_peer(peer):
-                    self.peers.discard(peer)
-                    break
-                # Figure out how long to sleep before retrying.  Retry a
-                # good connection when it is about to turn stale, otherwise
-                # exponentially back off retries.
-                if peer.try_count == 0:
-                    pause = STALE_SECS - WAKEUP_SECS * 2
-                else:
-                    pause = WAKEUP_SECS * 2 ** peer.try_count
-                async with ignore_after(pause):
-                    await peer.retry_event.wait()
-                    peer.retry_event.clear()
-            except:
-                logging.exception("Monitor peer error:")
-                raise
+            if await self._should_drop_peer(peer):
+                self.peers.discard(peer)
+                break
+            # Figure out how long to sleep before retrying.  Retry a
+            # good connection when it is about to turn stale, otherwise
+            # exponentially back off retries.
+            if peer.try_count == 0:
+                pause = STALE_SECS - WAKEUP_SECS * 2
+            else:
+                pause = WAKEUP_SECS * 2 ** peer.try_count
+            async with ignore_after(pause):
+                await peer.retry_event.wait()
+                peer.retry_event.clear()
 
     async def _should_drop_peer(self, peer):
         peer.try_count += 1

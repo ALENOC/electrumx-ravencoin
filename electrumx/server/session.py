@@ -623,7 +623,8 @@ class SessionManager:
                 await group.spawn(self._manage_servers())
             group.result  # pylint:disable=W0104
         except CancelledError:
-            pass
+            # Stop the server if sessions are cancelled for whatever reason
+            raise
         except Exception:
             logging.exception('Critical Sessions Error:')
         finally:
