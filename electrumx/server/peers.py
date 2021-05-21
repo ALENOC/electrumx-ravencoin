@@ -18,7 +18,7 @@ from collections import defaultdict, Counter
 
 from aiorpcx import (connect_rs, RPCSession, SOCKSProxy, Notification, handler_invocation,
                      SOCKSError, TaskTimeout, TaskGroup, Event,
-                     sleep, ignore_after, RPCError, ProtocolError)
+                     sleep, ignore_after, RPCError, ProtocolError, NoRemainingTasksError)
 
 from electrumx.lib.peer import Peer
 from electrumx.lib.util import class_logger
@@ -436,6 +436,16 @@ class PeerManager:
         async with self.group as group:
             await group.spawn(self._detect_proxy())
             await group.spawn(self._import_peers())
+
+        counter = 0
+        while True:
+            counter += 1
+            try:
+                group.next_result()
+            except NoRemainingTasksError:
+                break
+            except:
+                logging.exception("Coro #" + counter)
 
         group.result
 
