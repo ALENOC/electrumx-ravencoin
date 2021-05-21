@@ -947,15 +947,14 @@ class DB(object):
             div_amt = b[0]
             reissuable = b[1]
             has_ipfs = b[2]
-            if has_ipfs:
-                ipfs_data = b[3:]
             to_ret = {
                 'divisions': div_amt,
                 'reissuable': reissuable,
                 'has_ipfs': has_ipfs
             }
-            if has_ipfs:
-                to_ret['ipfs'] = base_encode(ipfs_data,58)
+            if has_ipfs != 0:
+                ipfs_data = b[3:]
+                to_ret['ipfs'] = base_encode(ipfs_data, 58)
             return to_ret
         return await run_in_thread(read_assets_meta)
 
