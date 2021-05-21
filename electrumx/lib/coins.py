@@ -298,5 +298,5 @@ class RavencoinTestnet(Ravencoin):
     PEER_DEFAULT_PORTS = {'t': '50003', 's': '50004'}
     REORG_LIMIT = 100
     PEERS = [
-        "168.119.100.140 s50002",
+        "testnet.rvn.rocks s50002",
     ]
