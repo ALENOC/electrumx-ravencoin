@@ -1077,13 +1077,12 @@ class ElectrumX(SessionBase):
         self.bump_cost(0.1 + len(asset_data) * 0.00002)
 
         if asset_data:
-
             div_amt = asset_data['divisions']
-            reissuable = ['reissuable']
-            has_ipfs = ['has_ipfs']
+            reissuable = False if ['reissuable'] == 0 else True
+            has_ipfs = False if ['has_ipfs'] == 0 else True
 
             h = ''.join([str(div_amt), str(reissuable), str(has_ipfs)])
-            if 'ipfs' in asset_data:
+            if has_ipfs:
                 h += asset_data['ipfs']
 
             status = sha256(h.encode('ascii')).hex()
@@ -1496,9 +1495,9 @@ class ElectrumX(SessionBase):
             return hash_to_hex_str(tx_hash)
 
     async def asset_get_meta(self, name):
-        if len(name) > 31:
+        if len(name) > 32:
             raise RPCError(
-                BAD_REQUEST, f'asset name greater than 31 characters'
+                BAD_REQUEST, f'asset name greater than 32 characters'
             ) from None
         self.bump_cost(1.0)
         return await self.db.lookup_asset_meta(name.encode('ascii'))
