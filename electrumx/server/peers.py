@@ -348,6 +348,16 @@ class PeerManager:
             peers_task = await g.spawn(self._send_peers_subscribe
                                        (session, peer))
 
+        counter = 0
+        while True:
+            counter += 1
+            try:
+                g.next_result()
+            except NoRemainingTasksError:
+                break
+            except:
+                logging.exception("Coro #" + str(counter))
+
         # Propagate failed task exception
         g.result    # pylint:disable=W0104
 
@@ -445,7 +455,7 @@ class PeerManager:
             except NoRemainingTasksError:
                 break
             except:
-                logging.exception("Coro #" + counter)
+                logging.exception("Coro #" + str(counter))
 
         group.result
 

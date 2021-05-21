@@ -4,10 +4,10 @@
 #
 # See the file "LICENCE" for information about the copyright
 # and warranty status of this software.
-
+import logging
 from asyncio import Event
 
-from aiorpcx import _version as aiorpcx_version, TaskGroup
+from aiorpcx import _version as aiorpcx_version, TaskGroup, NoRemainingTasksError
 
 import electrumx
 from electrumx.lib.server_base import ServerBase
@@ -144,5 +144,14 @@ class Controller(ServerBase):
                 await group.spawn(bp.fetch_and_process_blocks(caught_up_event))
                 await group.spawn(wait_for_catchup())
 
-            group.result
+            counter = 0
+            while True:
+                counter += 1
+                try:
+                    group.next_result()
+                except NoRemainingTasksError:
+                    break
+                except:
+                    logging.exception("Coro #" + str(counter))
 
+            group.result

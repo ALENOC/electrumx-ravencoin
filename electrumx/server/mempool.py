@@ -8,12 +8,13 @@
 '''Mempool handling.'''
 
 import itertools
+import logging
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict
 
 import attr
-from aiorpcx import TaskGroup, run_in_thread, sleep
+from aiorpcx import TaskGroup, run_in_thread, sleep, NoRemainingTasksError
 
 from electrumx.lib.hash import hash_to_hex_str, hex_str_to_hash
 from electrumx.lib.util import class_logger, chunks
@@ -331,6 +332,17 @@ class MemPool(object):
         async with TaskGroup() as group:
             await group.spawn(self._refresh_hashes(synchronized_event))
             await group.spawn(self._logging(synchronized_event))
+
+        counter = 0
+        while True:
+            counter += 1
+            try:
+                group.next_result()
+            except NoRemainingTasksError:
+                break
+            except:
+                logging.exception("Coro #" + str(counter))
+
         group.result
 
     async def asset_balance_delta(self, hashX):
@@ -352,8 +364,6 @@ class MemPool(object):
                             ret[name] += v
 
         return ret
-
-        group.result    # pylint:disable=W0104
 
     async def balance_delta(self, hashX):
         '''Return the unconfirmed amount in the mempool for hashX.

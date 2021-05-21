@@ -14,7 +14,7 @@ import asyncio
 import time
 from asyncio import sleep
 
-from aiorpcx import TaskGroup, CancelledError
+from aiorpcx import TaskGroup, CancelledError, NoRemainingTasksError
 
 import electrumx
 from electrumx.server.daemon import DaemonError
@@ -937,6 +937,16 @@ class BlockProcessor:
             async with TaskGroup() as group:
                 await group.spawn(self.prefetcher.main_loop(self.height))
                 await group.spawn(self._process_blocks())
+
+            counter = 0
+            while True:
+                counter += 1
+                try:
+                    group.next_result()
+                except NoRemainingTasksError:
+                    break
+                except:
+                    logging.exception("Coro #" + str(counter))
 
             group.result
 
