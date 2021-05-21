@@ -938,17 +938,19 @@ class BlockProcessor:
                 await group.spawn(self.prefetcher.main_loop(self.height))
                 await group.spawn(self._process_blocks())
 
-            counter = 0
-            while True:
-                counter += 1
-                try:
-                    group.next_result()
-                except NoRemainingTasksError:
-                    break
-                except:
-                    logging.exception("Coro #" + str(counter))
-
-            group.result
+            try:
+                group.result
+            except:
+                counter = 0
+                while True:
+                    counter += 1
+                    try:
+                        group.next_result()
+                    except NoRemainingTasksError:
+                        break
+                    except:
+                        logging.exception("Coro #" + str(counter))
+                raise
 
         # Don't flush for arbitrary exceptions as they might be a cause or consequence of
         # corrupted data

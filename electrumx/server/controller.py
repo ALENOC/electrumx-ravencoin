@@ -144,14 +144,16 @@ class Controller(ServerBase):
                 await group.spawn(bp.fetch_and_process_blocks(caught_up_event))
                 await group.spawn(wait_for_catchup())
 
-            counter = 0
-            while True:
-                counter += 1
-                try:
-                    group.next_result()
-                except NoRemainingTasksError:
-                    break
-                except:
-                    logging.exception("Coro #" + str(counter))
-
-            group.result
+            try:
+                group.result
+            except:
+                counter = 0
+                while True:
+                    counter += 1
+                    try:
+                        group.next_result()
+                    except NoRemainingTasksError:
+                        break
+                    except:
+                        logging.exception("Coro #" + str(counter))
+                raise

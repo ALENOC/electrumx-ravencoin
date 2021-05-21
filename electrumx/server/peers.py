@@ -348,18 +348,19 @@ class PeerManager:
             peers_task = await g.spawn(self._send_peers_subscribe
                                        (session, peer))
 
-        counter = 0
-        while True:
-            counter += 1
-            try:
-                g.next_result()
-            except NoRemainingTasksError:
-                break
-            except:
-                logging.exception("Coro #" + str(counter))
-
-        # Propagate failed task exception
-        g.result    # pylint:disable=W0104
+        try:
+            g.result
+        except:
+            counter = 0
+            while True:
+                counter += 1
+                try:
+                    g.next_result()
+                except NoRemainingTasksError:
+                    break
+                except:
+                    logging.exception("Coro #" + str(counter))
+            raise
 
         # Process reported peers if remote peer is good
         peers = peers_task.result()
@@ -447,17 +448,19 @@ class PeerManager:
             await group.spawn(self._detect_proxy())
             await group.spawn(self._import_peers())
 
-        counter = 0
-        while True:
-            counter += 1
-            try:
-                group.next_result()
-            except NoRemainingTasksError:
-                break
-            except:
-                logging.exception("Coro #" + str(counter))
-
-        group.result
+        try:
+            group.result
+        except:
+            counter = 0
+            while True:
+                counter += 1
+                try:
+                    group.next_result()
+                except NoRemainingTasksError:
+                    break
+                except:
+                    logging.exception("Coro #" + str(counter))
+            raise
 
     def info(self):
         '''The number of peers.'''

@@ -622,17 +622,20 @@ class SessionManager:
                 await group.spawn(self._log_sessions())
                 await group.spawn(self._manage_servers())
 
-            counter = 0
-            while True:
-                counter += 1
-                try:
-                    group.next_result()
-                except NoRemainingTasksError:
-                    break
-                except:
-                    logging.exception("Coro #" + str(counter))
+            try:
+                group.result
+            except:
+                counter = 0
+                while True:
+                    counter += 1
+                    try:
+                        group.next_result()
+                    except NoRemainingTasksError:
+                        break
+                    except:
+                        logging.exception("Coro #" + str(counter))
+                raise
 
-            group.result  # pylint:disable=W0104
         except CancelledError:
             # Stop the server if sessions are cancelled for whatever reason
             raise
