@@ -171,11 +171,11 @@ Subscribe to an asset.
 
 **Result**
 
-  The :ref:`status <status>` of the asset.
+  The :ref:`status <asset_status>` of the asset.
 
 **Notifications**
 
-  The client will receive a notification when the :ref:`status <status>` of the asset
+  The client will receive a notification when the :ref:`status <asset_status>` of the asset
   changes.  Its signature is
 
     .. function:: blockchain.asset.subscribe(asset, status)

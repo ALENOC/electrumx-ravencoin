@@ -164,6 +164,35 @@ inputs are confirmed.
 full string expressed as a hexadecimal string, or :const:`null` if the
 string is empty because there are no transactions.
 
+.. _asset_status:
+
+Asset Status
+------------
+
+To calculate the `status` of an asset:
+
+1. Convert the number of divisions into a string (e.g. 1 -> "1")
+
+2. Convert the reissuability of an asset into a string. The boolean
+types match as follows: true -> "True", false -> "False" (The default
+python implementation)
+
+3. Convert the boolean value of whether an asset has associated ipfs
+data into string form.
+
+4. Concatenate these strings (e.g. "0FalseTrue")
+
+5. If an asset has an associated ipfs hash, append this as-is.
+(e.g. "0FalseTrueQmeGgd16sWq6TNfXy8xzwQWRhv1vZUjP1LBxVnfaHaoV25")
+otherwise, do nothing.
+(e.g. "0FalseFalse")
+
+6. Convert this string into a byte array of respective ascii values.
+
+7. The `status` of the asset is the :func:`sha256` hash of this byte array
+expressed as a hexadecimal string, or :const:`null` if the
+asset does not exist.
+
 
 Block Headers
 -------------
