@@ -352,12 +352,10 @@ class PeerManager:
             g.result
         except:
             counter = 0
-            while True:
+            async for task in g:
                 counter += 1
                 try:
-                    g.next_result()
-                except NoRemainingTasksError:
-                    break
+                    task.result()
                 except:
                     logging.exception("Coro #" + str(counter))
             raise
@@ -452,12 +450,10 @@ class PeerManager:
             group.result
         except:
             counter = 0
-            while True:
+            async for task in group:
                 counter += 1
                 try:
-                    group.next_result()
-                except NoRemainingTasksError:
-                    break
+                    task.result()
                 except:
                     logging.exception("Coro #" + str(counter))
             raise

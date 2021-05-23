@@ -626,12 +626,10 @@ class SessionManager:
                 group.result
             except:
                 counter = 0
-                while True:
+                async for task in group:
                     counter += 1
                     try:
-                        group.next_result()
-                    except NoRemainingTasksError:
-                        break
+                        task.result()
                     except:
                         logging.exception("Coro #" + str(counter))
                 raise
