@@ -347,6 +347,9 @@ class PeerManager:
             await g.spawn(self._send_server_features(session, peer))
             peers_task = await g.spawn(self._send_peers_subscribe
                                        (session, peer))
+            async for task in g:
+                if not task.cancelled():
+                    task.result()
 
         # Process reported peers if remote peer is good
         peers = peers_task.result()

@@ -333,17 +333,9 @@ class MemPool(object):
             await group.spawn(self._refresh_hashes(synchronized_event))
             await group.spawn(self._logging(synchronized_event))
 
-        try:
-            group.result
-        except:
-            counter = 0
             async for task in group:
-                counter += 1
-                try:
-                    print(task.result())
-                except:
-                    logging.exception("Coro #" + str(counter))
-            raise
+                if not task.cancelled():
+                    task.result()
 
     async def asset_balance_delta(self, hashX):
         ret = {}
