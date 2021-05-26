@@ -629,7 +629,7 @@ class SessionManager:
                 async for task in group:
                     counter += 1
                     try:
-                        await task.result()
+                        print(task.result())
                     except:
                         logging.exception("Coro #" + str(counter))
                 raise
