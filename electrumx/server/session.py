@@ -23,12 +23,8 @@ from asyncio import CancelledError
 import attr
 from aiorpcx import (
     RPCSession, JSONRPCAutoDetect, JSONRPCConnection, serve_rs, serve_ws, NewlineFramer,
-<<<<<<< HEAD
-    TaskGroup, handler_invocation, RPCError, Request, sleep, Event, ReplyAndDisconnect, NoRemainingTasksError
-=======
     TaskGroup, handler_invocation, RPCError, Request, sleep, Event, ReplyAndDisconnect,
     timeout_after
->>>>>>> 0e5402b3bc566d70620ad210cc928f9cac4325d8
 )
 import pylru
 
@@ -786,14 +782,9 @@ class SessionManager:
             for hashX in set(cache).intersection(touched):
                 del cache[hashX]
 
-<<<<<<< HEAD
-        for session in self.sessions:
-            await self._task_group.spawn(session.notify, touched, height_changed, assets)
-=======
         async with TaskGroup() as group:
             for session in self.sessions:
                 await group.spawn(session.notify, touched, height_changed)
->>>>>>> 0e5402b3bc566d70620ad210cc928f9cac4325d8
 
     def _ip_addr_group_name(self, session):
         host = session.remote_address().host
@@ -1005,12 +996,8 @@ class ElectrumX(SessionBase):
     async def notify(self, touched, height_changed, assets):
         '''Wrap _notify_inner; websockets raises exceptions for unclear reasons.'''
         try:
-<<<<<<< HEAD
-            await self._notify_inner(touched, height_changed, assets)
-=======
             async with timeout_after(30):
-                await self._notify_inner(touched, height_changed)
->>>>>>> 0e5402b3bc566d70620ad210cc928f9cac4325d8
+                await self._notify_inner(touched, height_changed, assets)
         except Exception:   # pylint:disable=W0703
             self.logger.exception('unexpected exception notifying client')
 
