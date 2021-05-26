@@ -144,14 +144,6 @@ class Controller(ServerBase):
                 await group.spawn(bp.fetch_and_process_blocks(caught_up_event))
                 await group.spawn(wait_for_catchup())
 
-            try:
-                group.result
-            except:
-                counter = 0
                 async for task in group:
-                    counter += 1
-                    try:
-                        print(task.result())
-                    except:
-                        logging.exception("Coro #" + str(counter))
-                raise
+                    if not task.cancelled():
+                        task.result()
