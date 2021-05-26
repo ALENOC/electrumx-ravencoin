@@ -151,19 +151,15 @@ class PeerManager:
         else:
             ports = [self.env.tor_proxy_port]
         while True:
-            try:
-                self.logger.info(f'trying to detect proxy on "{host}" '
-                                 f'ports {ports}')
-                proxy = await SOCKSProxy.auto_detect_at_host(host, ports, None)
-                if proxy:
-                    self.proxy = proxy
-                    self.logger.info(f'detected {proxy}')
-                    return
-                self.logger.info('no proxy detected, will try later')
-                await sleep(900)
-            except:
-                logging.exception('Detect Proxy:')
-                raise
+            self.logger.info(f'trying to detect proxy on "{host}" '
+                             f'ports {ports}')
+            proxy = await SOCKSProxy.auto_detect_at_host(host, ports, None)
+            if proxy:
+                self.proxy = proxy
+                self.logger.info(f'detected {proxy}')
+                return
+            self.logger.info('no proxy detected, will try later')
+            await sleep(900)
 
     async def _note_peers(self, peers, limit=2, check_ports=False, source=None):
         '''Add a limited number of peers that are not already present.'''
