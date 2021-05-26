@@ -151,7 +151,7 @@ class Controller(ServerBase):
                 async for task in group:
                     counter += 1
                     try:
-                        task.result()
+                        await task.result()
                     except:
                         logging.exception("Coro #" + str(counter))
                 raise

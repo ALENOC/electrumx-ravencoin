@@ -229,7 +229,7 @@ class MemPool(object):
             tx_map = {}
             utxo_map = {}
             async for task in group:
-                deferred, unspent = task.result()
+                deferred, unspent = await task.result()
                 tx_map.update(deferred)
                 utxo_map.update(unspent)
 
@@ -340,7 +340,7 @@ class MemPool(object):
             async for task in group:
                 counter += 1
                 try:
-                    task.result()
+                    await task.result()
                 except:
                     logging.exception("Coro #" + str(counter))
             raise

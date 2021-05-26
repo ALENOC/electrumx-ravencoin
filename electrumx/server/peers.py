@@ -348,18 +348,6 @@ class PeerManager:
             peers_task = await g.spawn(self._send_peers_subscribe
                                        (session, peer))
 
-        try:
-            g.result
-        except:
-            counter = 0
-            async for task in g:
-                counter += 1
-                try:
-                    task.result()
-                except:
-                    logging.exception("Coro #" + str(counter))
-            raise
-
         # Process reported peers if remote peer is good
         peers = peers_task.result()
         await self._note_peers(peers)
@@ -453,7 +441,7 @@ class PeerManager:
             async for task in group:
                 counter += 1
                 try:
-                    task.result()
+                    await task.result()
                 except:
                     logging.exception("Coro #" + str(counter))
             raise
