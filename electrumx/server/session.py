@@ -784,7 +784,7 @@ class SessionManager:
 
         async with TaskGroup() as group:
             for session in self.sessions:
-                await group.spawn(session.notify, touched, height_changed)
+                await group.spawn(session.notify, touched, height_changed, assets)
 
     def _ip_addr_group_name(self, session):
         host = session.remote_address().host
