@@ -1,8 +1,8 @@
 import os
+
 import pytest
 
 from electrumx.lib.merkle import Merkle, MerkleCache
-
 
 merkle = Merkle()
 hashes = [merkle.hash_func(bytes([x])) for x in range(8)]

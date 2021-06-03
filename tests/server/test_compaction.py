@@ -2,13 +2,13 @@
 
 import array
 import asyncio
-from os import environ, urandom
 import random
+from os import environ, urandom
 
 from electrumx.lib.hash import HASHX_LEN
 from electrumx.lib.util import pack_be_uint16, pack_le_uint64
-from electrumx.server.env import Env
 from electrumx.server.db import DB
+from electrumx.server.env import Env
 
 
 def create_histories(history, hashX_count=100):

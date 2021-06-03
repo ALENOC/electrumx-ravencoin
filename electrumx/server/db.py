@@ -27,8 +27,8 @@ from electrumx.lib.util import (
     formatted_time, pack_be_uint16, pack_be_uint32, pack_le_uint32,
     unpack_le_uint32, unpack_be_uint32, unpack_le_uint64, base_encode
 )
-from electrumx.server.storage import db_class
 from electrumx.server.history import History
+from electrumx.server.storage import db_class
 
 ASSET = namedtuple("ASSET", "tx_num tx_pos tx_hash height name value")
 UTXO = namedtuple("UTXO", "tx_num tx_pos tx_hash height value")

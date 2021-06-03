@@ -1,17 +1,15 @@
-import aiohttp
 import asyncio
 import json
 import logging
 
+import aiohttp
 import pytest
-
 from aiorpcx import (
     JSONRPCv1, JSONRPCLoose, RPCError, ignore_after,
-    Request, Batch,
-)
-from electrumx.lib.coins import Bitcoin, CoinError
-from electrumx.server.daemon import Daemon, DaemonError
+    Request, )
 
+from electrumx.lib.coins import Bitcoin, CoinError
+from electrumx.server.daemon import Daemon
 
 coin = Bitcoin
 

@@ -17,8 +17,8 @@ import sys
 from os import environ
 
 from aiorpcx import timeout_after, connect_rs
-import electrumx.lib.text as text
 
+import electrumx.lib.text as text
 
 simple_commands = {
     'getinfo': 'Print a summary of server state',

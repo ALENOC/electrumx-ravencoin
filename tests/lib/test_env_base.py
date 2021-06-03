@@ -6,7 +6,6 @@ import pytest
 
 from electrumx.lib.env_base import EnvBase
 
-
 os.environ.update({
     'int': '32',
     'intspace': ' 32 ',

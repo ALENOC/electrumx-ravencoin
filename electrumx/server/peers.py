@@ -7,18 +7,17 @@
 
 '''Peer management.'''
 
-import logging
 import asyncio
-from ipaddress import IPv4Address, IPv6Address
 import random
 import socket
 import ssl
 import time
 from collections import defaultdict, Counter
+from ipaddress import IPv4Address, IPv6Address
 
 from aiorpcx import (connect_rs, RPCSession, SOCKSProxy, Notification, handler_invocation,
                      SOCKSError, TaskTimeout, TaskGroup, Event,
-                     sleep, ignore_after, RPCError, ProtocolError, NoRemainingTasksError)
+                     sleep, ignore_after, RPCError, ProtocolError)
 
 from electrumx.lib.peer import Peer
 from electrumx.lib.util import class_logger
@@ -433,17 +432,7 @@ class PeerManager:
             await group.spawn(self._detect_proxy())
             await group.spawn(self._import_peers())
 
-        try:
-            group.result
-        except:
-            counter = 0
-            async for task in group:
-                counter += 1
-                try:
-                    print(task.result())
-                except:
-                    logging.exception("Coro #" + str(counter))
-            raise
+        group.result    # pylint:disable=W0104
 
     def info(self):
         '''The number of peers.'''

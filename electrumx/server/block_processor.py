@@ -8,24 +8,23 @@
 
 '''Block prefetcher and chain processor.'''
 
-import logging
-
 import asyncio
+import logging
 import time
 from asyncio import sleep
 
-from aiorpcx import TaskGroup, CancelledError, NoRemainingTasksError
+from aiorpcx import TaskGroup, CancelledError
 
 import electrumx
-from electrumx.server.daemon import DaemonError
+from electrumx.lib.addresses import public_key_to_address
+from electrumx.lib.assets import is_asset_script, TX_TRANSFER_ASSET, TX_REISSUE_ASSET
 from electrumx.lib.hash import hash_to_hex_str, HASHX_LEN
 from electrumx.lib.script import is_unspendable_legacy, is_unspendable_genesis
 from electrumx.lib.util import (
     class_logger, pack_le_uint32, pack_le_uint64, unpack_le_uint64
 )
+from electrumx.server.daemon import DaemonError
 from electrumx.server.db import FlushData
-from electrumx.lib.assets import is_asset_script, TX_TRANSFER_ASSET, TX_NEW_ASSET, TX_REISSUE_ASSET
-from electrumx.lib.addresses import public_key_to_address
 
 # We can safely assume that TX's to these addresses will never come out
 # Therefore we don't need to store them in the database

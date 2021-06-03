@@ -4,10 +4,9 @@
 #
 # See the file "LICENCE" for information about the copyright
 # and warranty status of this software.
-import logging
 from asyncio import Event
 
-from aiorpcx import _version as aiorpcx_version, TaskGroup, NoRemainingTasksError
+from aiorpcx import _version as aiorpcx_version, TaskGroup
 
 import electrumx
 from electrumx.lib.server_base import ServerBase

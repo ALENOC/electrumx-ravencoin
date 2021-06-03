@@ -143,8 +143,9 @@ def R(a, b, c, d, e, Fj, Kj, sj, rj, X):
 
 PADDING = [0x80] + [0]*63
 
-import sys
 import struct
+import sys
+
 
 def RMD160Transform(state, block): #uint32 state[5], uchar block[64]
     x = [0]*16

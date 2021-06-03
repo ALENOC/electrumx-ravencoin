@@ -29,10 +29,10 @@
 
 import array
 import inspect
-from ipaddress import ip_address
 import logging
 import sys
 from collections.abc import Container, Mapping
+from ipaddress import ip_address
 from struct import Struct
 
 

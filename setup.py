@@ -1,4 +1,5 @@
 import setuptools
+
 import electrumx
 
 version = electrumx.version.split(' ')[-1]

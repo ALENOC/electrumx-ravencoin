@@ -5,11 +5,10 @@ import random
 import re
 
 import pytest
-
 from aiorpcx import Service, NetAddress
-from electrumx.server.env import Env, ServiceError
-import electrumx.lib.coins as lib_coins
 
+import electrumx.lib.coins as lib_coins
+from electrumx.server.env import Env, ServiceError
 
 BASE_DAEMON_URL = 'http://username:password@hostname:321/'
 BASE_DB_DIR = '/some/dir'

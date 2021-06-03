@@ -7,7 +7,6 @@
 
 '''Classes for local RPC server and remote client TCP/SSL servers.'''
 
-import logging
 import codecs
 import itertools
 import json
@@ -18,25 +17,23 @@ import time
 from collections import defaultdict
 from functools import partial
 from ipaddress import IPv4Address, IPv6Address
-from asyncio import CancelledError
 
 import attr
+import pylru
 from aiorpcx import (
     RPCSession, JSONRPCAutoDetect, JSONRPCConnection, serve_rs, serve_ws, NewlineFramer,
     TaskGroup, handler_invocation, RPCError, Request, sleep, Event, ReplyAndDisconnect,
     timeout_after
 )
-import pylru
 
 import electrumx
-from electrumx.lib.merkle import MerkleCache
-from electrumx.lib.text import sessions_lines
 import electrumx.lib.util as util
 from electrumx.lib.hash import (sha256, hash_to_hex_str, hex_str_to_hash,
                                 HASHX_LEN, Base58Error)
+from electrumx.lib.merkle import MerkleCache
+from electrumx.lib.text import sessions_lines
 from electrumx.server.daemon import DaemonError
 from electrumx.server.peers import PeerManager
-
 
 BAD_REQUEST = 1
 DAEMON_ERROR = 2
@@ -627,11 +624,6 @@ class SessionManager:
                     if not task.cancelled():
                         task.result()
 
-        except CancelledError:
-            # Stop the server if sessions are cancelled for whatever reason
-            raise
-        except Exception:
-            logging.exception('Critical Sessions Error:')
         finally:
             # Close servers then sessions
             self.logger.info('stopping servers')
@@ -641,6 +633,9 @@ class SessionManager:
                 for session in list(self.sessions):
                     await group.spawn(session.close(force_after=1))
             self.logger.info('connections closed')
+
+            # Fully stop the server
+            raise
 
     def extra_cost(self, session):
         # Note there is no guarantee that session is still in self.sessions.  Example traceback:

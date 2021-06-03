@@ -29,6 +29,7 @@ from ipaddress import ip_address, IPv4Address, IPv6Address, IPv4Network, IPv6Net
 from socket import AF_INET, AF_INET6
 
 from aiorpcx import is_valid_hostname
+
 from electrumx.lib.util import cachedproperty, protocol_tuple, version_string
 
 

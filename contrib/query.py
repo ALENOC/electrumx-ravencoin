@@ -14,11 +14,10 @@ Not currently documented; might become easier to use in future.
 
 import argparse
 import asyncio
-import sys
 
 from electrumx import Env
-from electrumx.server.db import DB
 from electrumx.lib.hash import hash_to_hex_str, Base58Error
+from electrumx.server.db import DB
 
 
 async def print_stats(hist_db, utxo_db):

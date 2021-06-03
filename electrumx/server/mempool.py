@@ -8,17 +8,16 @@
 '''Mempool handling.'''
 
 import itertools
-import logging
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict
 
 import attr
-from aiorpcx import TaskGroup, run_in_thread, sleep, NoRemainingTasksError
+from aiorpcx import TaskGroup, run_in_thread, sleep
 
+from electrumx.lib.assets import is_asset_script
 from electrumx.lib.hash import hash_to_hex_str, hex_str_to_hash
 from electrumx.lib.util import class_logger, chunks
-from electrumx.lib.assets import is_asset_script
 from electrumx.server.db import UTXO, ASSET
 
 

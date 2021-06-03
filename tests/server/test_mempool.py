@@ -8,12 +8,10 @@ from random import randrange, choice, seed
 import pytest
 from aiorpcx import Event, TaskGroup, sleep, ignore_after
 
-from electrumx.server.mempool import MemPool, MemPoolAPI
 from electrumx.lib.coins import Bitcoin
 from electrumx.lib.hash import HASHX_LEN, hex_str_to_hash, hash_to_hex_str, double_sha256
 from electrumx.lib.tx import Tx, TxInput, TxOutput
-from electrumx.lib.util import make_logger
-
+from electrumx.server.mempool import MemPool, MemPoolAPI
 
 coin = Bitcoin
 # Change seed daily
