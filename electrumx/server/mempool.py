@@ -280,31 +280,49 @@ class MemPool(object):
                         # If the next byte is a push to stack, this is a depreciated P2PK
                         if deserializer.binary[deserializer.cursor] <= OpCodes.OP_PUSHDATA4:
                             pubkey = deserializer._read_varbytes()
-                            if deserializer._read_byte() != OpCodes.OP_CHECKSIG:
-                                raise Exception("Unknown pk_script: {}".format(txout.pk_script.hex()))
+                            op = deserializer._read_byte()
+                            if op != OpCodes.OP_CHECKSIG:
+                                raise Exception(
+                                    "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
+                                                                                        OpCodes.OP_CHECKSIG, op))
                             # Convert P2PK to P2PKH/P2SH for database purposes
                             addr = public_key_to_address(pubkey, self.coin.P2PKH_VERBYTE)
                             hashX = self.coin.address_to_hashX(addr)
                         else:  # This is either a P2PKH or P2SH
                             op_code = deserializer._read_byte()
                             if op_code == OpCodes.OP_DUP:  # This is a P2PKH
-                                if deserializer._read_byte() != OpCodes.OP_HASH160:
-                                    raise Exception("Unknown pk_script: {}".format(txout.pk_script.hex()))
+                                op = deserializer._read_byte()
+                                if op != OpCodes.OP_HASH160:
+                                    raise Exception(
+                                        "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
+                                                                                            OpCodes.OP_HASH160, op))
                                 hash160 = deserializer._read_varbytes()
-                                if deserializer._read_byte() != OpCodes.OP_EQUALVERIFY:
-                                    raise Exception("Unknown pk_script: {}".format(txout.pk_script.hex()))
-                                if deserializer._read_byte() != OpCodes.OP_CHECKSIG:
-                                    raise Exception("Unknown pk_script: {}".format(txout.pk_script.hex()))
+                                op = deserializer._read_byte()
+                                if op != OpCodes.OP_EQUALVERIFY:
+                                    raise Exception(
+                                        "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
+                                                                                            OpCodes.OP_EQUALVERIFY, op))
+                                op = deserializer._read_byte()
+                                if op != OpCodes.OP_CHECKSIG:
+                                    raise Exception(
+                                        "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
+                                                                                            OpCodes.OP_CHECKSIG, op))
                                 hashX = to_hashX(ScriptPubKey.P2PKH_script(hash160))
                             elif op_code == OpCodes.OP_HASH160:  # This is a P2SH
                                 hash160 = deserializer._read_varbytes()
-                                if deserializer._read_byte() != OpCodes.OP_EQUAL:
-                                    raise Exception("Unknown pk_script: {}".format(txout.pk_script.hex()))
+                                op = deserializer._read_byte()
+                                if op != OpCodes.OP_EQUAL:
+                                    raise Exception(
+                                        "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
+                                                                                            OpCodes.OP_EQUAL, op))
                                 hashX = to_hashX(ScriptPubKey.P2SH_script(hash160))
                             else:
-                                raise Exception("Unknown pk_script: {}".format(txout.pk_script.hex()))
+                                raise Exception(
+                                    "Unknown pk_script: {}\n OPCODE: {}".format(txout.pk_script.hex(), op_code))
                     except:
-                        logging.exception("TXID: {}, SCRIPT: {}".format(tx_hash.hex(), txout.pk_script.hex()))
+                        b = bytearray(tx_hash)
+                        b.reverse()
+                        logging.exception("TXID: {}, SCRIPT: {}".format(b.hex(), txout.pk_script.hex()))
                         raise
 
                     try:
@@ -332,7 +350,9 @@ class MemPool(object):
                         else:
                             txout_tuple_list.append((hashX, value, False, None))
                     except:
-                        logging.exception("TXID: {}, ASSET: {}".format(tx_hash.hex(), asset_script.hex()))
+                        b = bytearray(tx_hash)
+                        b.reverse()
+                        logging.exception("TXID: {}, ASSET: {}".format(b.hex(), asset_script.hex()))
                         raise
 
                 txout_pairs = tuple(txout_tuple_list)
