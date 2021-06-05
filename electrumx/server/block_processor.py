@@ -556,14 +556,26 @@ class BlockProcessor:
                             deserializer._read_byte() == OpCodes.OP_RVN_ASSET:
                         asset_script = deserializer._read_varbytes()
                         asset_deserializer = self.coin.DESERIALIZER(asset_script)
-                        if deserializer._read_byte() != OpCodes.OP_DROP:
-                            raise Exception("Unknown pk_script: {}".format(txout.pk_script.hex()))
-                        if asset_deserializer._read_byte() != b'r':
-                            raise Exception("Unknown asset script: {}".format(asset_script.hex()))
-                        if asset_deserializer._read_byte() != b'v':
-                            raise Exception("Unknown asset script: {}".format(asset_script.hex()))
-                        if asset_deserializer._read_byte() != b'n':
-                            raise Exception("Unknown asset script: {}".format(asset_script.hex()))
+                        op = deserializer._read_byte()
+                        if op != OpCodes.OP_DROP:
+                            raise Exception(
+                                "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
+                                                                                    OpCodes.OP_DROP, op))
+                        op = deserializer._read_byte()
+                        if op != b'r':
+                            raise Exception(
+                                "Unknown asset script: {}\nExpected {}, was {}".format(asset_script.hex(),
+                                                                                       b'r', op))
+                        op = deserializer._read_byte()
+                        if op != b'v':
+                            raise Exception(
+                                "Unknown asset script: {}\nExpected {}, was {}".format(asset_script.hex(),
+                                                                                       b'v', op))
+                        op = deserializer._read_byte()
+                        if op != b'n':
+                            raise Exception(
+                                "Unknown asset script: {}\nExpected {}, was {}".format(asset_script.hex(),
+                                                                                       b'n', op))
                         script_type = asset_deserializer._read_byte()
                         asset_name = asset_deserializer._read_varbytes()
                         if script_type == b'o':
@@ -624,7 +636,7 @@ class BlockProcessor:
                                 put_asset_data_reissued(asset_name, asset_data)
 
                             elif script_type != b't':
-                                raise Exception("Unknown asset script: {}".format(asset_script.hex()))
+                                raise Exception("Unknown asset script: {}\n{}".format(asset_script.hex(), script_type))
                 except:
                     b = bytearray(tx_hash)
                     b.reverse()
