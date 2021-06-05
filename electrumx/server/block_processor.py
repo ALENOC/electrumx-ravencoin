@@ -561,17 +561,17 @@ class BlockProcessor:
                             raise Exception(
                                 "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
                                                                                     OpCodes.OP_DROP, op))
-                        op = deserializer._read_byte()
+                        op = asset_deserializer._read_byte()
                         if op != b'r':
                             raise Exception(
                                 "Unknown asset script: {}\nExpected {}, was {}".format(asset_script.hex(),
                                                                                        b'r', op))
-                        op = deserializer._read_byte()
+                        op = asset_deserializer._read_byte()
                         if op != b'v':
                             raise Exception(
                                 "Unknown asset script: {}\nExpected {}, was {}".format(asset_script.hex(),
                                                                                        b'v', op))
-                        op = deserializer._read_byte()
+                        op = asset_deserializer._read_byte()
                         if op != b'n':
                             raise Exception(
                                 "Unknown asset script: {}\nExpected {}, was {}".format(asset_script.hex(),
