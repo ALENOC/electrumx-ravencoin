@@ -562,23 +562,23 @@ class BlockProcessor:
                                 "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
                                                                                     OpCodes.OP_DROP, op))
                         op = asset_deserializer._read_byte()
-                        if op != b'r':
+                        if op != b'r'[0]:
                             raise Exception(
                                 "Unknown asset script: {}\nExpected {}, was {}".format(asset_script.hex(),
                                                                                        b'r', op))
                         op = asset_deserializer._read_byte()
-                        if op != b'v':
+                        if op != b'v'[0]:
                             raise Exception(
                                 "Unknown asset script: {}\nExpected {}, was {}".format(asset_script.hex(),
                                                                                        b'v', op))
                         op = asset_deserializer._read_byte()
-                        if op != b'n':
+                        if op != b'n'[0]:
                             raise Exception(
                                 "Unknown asset script: {}\nExpected {}, was {}".format(asset_script.hex(),
                                                                                        b'n', op))
                         script_type = asset_deserializer._read_byte()
                         asset_name = asset_deserializer._read_varbytes()
-                        if script_type == b'o':
+                        if script_type == b'o'[0]:
                             # This is an ownership asset. It does not have any metadata.
                             # Just assign it with a value of 1
                             put_asset(tx_hash + to_le_uint32(idx),
@@ -589,7 +589,7 @@ class BlockProcessor:
                             put_asset(tx_hash + to_le_uint32(idx),
                                       hashX + tx_numb + to_le_uint64(sats) +
                                       asset_name)
-                            if script_type == b'q':  # A new asset issuance
+                            if script_type == b'q'[0]:  # A new asset issuance
                                 divisions = asset_deserializer._read_byte()
                                 reissuable = asset_deserializer._read_byte()
                                 has_meta = asset_deserializer._read_byte()
@@ -600,7 +600,7 @@ class BlockProcessor:
                                 put_asset_data_new(asset_name, asset_data)  # Add meta for this asset
                                 asset_meta_undo_info_append(  # Set previous meta to null in case of roll back
                                     len(asset_name).to_bytes(1, 'big') + asset_name + b'\0')
-                            elif script_type == b'r':  # An asset re-issuance
+                            elif script_type == b'r'[0]:  # An asset re-issuance
                                 divisions = asset_deserializer._read_byte()
                                 reissuable = asset_deserializer._read_byte()
 
@@ -631,11 +631,11 @@ class BlockProcessor:
                                     asset_data += b'\x01'
                                     asset_data += asset_deserializer._get_meta_raw()
 
-                                if asset_name[-1] != b'!':  # Not an ownership asset
+                                if asset_name[-1] != b'!'[0]:  # Not an ownership asset
                                     self.asset_touched.update(asset_name)
                                 put_asset_data_reissued(asset_name, asset_data)
 
-                            elif script_type != b't':
+                            elif script_type != b't'[0]:
                                 raise Exception("Unknown asset script: {}\n{}".format(asset_script.hex(), script_type))
                 except:
                     b = bytearray(tx_hash)
