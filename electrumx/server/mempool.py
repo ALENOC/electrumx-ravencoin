@@ -276,7 +276,6 @@ class MemPool(object):
                         # Create a deserializer for the script pubkey
                         deserializer = self.coin.DESERIALIZER(txout.pk_script)
                         # Get the length of the script
-                        script_length = deserializer._read_varint()
                         # If the next byte is a push to stack, this is a depreciated P2PK
                         if deserializer.binary[deserializer.cursor] <= OpCodes.OP_PUSHDATA4:
                             pubkey = deserializer._read_varbytes()
@@ -327,7 +326,8 @@ class MemPool(object):
 
                     try:
                         # Parse any asset data
-                        if script_length > deserializer.cursor and deserializer._read_byte() == 0xc0:
+                        if len(deserializer.binary) > deserializer.cursor and \
+                                deserializer._read_byte() == OpCodes.OP_RVN_ASSET:
                             asset_script = deserializer._read_varbytes()
                             asset_deserializer = self.coin.DESERIALIZER(asset_script)
                             if deserializer._read_byte() != OpCodes.OP_DROP:

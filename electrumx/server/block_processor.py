@@ -497,13 +497,14 @@ class BlockProcessor:
                     # Create a deserializer for the script pubkey
                     deserializer = self.coin.DESERIALIZER(txout.pk_script)
                     # Get the length of the script
-                    script_length = deserializer._read_varint()
                     # If the next byte is a push to stack, this is a depreciated P2PK
                     if deserializer.binary[deserializer.cursor] <= OpCodes.OP_PUSHDATA4:
                         pubkey = deserializer._read_varbytes()
                         op = deserializer._read_byte()
                         if op != OpCodes.OP_CHECKSIG:
-                            raise Exception("Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(), OpCodes.OP_CHECKSIG, op))
+                            raise Exception(
+                                "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
+                                                                                    OpCodes.OP_CHECKSIG, op))
                         # Convert P2PK to P2PKH/P2SH for database purposes
                         addr = public_key_to_address(pubkey, self.coin.P2PKH_VERBYTE)
                         hashX = self.coin.address_to_hashX(addr)
@@ -512,23 +513,32 @@ class BlockProcessor:
                         if op_code == OpCodes.OP_DUP:  # This is a P2PKH
                             op = deserializer._read_byte()
                             if op != OpCodes.OP_HASH160:
-                                raise Exception("Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(), OpCodes.OP_HASH160, op))
+                                raise Exception(
+                                    "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
+                                                                                        OpCodes.OP_HASH160, op))
                             hash160 = deserializer._read_varbytes()
                             op = deserializer._read_byte()
                             if op != OpCodes.OP_EQUALVERIFY:
-                                raise Exception("Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(), OpCodes.OP_EQUALVERIFY, op))
+                                raise Exception(
+                                    "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
+                                                                                        OpCodes.OP_EQUALVERIFY, op))
                             op = deserializer._read_byte()
                             if op != OpCodes.OP_CHECKSIG:
-                                raise Exception("Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(), OpCodes.OP_CHECKSIG, op))
+                                raise Exception(
+                                    "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
+                                                                                        OpCodes.OP_CHECKSIG, op))
                             hashX = script_hashX(ScriptPubKey.P2PKH_script(hash160))
                         elif op_code == OpCodes.OP_HASH160:  # This is a P2SH
                             hash160 = deserializer._read_varbytes()
                             op = deserializer._read_byte()
                             if op != OpCodes.OP_EQUAL:
-                                raise Exception("Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(), OpCodes.OP_EQUAL, op))
+                                raise Exception(
+                                    "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
+                                                                                        OpCodes.OP_EQUAL, op))
                             hashX = script_hashX(ScriptPubKey.P2SH_script(hash160))
                         else:
-                            raise Exception("Unknown pk_script: {}\n OPCODE: {}".format(txout.pk_script.hex(), op_code))
+                            raise Exception(
+                                "Unknown pk_script: {}\n OPCODE: {}".format(txout.pk_script.hex(), op_code))
                 except:
                     b = bytearray(tx_hash)
                     b.reverse()
@@ -542,7 +552,8 @@ class BlockProcessor:
 
                 try:
                     # Parse any asset data
-                    if script_length > deserializer.cursor and deserializer._read_byte() == 0xc0:
+                    if len(deserializer.binary) > deserializer.cursor and \
+                            deserializer._read_byte() == OpCodes.OP_RVN_ASSET:
                         asset_script = deserializer._read_varbytes()
                         asset_deserializer = self.coin.DESERIALIZER(asset_script)
                         if deserializer._read_byte() != OpCodes.OP_DROP:
