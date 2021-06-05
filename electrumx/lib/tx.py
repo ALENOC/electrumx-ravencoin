@@ -206,6 +206,12 @@ class Deserializer(object):
         self.cursor += 8
         return result
 
+    def _get_meta_raw(self):
+        meta_len = 34
+        meta = self.binary[self.cursor:self.cursor+meta_len]
+        self.cursor += meta_len
+        return meta
+
 
 # TODO: This was all just copied from v1.15 ... Change/update?
 

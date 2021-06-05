@@ -8,6 +8,7 @@
 '''Mempool handling.'''
 
 import itertools
+import logging
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict
@@ -15,8 +16,9 @@ from collections import defaultdict
 import attr
 from aiorpcx import TaskGroup, run_in_thread, sleep
 
-from electrumx.lib.assets import is_asset_script
+from electrumx.lib.addresses import public_key_to_address
 from electrumx.lib.hash import hash_to_hex_str, hex_str_to_hash
+from electrumx.lib.script import OpCodes, ScriptPubKey
 from electrumx.lib.util import class_logger, chunks
 from electrumx.server.db import UTXO, ASSET
 
@@ -270,28 +272,68 @@ class MemPool(object):
                 for txout in tx.outputs:
                     value = txout.value
 
-                    end_point = 23 \
-                        if txout.pk_script[0] == 0xa9 and \
-                           txout.pk_script[1] == 0x14 and txout.pk_script[22] == 0x87 \
-                        else 25
+                    try:
+                        # Create a deserializer for the script pubkey
+                        deserializer = self.coin.DESERIALIZER(txout.pk_script)
+                        # Get the length of the script
+                        script_length = deserializer._read_varint()
+                        # If the next byte is a push to stack, this is a depreciated P2PK
+                        if deserializer.binary[deserializer.cursor] <= OpCodes.OP_PUSHDATA4:
+                            pubkey = deserializer._read_varbytes()
+                            if deserializer._read_byte() != OpCodes.OP_CHECKSIG:
+                                raise Exception("Unknown pk_script: {}".format(txout.pk_script.hex()))
+                            # Convert P2PK to P2PKH/P2SH for database purposes
+                            addr = public_key_to_address(pubkey, self.coin.P2PKH_VERBYTE)
+                            hashX = self.coin.address_to_hashX(addr)
+                        else:  # This is either a P2PKH or P2SH
+                            op_code = deserializer._read_byte()
+                            if op_code == OpCodes.OP_DUP:  # This is a P2PKH
+                                if deserializer._read_byte() != OpCodes.OP_HASH160:
+                                    raise Exception("Unknown pk_script: {}".format(txout.pk_script.hex()))
+                                hash160 = deserializer._read_varbytes()
+                                if deserializer._read_byte() != OpCodes.OP_EQUALVERIFY:
+                                    raise Exception("Unknown pk_script: {}".format(txout.pk_script.hex()))
+                                if deserializer._read_byte() != OpCodes.OP_CHECKSIG:
+                                    raise Exception("Unknown pk_script: {}".format(txout.pk_script.hex()))
+                                hashX = to_hashX(ScriptPubKey.P2PKH_script(hash160))
+                            elif op_code == OpCodes.OP_HASH160:  # This is a P2SH
+                                hash160 = deserializer._read_varbytes()
+                                if deserializer._read_byte() != OpCodes.OP_EQUAL:
+                                    raise Exception("Unknown pk_script: {}".format(txout.pk_script.hex()))
+                                hashX = to_hashX(ScriptPubKey.P2SH_script(hash160))
+                            else:
+                                raise Exception("Unknown pk_script: {}".format(txout.pk_script.hex()))
+                    except:
+                        logging.exception("TXID: {}, SCRIPT: {}".format(tx_hash.hex(), txout.pk_script.hex()))
+                        raise
 
-                    hashX = to_hashX(txout.pk_script[:end_point])
-
-                    asset_info = is_asset_script(txout.pk_script)
-
-                    if asset_info is None:
-                        txout_tuple_list.append((hashX, value, False, None))
-                    else:
-                        start = asset_info[2]
-                        asset_name_len = txout.pk_script[start]
-                        asset_name = txout.pk_script[start + 1:(start + 1 + asset_name_len)]
-                        if asset_info[1]:
-                            txout_tuple_list.append((hashX, 100_000_000, True, asset_name.decode('ascii')))
-                        else:  # Not an owner asset
-                            sat_amt = int.from_bytes(txout.pk_script[(start + 1 + asset_name_len):
-                                                                     (start + 9 + asset_name_len)],
-                                                     byteorder='little')
-                            txout_tuple_list.append((hashX, sat_amt, True, asset_name.decode('ascii')))
+                    try:
+                        # Parse any asset data
+                        if script_length > deserializer.cursor and deserializer._read_byte() == 0xc0:
+                            asset_script = deserializer._read_varbytes()
+                            asset_deserializer = self.coin.DESERIALIZER(asset_script)
+                            if deserializer._read_byte() != OpCodes.OP_DROP:
+                                raise Exception("Unknown pk_script: {}".format(txout.pk_script.hex()))
+                            if asset_deserializer._read_byte() != b'r':
+                                raise Exception("Unknown asset script: {}".format(asset_script.hex()))
+                            if asset_deserializer._read_byte() != b'v':
+                                raise Exception("Unknown asset script: {}".format(asset_script.hex()))
+                            if asset_deserializer._read_byte() != b'n':
+                                raise Exception("Unknown asset script: {}".format(asset_script.hex()))
+                            script_type = asset_deserializer._read_byte()
+                            asset_name = asset_deserializer._read_varbytes()
+                            if script_type == b'o':
+                                # This is an ownership asset. It does not have any metadata.
+                                # Just assign it with a value of 1
+                                txout_tuple_list.append((hashX, 100_000_000, True, asset_name.decode('ascii')))
+                            else:  # Not an owner asset; has a sat amount
+                                sats = asset_deserializer._read_le_int64()
+                                txout_tuple_list.append((hashX, sats, True, asset_name.decode('ascii')))
+                        else:
+                            txout_tuple_list.append((hashX, value, False, None))
+                    except:
+                        logging.exception("TXID: {}, ASSET: {}".format(tx_hash.hex(), asset_script.hex()))
+                        raise
 
                 txout_pairs = tuple(txout_tuple_list)
                 txs[tx_hash] = MemPoolTx(txin_pairs, None, txout_pairs,
