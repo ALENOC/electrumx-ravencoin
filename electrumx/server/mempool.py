@@ -274,12 +274,12 @@ class MemPool(object):
 
                     try:
                         # Create a deserializer for the script pubkey
-                        deserializer = self.coin.DESERIALIZER(txout.pk_script)
+                        pubkey_deserializer = deserializer(txout.pk_script)
                         # Get the length of the script
                         # If the next byte is a push to stack, this is a depreciated P2PK
-                        if deserializer.binary[deserializer.cursor] <= OpCodes.OP_PUSHDATA4:
-                            pubkey = deserializer._read_varbytes()
-                            op = deserializer._read_byte()
+                        if pubkey_deserializer.binary[pubkey_deserializer.cursor] <= OpCodes.OP_PUSHDATA4:
+                            pubkey = pubkey_deserializer._read_varbytes()
+                            op = pubkey_deserializer._read_byte()
                             if op != OpCodes.OP_CHECKSIG:
                                 raise Exception(
                                     "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
@@ -288,28 +288,28 @@ class MemPool(object):
                             addr = public_key_to_address(pubkey, self.coin.P2PKH_VERBYTE)
                             hashX = self.coin.address_to_hashX(addr)
                         else:  # This is either a P2PKH or P2SH
-                            op_code = deserializer._read_byte()
+                            op_code = pubkey_deserializer._read_byte()
                             if op_code == OpCodes.OP_DUP:  # This is a P2PKH
-                                op = deserializer._read_byte()
+                                op = pubkey_deserializer._read_byte()
                                 if op != OpCodes.OP_HASH160:
                                     raise Exception(
                                         "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
                                                                                             OpCodes.OP_HASH160, op))
-                                hash160 = deserializer._read_varbytes()
-                                op = deserializer._read_byte()
+                                hash160 = pubkey_deserializer._read_varbytes()
+                                op = pubkey_deserializer._read_byte()
                                 if op != OpCodes.OP_EQUALVERIFY:
                                     raise Exception(
                                         "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
                                                                                             OpCodes.OP_EQUALVERIFY, op))
-                                op = deserializer._read_byte()
+                                op = pubkey_deserializer._read_byte()
                                 if op != OpCodes.OP_CHECKSIG:
                                     raise Exception(
                                         "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
                                                                                             OpCodes.OP_CHECKSIG, op))
                                 hashX = to_hashX(ScriptPubKey.P2PKH_script(hash160))
                             elif op_code == OpCodes.OP_HASH160:  # This is a P2SH
-                                hash160 = deserializer._read_varbytes()
-                                op = deserializer._read_byte()
+                                hash160 = pubkey_deserializer._read_varbytes()
+                                op = pubkey_deserializer._read_byte()
                                 if op != OpCodes.OP_EQUAL:
                                     raise Exception(
                                         "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
@@ -326,11 +326,11 @@ class MemPool(object):
 
                     try:
                         # Parse any asset data
-                        if len(deserializer.binary) != deserializer.cursor and \
-                                deserializer._read_byte() == OpCodes.OP_RVN_ASSET:
-                            asset_script = deserializer._read_varbytes()
+                        if len(pubkey_deserializer.binary) > pubkey_deserializer.cursor and \
+                                pubkey_deserializer._read_byte() == OpCodes.OP_RVN_ASSET:
+                            asset_script = pubkey_deserializer._read_varbytes()
                             asset_deserializer = self.coin.DESERIALIZER(asset_script)
-                            op = deserializer._read_byte()
+                            op = pubkey_deserializer._read_byte()
                             if op != OpCodes.OP_DROP:
                                 raise Exception(
                                     "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
