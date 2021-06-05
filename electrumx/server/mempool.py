@@ -274,10 +274,12 @@ class MemPool(object):
 
                     try:
                         # Create a deserializer for the script pubkey
-                        pubkey_deserializer = deserializer(txout.pk_script)
+                        pubkey_deserializer = self.coin.DESERIALIZER(txout.pk_script)
                         # Get the length of the script
                         # If the next byte is a push to stack, this is a depreciated P2PK
-                        if pubkey_deserializer.binary[pubkey_deserializer.cursor] <= OpCodes.OP_PUSHDATA4:
+                        op1 = pubkey_deserializer.binary[pubkey_deserializer.cursor]
+
+                        if op1 <= OpCodes.OP_PUSHDATA4 and op1 != OpCodes.OP_0:
                             pubkey = pubkey_deserializer._read_varbytes()
                             op = pubkey_deserializer._read_byte()
                             if op != OpCodes.OP_CHECKSIG:
@@ -316,8 +318,11 @@ class MemPool(object):
                                                                                             OpCodes.OP_EQUAL, op))
                                 hashX = to_hashX(ScriptPubKey.P2SH_script(hash160))
                             else:
-                                raise Exception(
-                                    "Unknown pk_script: {}\n OPCODE: {}".format(txout.pk_script.hex(), op_code))
+                                # Assume that the pk script is valid and doesn't contain an asset
+                                # Hash as-is
+                                hashX = to_hashX(txout.pk_script)
+                                # Skip asset checking
+                                pubkey_deserializer.cursor = len(pubkey_deserializer.binary)
                     except:
                         b = bytearray(tx_hash)
                         b.reverse()
