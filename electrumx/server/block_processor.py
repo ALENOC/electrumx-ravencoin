@@ -555,26 +555,99 @@ class BlockProcessor:
                 except ScriptError:  # Bad script
                     continue
 
-                ctr = match_script_against_template(ops, SCRIPTPUBKEY_TEMPLATE_P2PK)
-                if ctr > -1:  # Convert old p2pk scripts to p2pkh for db purposes
-                    addr = public_key_to_address(ops[0][2], self.coin.P2PKH_VERBYTE)
-                    hashX = self.coin.address_to_hashX(addr)
-                else:
-                    for template in SCRIPTS_AUTO:
-                        ctr = match_script_against_template(ops, template)
-                        if ctr > -1:
-                            break
-                    if ctr < 0:
-                        b = bytearray(tx_hash)
-                        b.reverse()
-                        raise Exception('Unknown script: {} from txid: {}'.format(txout.pk_script.hex(), b.hex()))
+                try:
+                    ctr = match_script_against_template(ops, SCRIPTPUBKEY_TEMPLATE_P2PK)
+                    if ctr > -1:  # Convert old p2pk scripts to p2pkh for db purposes
+                        addr = public_key_to_address(ops[0][2], self.coin.P2PKH_VERBYTE)
+                        hashX = self.coin.address_to_hashX(addr)
+                    else:
+                        for template in SCRIPTS_AUTO:
+                            ctr = match_script_against_template(ops, template)
+                            if ctr > -1:
+                                break
+                        if ctr < 0:
+                            b = bytearray(tx_hash)
+                            b.reverse()
+                            raise Exception('Unknown script')
 
-                    hashX = script_hashX(txout.pk_script[:ops[ctr-1][1]])
+                        hashX = script_hashX(txout.pk_script[:ops[ctr - 1][1]])
 
-                ops = ops[ctr:]
-                if match_script_against_template(ops, ASSET_TEMPLATE) > -1:
-                    asset_script = ops[1][2]
-                    raise Exception(asset_script)
+                    ops = ops[ctr:]
+                    if match_script_against_template(ops, ASSET_TEMPLATE) > -1:
+                        asset_script = ops[1][2]
+                        asset_deserializer = self.coin.DESERIALIZER(asset_script)
+                        op = asset_deserializer._read_byte()
+                        if op != b'r'[0]:
+                            raise Exception("Expected {}, was {}".format(b'r', op))
+                        op = asset_deserializer._read_byte()
+                        if op != b'v'[0]:
+                            raise Exception("Expected {}, was {}".format(b'v', op))
+                        op = asset_deserializer._read_byte()
+                        if op != b'n'[0]:
+                            raise Exception("Expected {}, was {}".format(b'n', op))
+                        script_type = asset_deserializer._read_byte()
+                        asset_name = asset_deserializer._read_varbytes()
+                        if script_type == b'o'[0]:
+                            # This is an ownership asset. It does not have any metadata.
+                            # Just assign it with a value of 1
+                            put_asset(tx_hash + to_le_uint32(idx),
+                                      hashX + tx_numb + to_le_uint64(100_000_000) +
+                                      asset_name)
+                        else:  # Not an owner asset; has a sat amount
+                            sats = asset_deserializer._read_le_int64()
+                            put_asset(tx_hash + to_le_uint32(idx),
+                                      hashX + tx_numb + to_le_uint64(sats) +
+                                      asset_name)
+                            if script_type == b'q'[0]:  # A new asset issuance
+                                divisions = asset_deserializer._read_byte()
+                                reissuable = asset_deserializer._read_byte()
+                                has_meta = asset_deserializer._read_byte()
+                                asset_data = bytes([divisions, reissuable, has_meta])
+                                if has_meta != b'\0':
+                                    asset_data += asset_deserializer._get_meta_raw()
+
+                                put_asset_data_new(asset_name, asset_data)  # Add meta for this asset
+                                asset_meta_undo_info_append(  # Set previous meta to null in case of roll back
+                                    len(asset_name).to_bytes(1, 'big') + asset_name + b'\0')
+                            elif script_type == b'r'[0]:  # An asset re-issuance
+                                divisions = asset_deserializer._read_byte()
+                                reissuable = asset_deserializer._read_byte()
+
+                                # Quicker check, but it's far more likely to be in the db
+                                old_data = self.asset_data_new.pop(asset_name, None)
+                                if old_data is None:
+                                    old_data = self.asset_data_reissued.pop(asset_name, None)
+                                if old_data is None:
+                                    old_data = self.db.asset_info_db.get(asset_name)
+                                assert old_data is not None  # If reissuing, we should have it
+
+                                asset_data = b''
+
+                                if divisions == 0xff:  # Unchanged division amount
+                                    asset_data += old_data[0].to_bytes(1, 'big')
+                                else:
+                                    asset_data += divisions.to_bytes(1, 'big')
+                                asset_data += reissuable.to_bytes(1, 'big')
+                                if asset_deserializer.cursor == asset_deserializer.binary_length:
+                                    # No more data
+                                    asset_data += b'\0'
+                                else:
+                                    asset_data += b'\x01'
+                                    asset_data += asset_deserializer._get_meta_raw()
+
+                                if asset_name[-1] != b'!'[0]:  # Not an ownership asset; send updated meta to clients
+                                    self.asset_touched.update(asset_name)
+                                put_asset_data_reissued(asset_name, asset_data)
+                                asset_meta_undo_info_append(
+                                    len(asset_name).to_bytes(1, 'big') + asset_name +
+                                    len(old_data).to_bytes(1, 'big') + old_data)
+                            elif script_type != b't'[0]:
+                                raise Exception('Unknown asset type: {}'.format(script_type))
+                except:
+                    b = bytearray(tx_hash)
+                    b.reverse()
+                    logging.exception('TXID:{} SCRIPT:{}'.format(b.hex(), txout.pk_script.hex()))
+                    raise
 
                 # Add UTXO info to the database
                 append_hashX(hashX)
