@@ -13,6 +13,7 @@ import hashlib
 import logging
 import os
 import time
+import traceback
 from asyncio import sleep
 from typing import Callable
 
@@ -552,6 +553,13 @@ class BlockProcessor:
                             f.write('TXID : {}\n'.format(b.hex()))
                             f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
                     #TODO: THIS
+
+                    # TODO: This is just to put a proper coin in the db for later use
+                    hashX = script_hashX(txout.pk_script)
+                    append_hashX(hashX)
+                    put_utxo(tx_hash + to_le_uint32(idx),
+                             hashX + tx_numb + to_le_uint64(txout.value))
+
                     continue
 
                 # Assume all scripts are valid since they came from a node
@@ -590,7 +598,14 @@ class BlockProcessor:
                             with open(os.path.join(self.bad_vouts_path, 'NULLASSET' + file_name), 'w') as f:
                                 f.write('TXID : {}\n'.format(b.hex()))
                                 f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
+                                f.write('OpCodes : {}\n'.format(str(ops)))
                         # TODO: THIS
+
+                        # TODO: This is just to put a proper coin in the db for later use
+                        hashX = script_hashX(txout.pk_script)
+                        append_hashX(hashX)
+                        put_utxo(tx_hash + to_le_uint32(idx),
+                                 hashX + tx_numb + to_le_uint64(txout.value))
 
                         continue
                     else:
@@ -735,6 +750,7 @@ class BlockProcessor:
                                 f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
                                 f.write('OpCodes : {}\n'.format(str(ops)))
                                 f.write('Exception : {}\n'.format(repr(e)))
+                                f.write('Traceback : {}\n'.format(traceback.format_exc()))
 
             append_hashXs(hashXs)
             update_touched(hashXs)
