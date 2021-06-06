@@ -560,7 +560,6 @@ class BlockProcessor:
                     ctr = ops[conversion_check][1]
                     addr = public_key_to_address(ops[0][2], self.coin.P2PKH_VERBYTE)
                     hashX = self.coin.address_to_hashX(addr)
-                    print(txout.pk_script[:ctr])
                 else:
                     for template in SCRIPTS_AUTO:
                         ctr = match_script_against_template(ops, template)
@@ -569,16 +568,15 @@ class BlockProcessor:
                     if ctr < 0:
                         raise Exception('Unknown script: {}'.format(txout.pk_script.hex()))
 
-                    print(txout.pk_script.hex())
-                    print(txout.pk_script[:ops[ctr-1][1]].hex())
-                    print(ops)
                     hashX = script_hashX(txout.pk_script[:ops[ctr-1][1]])
-                    raise Exception()
+
+                if ctr < len(ops) and ops[ctr][0] == OpCodes.OP_RVN_ASSET:
+                    raise Exception(str(ops))
 
                 # Add UTXO info to the database
-                # append_hashX(hashX)
-                # put_utxo(tx_hash + to_le_uint32(idx),
-                #        hashX + tx_numb + to_le_uint64(txout.value))
+                append_hashX(hashX)
+                put_utxo(tx_hash + to_le_uint32(idx),
+                       hashX + tx_numb + to_le_uint64(txout.value))
 
             append_hashXs(hashXs)
             update_touched(hashXs)
