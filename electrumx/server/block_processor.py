@@ -586,8 +586,41 @@ class BlockProcessor:
                 if 0 < op_ptr < len(ops):
                     assert ops[op_ptr][0] == OpCodes.OP_RVN_ASSET  # Sanity check
                     try:
-                        # Get the push data from after OP_RVN_ASSET
-                        asset_script = ops[op_ptr + 1][2]
+                        next_op = ops[op_ptr + 1]
+                        if next_op[0] >= OpCodes.OP_PUSHDATA1:
+                            try:
+                                if ops[op_ptr+2][0] == b'r'[0] and \
+                                        ops[op_ptr+3][0] == b'v'[0] and \
+                                        ops[op_ptr+4][0] == b'n'[0]:
+                                    # The length is encoded by only 1 byte.
+                                    # This is a deprecated varint after OP_RVN_ASSET.
+                                    # Get the vout script from right after OP_RVN_ASSET.
+                                    var_et_al = txout.pk_script[ops[op_ptr][1]:]
+                                    asset_script_deserializer = self.coin.DESERIALIZER(var_et_al)
+                                    # Get the asset script bytes.
+                                    asset_script = asset_script_deserializer._read_var_bytes()
+                                    # TODO: REMOVE
+                                    if self.env.write_bad_vouts_to_file:
+                                        b = bytearray(tx_hash)
+                                        b.reverse()
+                                        file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
+                                        with open(os.path.join(self.bad_vouts_path, 'VARINT'+file_name), 'w') as f:
+                                            f.write('TXID : {}\n'.format(b.hex()))
+                                            f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
+                                            f.write('OpCodes : {}\n'.format(str(ops)))
+                                    # TODO: THIS
+                                else:
+                                    # This is a good OP_PUSH
+                                    # Get the push data from after OP_RVN_ASSET
+                                    asset_script = next_op[2]
+                            except:
+                                # This is a good OP_PUSH
+                                # Get the push data from after OP_RVN_ASSET
+                                asset_script = next_op[2]
+                        else:
+                            # This is a good OP_PUSH
+                            # Get the push data from after OP_RVN_ASSET
+                            asset_script = next_op[2]
 
                         asset_deserializer = self.coin.DESERIALIZER(asset_script)
                         op = asset_deserializer._read_byte()
@@ -660,7 +693,12 @@ class BlockProcessor:
                                 put_asset(tx_hash + to_le_uint32(idx),
                                           hashX + tx_numb + to_le_uint64(sats) +
                                           asset_name)
-                            elif script_type != b't'[0]:
+                            elif script_type == b't'[0]:
+                                # Put DB functions at the end to prevent them from pushing before any errors
+                                put_asset(tx_hash + to_le_uint32(idx),
+                                          hashX + tx_numb + to_le_uint64(sats) +
+                                          asset_name)
+                            else:
                                 raise Exception('Unknown asset type: {}'.format(script_type))
 
                     except Exception as e:
@@ -671,6 +709,7 @@ class BlockProcessor:
                             with open(os.path.join(self.bad_vouts_path, file_name), 'w') as f:
                                 f.write('TXID : {}\n'.format(b.hex()))
                                 f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
+                                f.write('OpCodes : {}\n'.format(str(ops)))
                                 f.write('Exception : {}\n'.format(repr(e)))
 
             append_hashXs(hashXs)
