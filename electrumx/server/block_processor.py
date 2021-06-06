@@ -80,7 +80,7 @@ def match_script_against_template(script, template) -> int:
     if len(script) < len(template):
         return -1
     ctr = 0
-    for i in range(len(script)):
+    for i in range(len(template)):
         ctr += 1
         template_item = template[i]
         script_item = script[i]
