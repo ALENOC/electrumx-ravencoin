@@ -543,6 +543,15 @@ class BlockProcessor:
                 try:
                     ops = Script.get_ops(txout.pk_script)
                 except ScriptError:  # Bad script
+                    # TODO: REMOVE
+                    if self.env.write_bad_vouts_to_file:
+                        b = bytearray(tx_hash)
+                        b.reverse()
+                        file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
+                        with open(os.path.join(self.bad_vouts_path, 'BADOPS'+file_name), 'w') as f:
+                            f.write('TXID : {}\n'.format(b.hex()))
+                            f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
+                    #TODO: THIS
                     continue
 
                 # Assume all scripts are valid since they came from a node
