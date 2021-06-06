@@ -71,6 +71,7 @@ SCRIPTS_AUTO = [SCRIPTPUBKEY_TEMPLATE_P2PKH,
                 SCRIPTPUBKEY_TEMPLATE_P2WSH]
 
 SCRIPTPUBKEY_TEMPLATE_P2PK = [OPPushDataGeneric(lambda x: x == 20), OpCodes.OP_CHECKSIG]
+ASSET_TEMPLATE = [OpCodes.OP_RVN_ASSET, OPPushDataGeneric(), OpCodes.OP_DROP]
 
 # -1 if doesn't match, positive if does. Indicates index in script
 def match_script_against_template(script, template) -> int:
@@ -556,7 +557,7 @@ class BlockProcessor:
 
                 ctr = 0
                 conversion_check = match_script_against_template(ops, SCRIPTPUBKEY_TEMPLATE_P2PK)
-                if conversion_check > -1:
+                if conversion_check > -1:  # Convert old p2pk scripts to p2pkh for db purposes
                     ctr = ops[conversion_check][1]
                     addr = public_key_to_address(ops[0][2], self.coin.P2PKH_VERBYTE)
                     hashX = self.coin.address_to_hashX(addr)
@@ -570,7 +571,8 @@ class BlockProcessor:
 
                     hashX = script_hashX(txout.pk_script[:ops[ctr-1][1]])
 
-                if ctr < len(ops) and ops[ctr][0] == OpCodes.OP_RVN_ASSET:
+                ops = ops[ctr:]
+                if match_script_against_template(ops, ASSET_TEMPLATE) > -1:
                     raise Exception(str(ops))
 
                 # Add UTXO info to the database
