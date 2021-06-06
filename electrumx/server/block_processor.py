@@ -573,7 +573,8 @@ class BlockProcessor:
 
                 ops = ops[ctr:]
                 if match_script_against_template(ops, ASSET_TEMPLATE) > -1:
-                    raise Exception(str(ops))
+                    asset_script = ops[1][2]
+                    raise Exception(asset_script)
 
                 # Add UTXO info to the database
                 append_hashX(hashX)
