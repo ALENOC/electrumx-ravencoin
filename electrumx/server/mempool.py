@@ -12,15 +12,72 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from typing import Callable
 
 import attr
 from aiorpcx import TaskGroup, run_in_thread, sleep
 
 from electrumx.lib.addresses import public_key_to_address
 from electrumx.lib.hash import hash_to_hex_str, hex_str_to_hash
-from electrumx.lib.script import OpCodes, ScriptPubKey
+from electrumx.lib.script import OpCodes, ScriptPubKey, ScriptError, Script
 from electrumx.lib.util import class_logger, chunks
 from electrumx.server.db import UTXO, ASSET
+
+
+
+class OPPushDataGeneric:
+    def __init__(self, pushlen: Callable = None):
+        if pushlen is not None:
+            self.check_data_len = pushlen
+
+    @classmethod
+    def check_data_len(cls, datalen: int) -> bool:
+        # Opcodes below OP_PUSHDATA4 all just push data onto stack, and are
+        return OpCodes.OP_PUSHDATA4 >= datalen >= 0
+
+    @classmethod
+    def is_instance(cls, item):
+        # accept objects that are instances of this class
+        # or other classes that are subclasses
+        return isinstance(item, cls) \
+               or (isinstance(item, type) and issubclass(item, cls))
+
+
+SCRIPTPUBKEY_TEMPLATE_P2PKH = [OpCodes.OP_DUP, OpCodes.OP_HASH160,
+                               OPPushDataGeneric(lambda x: x == 20),
+                               OpCodes.OP_EQUALVERIFY, OpCodes.OP_CHECKSIG]
+SCRIPTPUBKEY_TEMPLATE_P2SH = [OpCodes.OP_HASH160, OPPushDataGeneric(lambda x: x == 20), OpCodes.OP_EQUAL]
+SCRIPTPUBKEY_TEMPLATE_WITNESS_V0 = [OpCodes.OP_0, OPPushDataGeneric(lambda x: x in (20, 32))]
+SCRIPTPUBKEY_TEMPLATE_P2WPKH = [OpCodes.OP_0, OPPushDataGeneric(lambda x: x == 20)]
+SCRIPTPUBKEY_TEMPLATE_P2WSH = [OpCodes.OP_0, OPPushDataGeneric(lambda x: x == 32)]
+
+SCRIPTS_AUTO = [SCRIPTPUBKEY_TEMPLATE_P2PKH,
+                SCRIPTPUBKEY_TEMPLATE_P2SH,
+                SCRIPTPUBKEY_TEMPLATE_WITNESS_V0,
+                SCRIPTPUBKEY_TEMPLATE_P2WPKH,
+                SCRIPTPUBKEY_TEMPLATE_P2WSH]
+
+SCRIPTPUBKEY_TEMPLATE_P2PK = [OPPushDataGeneric(lambda x: x in (33, 65)), OpCodes.OP_CHECKSIG]
+ASSET_TEMPLATE = [OpCodes.OP_RVN_ASSET, OPPushDataGeneric(), OpCodes.OP_DROP]
+
+
+# -1 if doesn't match, positive if does. Indicates index in script
+def match_script_against_template(script, template) -> int:
+    """Returns whether 'script' matches 'template'."""
+    if script is None:
+        return -1
+    if len(script) < len(template):
+        return -1
+    ctr = 0
+    for i in range(len(template)):
+        ctr += 1
+        template_item = template[i]
+        script_item = script[i]
+        if OPPushDataGeneric.is_instance(template_item) and template_item.check_data_len(script_item[0]):
+            continue
+        if template_item != script_item[0]:
+            return -1
+    return ctr
 
 
 @attr.s(slots=True)
@@ -272,104 +329,57 @@ class MemPool(object):
                 for txout in tx.outputs:
                     value = txout.value
 
+                    # deserialize the script pubkey
                     try:
-                        # Create a deserializer for the script pubkey
-                        pubkey_deserializer = self.coin.DESERIALIZER(txout.pk_script)
-                        # Get the length of the script
-                        # If the next byte is a push to stack, this is a depreciated P2PK
-                        op1 = pubkey_deserializer.binary[pubkey_deserializer.cursor]
+                        ops = Script.get_ops(txout.pk_script)
+                    except ScriptError:  # Bad script
+                        continue
 
-                        if op1 <= OpCodes.OP_PUSHDATA4 and op1 != OpCodes.OP_0:
-                            pubkey = pubkey_deserializer._read_varbytes()
-                            op = pubkey_deserializer._read_byte()
-                            if op != OpCodes.OP_CHECKSIG:
-                                raise Exception(
-                                    "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
-                                                                                        OpCodes.OP_CHECKSIG, op))
-                            # Convert P2PK to P2PKH/P2SH for database purposes
-                            addr = public_key_to_address(pubkey, self.coin.P2PKH_VERBYTE)
+                    try:
+                        ctr = match_script_against_template(ops, SCRIPTPUBKEY_TEMPLATE_P2PK)
+                        if ctr > -1:  # Convert old p2pk scripts to p2pkh for db purposes
+                            addr = public_key_to_address(ops[0][2], self.coin.P2PKH_VERBYTE)
                             hashX = self.coin.address_to_hashX(addr)
-                        else:  # This is either a P2PKH or P2SH
-                            op_code = pubkey_deserializer._read_byte()
-                            if op_code == OpCodes.OP_DUP:  # This is a P2PKH
-                                op = pubkey_deserializer._read_byte()
-                                if op != OpCodes.OP_HASH160:
-                                    raise Exception(
-                                        "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
-                                                                                            OpCodes.OP_HASH160, op))
-                                hash160 = pubkey_deserializer._read_varbytes()
-                                op = pubkey_deserializer._read_byte()
-                                if op != OpCodes.OP_EQUALVERIFY:
-                                    raise Exception(
-                                        "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
-                                                                                            OpCodes.OP_EQUALVERIFY, op))
-                                op = pubkey_deserializer._read_byte()
-                                if op != OpCodes.OP_CHECKSIG:
-                                    raise Exception(
-                                        "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
-                                                                                            OpCodes.OP_CHECKSIG, op))
-                                hashX = to_hashX(ScriptPubKey.P2PKH_script(hash160))
-                            elif op_code == OpCodes.OP_HASH160:  # This is a P2SH
-                                hash160 = pubkey_deserializer._read_varbytes()
-                                op = pubkey_deserializer._read_byte()
-                                if op != OpCodes.OP_EQUAL:
-                                    raise Exception(
-                                        "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
-                                                                                            OpCodes.OP_EQUAL, op))
-                                hashX = to_hashX(ScriptPubKey.P2SH_script(hash160))
-                            else:
-                                # Assume that the pk script is valid and doesn't contain an asset
-                                # Hash as-is
-                                hashX = to_hashX(txout.pk_script)
-                                # Skip asset checking
-                                pubkey_deserializer.cursor = len(pubkey_deserializer.binary)
-                    except:
-                        b = bytearray(tx_hash)
-                        b.reverse()
-                        logging.exception("TXID: {}, SCRIPT: {}".format(b.hex(), txout.pk_script.hex()))
-                        raise
-
-                    try:
-                        # Parse any asset data
-                        if len(pubkey_deserializer.binary) > pubkey_deserializer.cursor and \
-                                pubkey_deserializer._read_byte() == OpCodes.OP_RVN_ASSET:
-                            asset_script = pubkey_deserializer._read_varbytes()
-                            asset_deserializer = self.coin.DESERIALIZER(asset_script)
-                            op = pubkey_deserializer._read_byte()
-                            if op != OpCodes.OP_DROP:
-                                raise Exception(
-                                    "Unknown pk_script: {}\nExpected {}, was {}".format(txout.pk_script.hex(),
-                                                                                        OpCodes.OP_DROP, op))
-                            op = asset_deserializer._read_byte()
-                            if op != b'r'[0]:
-                                raise Exception(
-                                    "Unknown asset script: {}\nExpected {}, was {}".format(asset_script.hex(),
-                                                                                           b'r', op))
-                            op = asset_deserializer._read_byte()
-                            if op != b'v'[0]:
-                                raise Exception(
-                                    "Unknown asset script: {}\nExpected {}, was {}".format(asset_script.hex(),
-                                                                                           b'v', op))
-                            op = asset_deserializer._read_byte()
-                            if op != b'n'[0]:
-                                raise Exception(
-                                    "Unknown asset script: {}\nExpected {}, was {}".format(asset_script.hex(),
-                                                                                           b'n', op))
-                            script_type = asset_deserializer._read_byte()
-                            asset_name = asset_deserializer._read_varbytes()
-                            if script_type == b'o'[0]:
-                                # This is an ownership asset. It does not have any metadata.
-                                # Just assign it with a value of 1
-                                txout_tuple_list.append((hashX, 100_000_000, True, asset_name.decode('ascii')))
-                            else:  # Not an owner asset; has a sat amount
-                                sats = asset_deserializer._read_le_int64()
-                                txout_tuple_list.append((hashX, sats, True, asset_name.decode('ascii')))
                         else:
-                            txout_tuple_list.append((hashX, value, False, None))
+                            for template in SCRIPTS_AUTO:
+                                ctr = match_script_against_template(ops, template)
+                                if ctr > -1:
+                                    break
+                            if ctr < 0:
+                                b = bytearray(tx_hash)
+                                b.reverse()
+                                raise Exception('Unknown script')
+
+                            hashX = to_hashX(txout.pk_script[:ops[ctr - 1][1]])
+
+                            ops = ops[ctr:]
+                            if match_script_against_template(ops, ASSET_TEMPLATE) > -1:
+                                asset_script = ops[1][2]
+                                asset_deserializer = self.coin.DESERIALIZER(asset_script)
+                                op = asset_deserializer._read_byte()
+                                if op != b'r'[0]:
+                                    raise Exception("Expected {}, was {}".format(b'r', op))
+                                op = asset_deserializer._read_byte()
+                                if op != b'v'[0]:
+                                    raise Exception("Expected {}, was {}".format(b'v', op))
+                                op = asset_deserializer._read_byte()
+                                if op != b'n'[0]:
+                                    raise Exception("Expected {}, was {}".format(b'n', op))
+                                script_type = asset_deserializer._read_byte()
+                                asset_name = asset_deserializer._read_varbytes()
+                                if script_type == b'o'[0]:
+                                    # This is an ownership asset. It does not have any metadata.
+                                    # Just assign it with a value of 1
+                                    txout_tuple_list.append((hashX, 100_000_000, True, asset_name.decode('ascii')))
+                                else:  # Not an owner asset; has a sat amount
+                                    sats = asset_deserializer._read_le_int64()
+                                    txout_tuple_list.append((hashX, sats, True, asset_name.decode('ascii')))
+                            else:
+                                txout_tuple_list.append((hashX, value, False, None))
                     except:
                         b = bytearray(tx_hash)
                         b.reverse()
-                        logging.exception("TXID: {}, ASSET: {}".format(b.hex(), asset_script.hex()))
+                        logging.exception("TXID: {} SCRIPT: {}".format(b.hex(), txout.pk_script.hex()))
                         raise
 
                 txout_pairs = tuple(txout_tuple_list)
