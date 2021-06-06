@@ -566,15 +566,15 @@ class BlockProcessor:
                         ctr = match_script_against_template(ops, template)
                         if ctr > -1:
                             break
+                    if ctr < 0:
+                        raise Exception('Unknown script: {}'.format(txout.pk_script.hex()))
 
-                if ctr < 0:
-                    raise Exception('Unknown script: {}'.format(txout.pk_script.hex()))
-
-                print(txout.pk_script.hex())
-                print(ops)
-                #print(txout.pk_script[:ops[ctr][1]-1].hex())
-                #script_hashX(txout.pk_script[:ops[ctr][1]-1])
-                raise Exception()
+                    print(txout.pk_script.hex())
+                    print(ops)
+                    print(ops[ctr])
+                    # print(txout.pk_script[:ops[ctr][1]-1].hex())
+                    # script_hashX(txout.pk_script[:ops[ctr][1]-1])
+                    raise Exception()
 
                 # Add UTXO info to the database
                 # append_hashX(hashX)
