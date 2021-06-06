@@ -581,6 +581,17 @@ class BlockProcessor:
                     elif op_ptr == 0:
                         # This is an asset qualifier
                         # TODO: Implement this
+
+                        # TODO: REMOVE
+                        if self.env.write_bad_vouts_to_file:
+                            b = bytearray(tx_hash)
+                            b.reverse()
+                            file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
+                            with open(os.path.join(self.bad_vouts_path, 'NULLASSET' + file_name), 'w') as f:
+                                f.write('TXID : {}\n'.format(b.hex()))
+                                f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
+                        # TODO: THIS
+                        
                         continue
                     else:
                         # There is no OP_RVN_ASSET. Hash as-is.
