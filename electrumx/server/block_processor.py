@@ -12,6 +12,7 @@ import asyncio
 import logging
 import time
 from asyncio import sleep
+from typing import Callable
 
 from aiorpcx import TaskGroup, CancelledError
 
@@ -35,6 +36,62 @@ BURN_ADDRESSES = [
     'RXissueUniqueAssetXXXXXXXXXXWEAe58',
     'RXBurnXXXXXXXXXXXXXXXXXXXXXXWUo9FV',
 ]
+
+
+class OPPushDataGeneric:
+    def __init__(self, pushlen: Callable = None):
+        if pushlen is not None:
+            self.check_data_len = pushlen
+
+    @classmethod
+    def check_data_len(cls, datalen: int) -> bool:
+        # Opcodes below OP_PUSHDATA4 all just push data onto stack, and are
+        return OpCodes.OP_PUSHDATA4 >= datalen >= 0
+
+    @classmethod
+    def is_instance(cls, item):
+        # accept objects that are instances of this class
+        # or other classes that are subclasses
+        return isinstance(item, cls) \
+               or (isinstance(item, type) and issubclass(item, cls))
+
+
+OPPushDataPubkey = OPPushDataGeneric(lambda x: x in (33, 65))
+SCRIPTPUBKEY_TEMPLATE_P2PKH = [OpCodes.OP_DUP, OpCodes.OP_HASH160,
+                               OPPushDataGeneric(lambda x: x == 20),
+                               OpCodes.OP_EQUALVERIFY, OpCodes.OP_CHECKSIG]
+SCRIPTPUBKEY_TEMPLATE_P2SH = [OpCodes.OP_HASH160, OPPushDataGeneric(lambda x: x == 20), OpCodes.OP_EQUAL]
+SCRIPTPUBKEY_TEMPLATE_WITNESS_V0 = [OpCodes.OP_0, OPPushDataGeneric(lambda x: x in (20, 32))]
+SCRIPTPUBKEY_TEMPLATE_P2WPKH = [OpCodes.OP_0, OPPushDataGeneric(lambda x: x == 20)]
+SCRIPTPUBKEY_TEMPLATE_P2WSH = [OpCodes.OP_0, OPPushDataGeneric(lambda x: x == 32)]
+
+SCRIPTS_AUTO = [OPPushDataPubkey,
+                SCRIPTPUBKEY_TEMPLATE_P2PKH,
+                SCRIPTPUBKEY_TEMPLATE_P2SH,
+                SCRIPTPUBKEY_TEMPLATE_WITNESS_V0,
+                SCRIPTPUBKEY_TEMPLATE_P2WPKH,
+                SCRIPTPUBKEY_TEMPLATE_P2WSH]
+
+SCRIPTPUBKEY_TEMPLATE_P2PK = [OPPushDataGeneric(lambda x: x == 20), OpCodes.OP_CHECKSIG]
+
+# -1 if doesn't match, positive if does. Indicates index in script
+def match_script_against_template(script, template) -> int:
+    """Returns whether 'script' matches 'template'."""
+    if script is None:
+        return -1
+    if len(script) < len(template):
+        return -1
+    ctr = 0
+    for i in range(len(script)):
+        ctr += 1
+        template_item = template[i]
+        script_item = script[i]
+        if OPPushDataGeneric.is_instance(template_item) and template_item.check_data_len(script_item[0]):
+            continue
+        if template_item != script_item[0]:
+            return -1
+    return ctr
+
 
 class Prefetcher:
     '''Prefetches blocks (in the forward direction only).'''
@@ -72,7 +129,7 @@ class Prefetcher:
             except CancelledError as e:
                 self.logger.info(f'cancelled; prefetcher stopping {e}')
                 raise
-            except Exception:   # pylint:disable=W0703
+            except Exception:  # pylint:disable=W0703
                 self.logger.exception('ignoring unexpected exception')
 
     def get_prefetched_blocks(self):
@@ -128,7 +185,7 @@ class Prefetcher:
                 hex_hashes = await daemon.block_hex_hashes(first, count)
                 if self.caught_up:
                     self.logger.info('new block height {:,d} hash {}'
-                                     .format(first + count-1, hex_hashes[-1]))
+                                     .format(first + count - 1, hex_hashes[-1]))
                 blocks = await daemon.raw_blocks(hex_hashes)
 
                 assert count == len(blocks)
@@ -236,6 +293,7 @@ class BlockProcessor:
         async def run_locked():
             async with self.state_lock:
                 return await coro
+
         return await asyncio.shield(run_locked())
 
     def schedule_reorg(self, count):
@@ -359,7 +417,7 @@ class BlockProcessor:
 
         # TODO: Add undo info checks
 
-        one_MB = 1000*1000
+        one_MB = 1000 * 1000
         utxo_cache_size = len(self.utxo_cache) * 205
         db_deletes_size = len(self.db_deletes) * 57
         hist_cache_size = self.db.history.unflushed_memsize()
@@ -367,8 +425,8 @@ class BlockProcessor:
         tx_hash_size = ((self.tx_count - self.db.fs_tx_count) * 32
                         + (self.height - self.db.fs_height) * 42)
 
-        #TODO Fix these approximations
-        asset_cache_size = len(self.asset_cache) * 235 #Added 30 bytes for the max name length
+        # TODO Fix these approximations
+        asset_cache_size = len(self.asset_cache) * 235  # Added 30 bytes for the max name length
         asset_deletes_size = len(self.asset_deletes) * 57
         asset_data_new_size = len(self.asset_data_new) * 232
         asset_data_reissue_size = len(self.asset_data_reissued) * 232
@@ -478,7 +536,7 @@ class BlockProcessor:
 
             # Spend the inputs
             for txin in tx.inputs:
-                if txin.is_generation(): # Don't spend block rewards
+                if txin.is_generation():  # Don't spend block rewards
                     continue
                 cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
                 asset_cache_value = spend_asset(txin.prev_hash, txin.prev_idx)
@@ -495,14 +553,33 @@ class BlockProcessor:
                 # deserialize the script pubkey
                 try:
                     ops = Script.get_ops(txout.pk_script)
-                except ScriptError:
+                except ScriptError:  # Bad script
                     continue
 
-                raise Exception(str(ops))
+                ctr = 0
+                conversion_check = match_script_against_template(ops, SCRIPTPUBKEY_TEMPLATE_P2PK)
+                if conversion_check > -1:
+                    ctr = ops[conversion_check][1]
+                    addr = public_key_to_address(ops[0][2], self.coin.P2PKH_VERBYTE)
+                    hashX = self.coin.address_to_hashX(addr)
+                    print(txout.pk_script[:ctr])
+                else:
+                    for template in SCRIPTS_AUTO:
+                        ctr = match_script_against_template(ops, template)
+                        if ctr > -1:
+                            break
+
+                if ctr < 0:
+                    raise Exception('Unknown script: {}'.format(txout.pk_script.hex()))
+
+                print(txout.pk_script.hex())
+                print(txout.pk_script[:ops[ctr][1]].hex())
+                script_hashX(txout.pk_script[:ops[ctr][1]])
+                raise Exception()
 
                 # Add UTXO info to the database
-                #append_hashX(hashX)
-                #put_utxo(tx_hash + to_le_uint32(idx),
+                # append_hashX(hashX)
+                # put_utxo(tx_hash + to_le_uint32(idx),
                 #        hashX + tx_numb + to_le_uint64(txout.value))
 
             append_hashXs(hashXs)
@@ -550,7 +627,7 @@ class BlockProcessor:
         await sleep(0)
 
     def _backup_txs(self, txs, is_unspendable):
-        #TODO: Asset meta undo infos
+        # TODO: Asset meta undo infos
 
         # Prevout values, in order down the block (coinbase first if present)
         # undo_info is in reverse block order
@@ -561,16 +638,16 @@ class BlockProcessor:
                              .format(self.height))
 
         asset_meta_undo_info = self.db.read_asset_meta_undo_info(self.height)
-        while asset_meta_undo_info: # Stops when None or empty
+        while asset_meta_undo_info:  # Stops when None or empty
             name_len = asset_meta_undo_info[0]
-            name = asset_meta_undo_info[1:name_len+1]
-            data_len = asset_meta_undo_info[name_len+1]
+            name = asset_meta_undo_info[1:name_len + 1]
+            data_len = asset_meta_undo_info[name_len + 1]
             if data_len == 0:
                 self.asset_data_deletes.append(name)
             else:
-                data = asset_meta_undo_info[name_len+1:name_len+1+data_len]
+                data = asset_meta_undo_info[name_len + 1:name_len + 1 + data_len]
                 self.asset_data_reissued[name] = data
-            asset_meta_undo_info = asset_meta_undo_info[name_len+2+data_len:]
+            asset_meta_undo_info = asset_meta_undo_info[name_len + 2 + data_len:]
 
         n = len(undo_info)
         asset_n = len(asset_undo_info)
@@ -594,7 +671,7 @@ class BlockProcessor:
                 return 0
             else:
                 def val_len(ptr):
-                    name_len = asset_undo_info[ptr+HASHX_LEN+13+32+4]
+                    name_len = asset_undo_info[ptr + HASHX_LEN + 13 + 32 + 4]
                     return name_len + HASHX_LEN + 14 + 32 + 4
 
                 last_val_ptr = 0
@@ -641,7 +718,7 @@ class BlockProcessor:
                 asset_undo_entry_len = find_asset_undo_len(asset_n)
                 new_asset_n = asset_n - asset_undo_entry_len
                 if new_asset_n >= 0 and asset_undo_entry_len > 0:
-                    undo_item = asset_undo_info[new_asset_n:new_asset_n+asset_undo_entry_len]
+                    undo_item = asset_undo_info[new_asset_n:new_asset_n + asset_undo_entry_len]
                     if undo_item[:32] == txin.prev_hash and undo_item[32:36] == prev_idx_bytes:
                         put_asset(txin.prev_hash + prev_idx_bytes, undo_item[36:])
                         asset_n = new_asset_n
@@ -755,7 +832,7 @@ class BlockProcessor:
         idx_packed = pack_le_uint32(tx_idx)
         cache_value = self.asset_cache.pop(tx_hash + idx_packed, None)
         if cache_value:
-            return tx_hash+idx_packed+cache_value
+            return tx_hash + idx_packed + cache_value
 
         # Spend it from the DB.
 
@@ -788,10 +865,11 @@ class BlockProcessor:
 
         # Asset doesn't need to be found
         # raise ChainError('UTXO {} / {:,d} not found in "h" table'
-                        # .format(hash_to_hex_str(tx_hash), tx_idx))
+        # .format(hash_to_hex_str(tx_hash), tx_idx))
 
     async def _process_blocks(self):
         '''Loop forever processing blocks as they arrive.'''
+
         async def process_event():
             '''Perform a pending reorg or process prefetched blocks.'''
             if self.reorg_count is not None:

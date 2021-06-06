@@ -246,8 +246,8 @@ class Script(object):
             n = 0
             while n < len(script):
                 op = script[n]
+                op_v = (script[n], n+1)
                 n += 1
-
                 if op <= OpCodes.OP_PUSHDATA4:
                     # Raw bytes follow
                     if op < OpCodes.OP_PUSHDATA1:
@@ -263,10 +263,10 @@ class Script(object):
                         n += 4
                     if n + dlen > len(script):
                         raise IndexError
-                    op = (op, script[n:n + dlen])
+                    op_v = (op, n+dlen, script[n:n + dlen])
                     n += dlen
 
-                ops.append(op)
+                ops.append(op_v)
         except Exception:
             # Truncated script; e.g. tx_hash
             # ebc9fa1196a59e192352d76c0f6e73167046b9d37b8302b6bb6968dfd279b767
