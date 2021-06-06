@@ -70,7 +70,7 @@ SCRIPTS_AUTO = [SCRIPTPUBKEY_TEMPLATE_P2PKH,
                 SCRIPTPUBKEY_TEMPLATE_P2WPKH,
                 SCRIPTPUBKEY_TEMPLATE_P2WSH]
 
-SCRIPTPUBKEY_TEMPLATE_P2PK = [OPPushDataGeneric(lambda x: x == 20), OpCodes.OP_CHECKSIG]
+SCRIPTPUBKEY_TEMPLATE_P2PK = [OPPushDataGeneric(), OpCodes.OP_CHECKSIG]
 ASSET_TEMPLATE = [OpCodes.OP_RVN_ASSET, OPPushDataGeneric(), OpCodes.OP_DROP]
 
 # -1 if doesn't match, positive if does. Indicates index in script
