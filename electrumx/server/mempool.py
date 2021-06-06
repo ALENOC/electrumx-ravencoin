@@ -174,6 +174,7 @@ class MemPool(object):
         self.refresh_secs = refresh_secs
         self.log_status_secs = log_status_secs
 
+        self.write_bad_vouts_to_file = env.write_bad_vouts_to_file
         self.bad_vouts_path = os.path.join(env.db_dir, 'invalid_mem_vouts')
 
     async def _logging(self, synchronized_event):
@@ -337,34 +338,45 @@ class MemPool(object):
                     except ScriptError:  # Bad script
                         continue
 
-                    try:
-                        ctr = match_script_against_template(ops, SCRIPTPUBKEY_TEMPLATE_P2PK)
-                        if ctr > -1:  # Convert old p2pk scripts to p2pkh for db purposes
-                            addr = public_key_to_address(ops[0][2], self.coin.P2PKH_VERBYTE)
-                            hashX = self.coin.address_to_hashX(addr)
+                    # Assume all scripts are valid since they came from a node
+
+                    # This variable represents the op tuple where the OP_RVN_ASSET would be
+                    op_ptr = match_script_against_template(ops, SCRIPTPUBKEY_TEMPLATE_P2PK)
+
+                    if op_ptr > -1:
+                        # This is a P2PK script. Not used in favor of P2PKH. Convert to P2PKH for hashing DB Purposes.
+
+                        # Get the address bytes.
+                        addr_bytes = ops[0][2]
+                        addr = public_key_to_address(addr_bytes, self.coin.P2PKH_VERBYTE)
+                        hashX = self.coin.address_to_hashX(addr)
+                    else:
+                        for i in range(ops):
+                            op = ops[i][0]  # The OpCode
+                            if op == OpCodes.OP_RVN_ASSET:
+                                op_ptr = i
+                                break
+                        if op_ptr > 0:
+                            # This script has OP_RVN_ASSET. Use everything before this for the script hash.
+
+                            # Get the raw script bytes ending ptr from the previous opcode.
+                            script_hash_end = ops[op_ptr - 1][1]
+                            hashX = to_hashX(txout.pk_script[:script_hash_end])
+                        elif op_ptr == 0:
+                            # This is an asset qualifier
+                            # TODO: Implement this
+                            continue
                         else:
-                            for template in SCRIPTS_AUTO:
-                                ctr = match_script_against_template(ops, template)
-                                if ctr > -1:
-                                    break
-                            if ctr < 0:
-                                # segwit address (version 1-16)
-                                future_witness_versions = list(range(OpCodes.OP_1, OpCodes.OP_16 + 1))
-                                for witver, opcode in enumerate(future_witness_versions, start=1):
-                                    match = [opcode, OPPushDataGeneric(lambda x: 2 <= x <= 40)]
-                                    ctr = match_script_against_template(ops, match)
-                                    if ctr > -1:
-                                        break
-                            if ctr < 0:
-                                b = bytearray(tx_hash)
-                                b.reverse()
-                                raise Exception('Unknown script')
+                            # There is no OP_RVN_ASSET. Hash as-is.
+                            hashX = to_hashX(txout.pk_script)
 
-                            hashX = to_hashX(txout.pk_script[:ops[ctr - 1][1]])
+                    # Now try and add asset info
+                    if 0 < op_ptr < len(ops):
+                        assert ops[op_ptr][0] == OpCodes.OP_RVN_ASSET  # Sanity check
+                        try:
+                            # Get the push data from after OP_RVN_ASSET
+                            asset_script = ops[op_ptr + 1][2]
 
-                        ops = ops[ctr:]
-                        if match_script_against_template(ops, ASSET_TEMPLATE) > -1:
-                            asset_script = ops[1][2]
                             asset_deserializer = self.coin.DESERIALIZER(asset_script)
                             op = asset_deserializer._read_byte()
                             if op != b'r'[0]:
@@ -381,21 +393,24 @@ class MemPool(object):
                                 # This is an ownership asset. It does not have any metadata.
                                 # Just assign it with a value of 1
                                 txout_tuple_list.append((hashX, 100_000_000, True, asset_name.decode('ascii')))
+
                             else:  # Not an owner asset; has a sat amount
                                 sats = asset_deserializer._read_le_int64()
+                                if script_type != b't'[0]:
+                                    raise Exception('Unknown asset type: {}'.format(script_type))
                                 txout_tuple_list.append((hashX, sats, True, asset_name.decode('ascii')))
-                        else:
+
+                        except Exception as e:
                             txout_tuple_list.append((hashX, value, False, None))
-                    except Exception as e:
-                        b = bytearray(tx_hash)
-                        b.reverse()
-                        file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
-                        with open(os.path.join(self.bad_vouts_path, file_name), 'w') as f:
-                            f.write('TXID : {}\n'.format(b.hex()))
-                            f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
-                            f.write('Exception : {}\n'.format(repr(e)))
-                        # Assume there is no asset data and hash as-is
-                        hashX = to_hashX(txout.pk_script)
+                            if self.write_bad_vouts_to_file:
+                                b = bytearray(tx_hash)
+                                b.reverse()
+                                file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
+                                with open(os.path.join(self.bad_vouts_path, file_name), 'w') as f:
+                                    f.write('TXID : {}\n'.format(b.hex()))
+                                    f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
+                                    f.write('Exception : {}\n'.format(repr(e)))
+                    else:
                         txout_tuple_list.append((hashX, value, False, None))
 
                 txout_pairs = tuple(txout_tuple_list)
@@ -434,7 +449,7 @@ class MemPool(object):
     async def keep_synchronized(self, synchronized_event):
         '''Keep the mempool synchronized with the daemon.'''
 
-        if not os.path.isdir(self.bad_vouts_path):
+        if self.write_bad_vouts_to_file and not os.path.isdir(self.bad_vouts_path):
             os.mkdir(self.bad_vouts_path)
 
         async with TaskGroup() as group:

@@ -94,6 +94,10 @@ class Env(EnvBase):
             self.ssl_keyfile = self.required('SSL_KEYFILE')
         self.report_services = self.services_to_report()
 
+        # Debug
+
+        self.write_bad_vouts_to_file = self.boolean('WRITE_BAD_VOUTS_TO_FILE', False)
+
     def sane_max_sessions(self):
         '''Return the maximum number of sessions to permit.  Normally this
         is MAX_SESSIONS.  However, to prevent open file exhaustion, ajdust

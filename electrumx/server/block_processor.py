@@ -58,22 +58,8 @@ class OPPushDataGeneric:
                or (isinstance(item, type) and issubclass(item, cls))
 
 
-SCRIPTPUBKEY_TEMPLATE_P2PKH = [OpCodes.OP_DUP, OpCodes.OP_HASH160,
-                               OPPushDataGeneric(lambda x: x == 20),
-                               OpCodes.OP_EQUALVERIFY, OpCodes.OP_CHECKSIG]
-SCRIPTPUBKEY_TEMPLATE_P2SH = [OpCodes.OP_HASH160, OPPushDataGeneric(lambda x: x == 20), OpCodes.OP_EQUAL]
-SCRIPTPUBKEY_TEMPLATE_WITNESS_V0 = [OpCodes.OP_0, OPPushDataGeneric(lambda x: x in (20, 32))]
-SCRIPTPUBKEY_TEMPLATE_P2WPKH = [OpCodes.OP_0, OPPushDataGeneric(lambda x: x == 20)]
-SCRIPTPUBKEY_TEMPLATE_P2WSH = [OpCodes.OP_0, OPPushDataGeneric(lambda x: x == 32)]
-
-SCRIPTS_AUTO = [SCRIPTPUBKEY_TEMPLATE_P2PKH,
-                SCRIPTPUBKEY_TEMPLATE_P2SH,
-                SCRIPTPUBKEY_TEMPLATE_WITNESS_V0,
-                SCRIPTPUBKEY_TEMPLATE_P2WPKH,
-                SCRIPTPUBKEY_TEMPLATE_P2WSH]
-
 SCRIPTPUBKEY_TEMPLATE_P2PK = [OPPushDataGeneric(lambda x: x in (33, 65)), OpCodes.OP_CHECKSIG]
-ASSET_TEMPLATE = [OpCodes.OP_RVN_ASSET, OPPushDataGeneric(), OpCodes.OP_DROP]
+
 
 # -1 if doesn't match, positive if does. Indicates index in script
 def match_script_against_template(script, template) -> int:
@@ -559,34 +545,50 @@ class BlockProcessor:
                 except ScriptError:  # Bad script
                     continue
 
-                try:
-                    ctr = match_script_against_template(ops, SCRIPTPUBKEY_TEMPLATE_P2PK)
-                    if ctr > -1:  # Convert old p2pk scripts to p2pkh for db purposes
-                        addr = public_key_to_address(ops[0][2], self.coin.P2PKH_VERBYTE)
-                        hashX = self.coin.address_to_hashX(addr)
+                # Assume all scripts are valid since they came from a node
+
+                # This variable represents the op tuple where the OP_RVN_ASSET would be
+                op_ptr = match_script_against_template(ops, SCRIPTPUBKEY_TEMPLATE_P2PK)
+
+                if op_ptr > -1:
+                    # This is a P2PK script. Not used in favor of P2PKH. Convert to P2PKH for hashing DB Purposes.
+
+                    # Get the address bytes.
+                    addr_bytes = ops[0][2]
+                    addr = public_key_to_address(addr_bytes, self.coin.P2PKH_VERBYTE)
+                    hashX = self.coin.address_to_hashX(addr)
+                else:
+                    for i in range(ops):
+                        op = ops[i][0]  # The OpCode
+                        if op == OpCodes.OP_RVN_ASSET:
+                            op_ptr = i
+                            break
+                    if op_ptr > 0:
+                        # This script has OP_RVN_ASSET. Use everything before this for the script hash.
+
+                        # Get the raw script bytes ending ptr from the previous opcode.
+                        script_hash_end = ops[op_ptr - 1][1]
+                        hashX = script_hashX(txout.pk_script[:script_hash_end])
+                    elif op_ptr == 0:
+                        # This is an asset qualifier
+                        # TODO: Implement this
+                        continue
                     else:
-                        for template in SCRIPTS_AUTO:
-                            ctr = match_script_against_template(ops, template)
-                            if ctr > -1:
-                                break
-                        if ctr < 0:
-                            # segwit address (version 1-16)
-                            future_witness_versions = list(range(OpCodes.OP_1, OpCodes.OP_16 + 1))
-                            for witver, opcode in enumerate(future_witness_versions, start=1):
-                                match = [opcode, OPPushDataGeneric(lambda x: 2 <= x <= 40)]
-                                ctr = match_script_against_template(ops, match)
-                                if ctr > -1:
-                                    break
-                        if ctr < 0:
-                            b = bytearray(tx_hash)
-                            b.reverse()
-                            raise Exception('Unknown script')
+                        # There is no OP_RVN_ASSET. Hash as-is.
+                        hashX = script_hashX(txout.pk_script)
 
-                        hashX = script_hashX(txout.pk_script[:ops[ctr - 1][1]])
+                # Add UTXO info to the database
+                append_hashX(hashX)
+                put_utxo(tx_hash + to_le_uint32(idx),
+                         hashX + tx_numb + to_le_uint64(txout.value))
 
-                    ops = ops[ctr:]
-                    if match_script_against_template(ops, ASSET_TEMPLATE) > -1:
-                        asset_script = ops[1][2]
+                # Now try and add asset info
+                if 0 < op_ptr < len(ops):
+                    assert ops[op_ptr][0] == OpCodes.OP_RVN_ASSET  # Sanity check
+                    try:
+                        # Get the push data from after OP_RVN_ASSET
+                        asset_script = ops[op_ptr + 1][2]
+
                         asset_deserializer = self.coin.DESERIALIZER(asset_script)
                         op = asset_deserializer._read_byte()
                         if op != b'r'[0]:
@@ -607,9 +609,6 @@ class BlockProcessor:
                                       asset_name)
                         else:  # Not an owner asset; has a sat amount
                             sats = asset_deserializer._read_le_int64()
-                            put_asset(tx_hash + to_le_uint32(idx),
-                                      hashX + tx_numb + to_le_uint64(sats) +
-                                      asset_name)
                             if script_type == b'q'[0]:  # A new asset issuance
                                 divisions = asset_deserializer._read_byte()
                                 reissuable = asset_deserializer._read_byte()
@@ -618,9 +617,13 @@ class BlockProcessor:
                                 if has_meta != b'\0':
                                     asset_data += asset_deserializer._get_meta_raw()
 
+                                # Put DB functions at the end to prevent them from pushing before any errors
                                 put_asset_data_new(asset_name, asset_data)  # Add meta for this asset
                                 asset_meta_undo_info_append(  # Set previous meta to null in case of roll back
                                     len(asset_name).to_bytes(1, 'big') + asset_name + b'\0')
+                                put_asset(tx_hash + to_le_uint32(idx),
+                                          hashX + tx_numb + to_le_uint64(sats) +
+                                          asset_name)
                             elif script_type == b'r'[0]:  # An asset re-issuance
                                 divisions = asset_deserializer._read_byte()
                                 reissuable = asset_deserializer._read_byte()
@@ -647,29 +650,28 @@ class BlockProcessor:
                                     asset_data += b'\x01'
                                     asset_data += asset_deserializer._get_meta_raw()
 
+                                # Put DB functions at the end to prevent them from pushing before any errors
                                 if asset_name[-1] != b'!'[0]:  # Not an ownership asset; send updated meta to clients
                                     self.asset_touched.update(asset_name)
                                 put_asset_data_reissued(asset_name, asset_data)
                                 asset_meta_undo_info_append(
                                     len(asset_name).to_bytes(1, 'big') + asset_name +
                                     len(old_data).to_bytes(1, 'big') + old_data)
+                                put_asset(tx_hash + to_le_uint32(idx),
+                                          hashX + tx_numb + to_le_uint64(sats) +
+                                          asset_name)
                             elif script_type != b't'[0]:
                                 raise Exception('Unknown asset type: {}'.format(script_type))
-                except Exception as e:
-                    b = bytearray(tx_hash)
-                    b.reverse()
-                    name = base_encode(hashlib.md5(tx_hash+txout.pk_script).digest(), 58)
-                    with open(os.path.join(self.bad_vouts_path, name), 'w') as f:
-                        f.write('TXID : {}\n'.format(b.hex()))
-                        f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
-                        f.write('Exception : {}\n'.format(repr(e)))
-                    # Assume there is no asset data and hash as-is
-                    hashX = script_hashX(txout.pk_script)
 
-                # Add UTXO info to the database
-                append_hashX(hashX)
-                put_utxo(tx_hash + to_le_uint32(idx),
-                       hashX + tx_numb + to_le_uint64(txout.value))
+                    except Exception as e:
+                        if self.env.write_bad_vouts_to_file:
+                            b = bytearray(tx_hash)
+                            b.reverse()
+                            file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
+                            with open(os.path.join(self.bad_vouts_path, file_name), 'w') as f:
+                                f.write('TXID : {}\n'.format(b.hex()))
+                                f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
+                                f.write('Exception : {}\n'.format(repr(e)))
 
             append_hashXs(hashXs)
             update_touched(hashXs)
@@ -1012,7 +1014,7 @@ class BlockProcessor:
         could be lost.
         '''
 
-        if not os.path.isdir(self.bad_vouts_path):
+        if self.env.write_bad_vouts_to_file and not os.path.isdir(self.bad_vouts_path):
             os.mkdir(self.bad_vouts_path)
 
         self._caught_up_event = caught_up_event

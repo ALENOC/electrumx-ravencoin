@@ -726,6 +726,7 @@ class DB(object):
         self.logger.info('height: {:,d}'.format(self.db_height))
         self.logger.info('tip: {}'.format(hash_to_hex_str(self.db_tip)))
         self.logger.info('tx count: {:,d}'.format(self.db_tx_count))
+        self.logger.info('VOUT debugging: {}'.format(self.env.write_bad_vouts_to_file))
         if self.utxo_db.for_sync:
             self.logger.info(f'flushing DB cache at {self.env.cache_MB:,d} MB')
         if self.first_sync:
