@@ -663,7 +663,8 @@ class BlockProcessor:
                         f.write('TXID : {}\n'.format(b.hex()))
                         f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
                         f.write('Exception : {}\n'.format(repr(e)))
-                    continue
+                    # Assume there is no asset data and hash as-is
+                    hashX = script_hashX(txout.pk_script)
 
                 # Add UTXO info to the database
                 append_hashX(hashX)

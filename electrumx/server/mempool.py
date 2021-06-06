@@ -394,7 +394,9 @@ class MemPool(object):
                             f.write('TXID : {}\n'.format(b.hex()))
                             f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
                             f.write('Exception : {}\n'.format(repr(e)))
-                        continue
+                        # Assume there is no asset data and hash as-is
+                        hashX = to_hashX(txout.pk_script)
+                        txout_tuple_list.append((hashX, value, False, None))
 
                 txout_pairs = tuple(txout_tuple_list)
                 txs[tx_hash] = MemPoolTx(txin_pairs, None, txout_pairs,
