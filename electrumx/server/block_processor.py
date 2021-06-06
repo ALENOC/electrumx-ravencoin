@@ -9,7 +9,9 @@
 '''Block prefetcher and chain processor.'''
 
 import asyncio
+import hashlib
 import logging
+import os
 import time
 from asyncio import sleep
 from typing import Callable
@@ -20,9 +22,9 @@ import electrumx
 from electrumx.lib.addresses import public_key_to_address
 from electrumx.lib.hash import hash_to_hex_str, HASHX_LEN
 from electrumx.lib.script import is_unspendable_legacy, \
-    is_unspendable_genesis, OpCodes, Script, ScriptPubKey, ScriptError
+    is_unspendable_genesis, OpCodes, Script, ScriptError
 from electrumx.lib.util import (
-    class_logger, pack_le_uint32, pack_le_uint64, unpack_le_uint64
+    class_logger, pack_le_uint32, pack_le_uint64, unpack_le_uint64, base_encode
 )
 from electrumx.server.daemon import DaemonError
 from electrumx.server.db import FlushData
@@ -116,6 +118,8 @@ class Prefetcher:
 
     async def main_loop(self, bp_height):
         '''Loop forever polling for more blocks.'''
+        if not os.path.isdir(self.bad_tx_path):
+            os.mkdir(self.bad_tx_path)
         await self.reset_height(bp_height)
         while True:
             try:
@@ -227,6 +231,8 @@ class BlockProcessor:
         self.db = db
         self.daemon = daemon
         self.notifications = notifications
+
+        self.bad_vouts_path = os.path.join(self.env.db_dir, 'invalid_chain_vouts')
 
         # Set when there is block processing to do, e.g. when new blocks come in, or a
         # reorg is needed.
@@ -566,6 +572,14 @@ class BlockProcessor:
                             if ctr > -1:
                                 break
                         if ctr < 0:
+                            # segwit address (version 1-16)
+                            future_witness_versions = list(range(OpCodes.OP_1, OpCodes.OP_16 + 1))
+                            for witver, opcode in enumerate(future_witness_versions, start=1):
+                                match = [opcode, OPPushDataGeneric(lambda x: 2 <= x <= 40)]
+                                ctr = match_script_against_template(ops, match)
+                                if ctr > -1:
+                                    break
+                        if ctr < 0:
                             b = bytearray(tx_hash)
                             b.reverse()
                             raise Exception('Unknown script')
@@ -643,11 +657,15 @@ class BlockProcessor:
                                     len(old_data).to_bytes(1, 'big') + old_data)
                             elif script_type != b't'[0]:
                                 raise Exception('Unknown asset type: {}'.format(script_type))
-                except:
+                except Exception as e:
                     b = bytearray(tx_hash)
                     b.reverse()
-                    logging.exception('TXID:{} SCRIPT:{}'.format(b.hex(), txout.pk_script.hex()))
-                    raise
+                    name = base_encode(hashlib.md5(tx_hash+txout.pk_script).digest(), 58)
+                    with open(os.path.join(self.bad_vouts_path, name), 'w') as f:
+                        f.write('TXID : {}\n'.format(b.hex()))
+                        f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
+                        f.write('Exception : {}\n'.format(repr(e)))
+                    continue
 
                 # Add UTXO info to the database
                 append_hashX(hashX)
@@ -994,6 +1012,10 @@ class BlockProcessor:
         disk before exiting, as otherwise a significant amount of work
         could be lost.
         '''
+        
+        if not os.path.isdir(self.bad_vouts_path):
+            os.mkdir(self.bad_vouts_path)
+
         self._caught_up_event = caught_up_event
         await self._first_open_dbs()
         try:

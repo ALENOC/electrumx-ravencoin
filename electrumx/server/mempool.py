@@ -6,9 +6,10 @@
 # and warranty status of this software.
 
 '''Mempool handling.'''
-
+import hashlib
 import itertools
 import logging
+import os
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict
@@ -19,10 +20,9 @@ from aiorpcx import TaskGroup, run_in_thread, sleep
 
 from electrumx.lib.addresses import public_key_to_address
 from electrumx.lib.hash import hash_to_hex_str, hex_str_to_hash
-from electrumx.lib.script import OpCodes, ScriptPubKey, ScriptError, Script
-from electrumx.lib.util import class_logger, chunks
+from electrumx.lib.script import OpCodes, ScriptError, Script
+from electrumx.lib.util import class_logger, chunks, base_encode
 from electrumx.server.db import UTXO, ASSET
-
 
 
 class OPPushDataGeneric:
@@ -164,15 +164,17 @@ class MemPool(object):
        hashXs: hashX   -> set of all hashes of txs touching the hashX
     '''
 
-    def __init__(self, coin, api, refresh_secs=5.0, log_status_secs=60.0):
+    def __init__(self, env, api, refresh_secs=5.0, log_status_secs=60.0):
         assert isinstance(api, MemPoolAPI)
-        self.coin = coin
+        self.coin = env.coin
         self.api = api
         self.logger = class_logger(__name__, self.__class__.__name__)
         self.txs = {}
         self.hashXs = defaultdict(set)  # None can be a key
         self.refresh_secs = refresh_secs
         self.log_status_secs = log_status_secs
+
+        self.bad_vouts_path = os.path.join(env.db_dir, 'invalid_mem_vouts')
 
     async def _logging(self, synchronized_event):
         '''Print regular logs of mempool stats.'''
@@ -346,41 +348,53 @@ class MemPool(object):
                                 if ctr > -1:
                                     break
                             if ctr < 0:
+                                # segwit address (version 1-16)
+                                future_witness_versions = list(range(OpCodes.OP_1, OpCodes.OP_16 + 1))
+                                for witver, opcode in enumerate(future_witness_versions, start=1):
+                                    match = [opcode, OPPushDataGeneric(lambda x: 2 <= x <= 40)]
+                                    ctr = match_script_against_template(ops, match)
+                                    if ctr > -1:
+                                        break
+                            if ctr < 0:
                                 b = bytearray(tx_hash)
                                 b.reverse()
                                 raise Exception('Unknown script')
 
                             hashX = to_hashX(txout.pk_script[:ops[ctr - 1][1]])
 
-                            ops = ops[ctr:]
-                            if match_script_against_template(ops, ASSET_TEMPLATE) > -1:
-                                asset_script = ops[1][2]
-                                asset_deserializer = self.coin.DESERIALIZER(asset_script)
-                                op = asset_deserializer._read_byte()
-                                if op != b'r'[0]:
-                                    raise Exception("Expected {}, was {}".format(b'r', op))
-                                op = asset_deserializer._read_byte()
-                                if op != b'v'[0]:
-                                    raise Exception("Expected {}, was {}".format(b'v', op))
-                                op = asset_deserializer._read_byte()
-                                if op != b'n'[0]:
-                                    raise Exception("Expected {}, was {}".format(b'n', op))
-                                script_type = asset_deserializer._read_byte()
-                                asset_name = asset_deserializer._read_varbytes()
-                                if script_type == b'o'[0]:
-                                    # This is an ownership asset. It does not have any metadata.
-                                    # Just assign it with a value of 1
-                                    txout_tuple_list.append((hashX, 100_000_000, True, asset_name.decode('ascii')))
-                                else:  # Not an owner asset; has a sat amount
-                                    sats = asset_deserializer._read_le_int64()
-                                    txout_tuple_list.append((hashX, sats, True, asset_name.decode('ascii')))
-                            else:
-                                txout_tuple_list.append((hashX, value, False, None))
-                    except:
+                        ops = ops[ctr:]
+                        if match_script_against_template(ops, ASSET_TEMPLATE) > -1:
+                            asset_script = ops[1][2]
+                            asset_deserializer = self.coin.DESERIALIZER(asset_script)
+                            op = asset_deserializer._read_byte()
+                            if op != b'r'[0]:
+                                raise Exception("Expected {}, was {}".format(b'r', op))
+                            op = asset_deserializer._read_byte()
+                            if op != b'v'[0]:
+                                raise Exception("Expected {}, was {}".format(b'v', op))
+                            op = asset_deserializer._read_byte()
+                            if op != b'n'[0]:
+                                raise Exception("Expected {}, was {}".format(b'n', op))
+                            script_type = asset_deserializer._read_byte()
+                            asset_name = asset_deserializer._read_varbytes()
+                            if script_type == b'o'[0]:
+                                # This is an ownership asset. It does not have any metadata.
+                                # Just assign it with a value of 1
+                                txout_tuple_list.append((hashX, 100_000_000, True, asset_name.decode('ascii')))
+                            else:  # Not an owner asset; has a sat amount
+                                sats = asset_deserializer._read_le_int64()
+                                txout_tuple_list.append((hashX, sats, True, asset_name.decode('ascii')))
+                        else:
+                            txout_tuple_list.append((hashX, value, False, None))
+                    except Exception as e:
                         b = bytearray(tx_hash)
                         b.reverse()
-                        logging.exception("TXID: {} SCRIPT: {}".format(b.hex(), txout.pk_script.hex()))
-                        raise
+                        file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
+                        with open(os.path.join(self.bad_vouts_path, file_name), 'w') as f:
+                            f.write('TXID : {}\n'.format(b.hex()))
+                            f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
+                            f.write('Exception : {}\n'.format(repr(e)))
+                        continue
 
                 txout_pairs = tuple(txout_tuple_list)
                 txs[tx_hash] = MemPoolTx(txin_pairs, None, txout_pairs,
@@ -417,6 +431,10 @@ class MemPool(object):
 
     async def keep_synchronized(self, synchronized_event):
         '''Keep the mempool synchronized with the daemon.'''
+
+        if not os.path.isdir(self.bad_vouts_path):
+            os.mkdir(self.bad_vouts_path)
+
         async with TaskGroup() as group:
             await group.spawn(self._refresh_hashes(synchronized_event))
             await group.spawn(self._logging(synchronized_event))

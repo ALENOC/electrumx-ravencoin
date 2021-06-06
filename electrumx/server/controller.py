@@ -121,7 +121,7 @@ class Controller(ServerBase):
             notifications.lookup_utxos = db.lookup_utxos
             notifications.lookup_assets = db.lookup_assets
             MemPoolAPI.register(Notifications)
-            mempool = MemPool(env.coin, notifications)
+            mempool = MemPool(env, notifications)
 
             session_mgr = SessionManager(env, db, bp, daemon, mempool,
                                          shutdown_event)
