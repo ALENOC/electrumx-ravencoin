@@ -558,7 +558,7 @@ class BlockProcessor:
                     addr = public_key_to_address(addr_bytes, self.coin.P2PKH_VERBYTE)
                     hashX = self.coin.address_to_hashX(addr)
                 else:
-                    for i in range(ops):
+                    for i in range(len(ops)):
                         op = ops[i][0]  # The OpCode
                         if op == OpCodes.OP_RVN_ASSET:
                             op_ptr = i

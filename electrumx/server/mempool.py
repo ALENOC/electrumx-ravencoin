@@ -8,7 +8,6 @@
 '''Mempool handling.'''
 import hashlib
 import itertools
-import logging
 import os
 import time
 from abc import ABC, abstractmethod
@@ -43,22 +42,7 @@ class OPPushDataGeneric:
                or (isinstance(item, type) and issubclass(item, cls))
 
 
-SCRIPTPUBKEY_TEMPLATE_P2PKH = [OpCodes.OP_DUP, OpCodes.OP_HASH160,
-                               OPPushDataGeneric(lambda x: x == 20),
-                               OpCodes.OP_EQUALVERIFY, OpCodes.OP_CHECKSIG]
-SCRIPTPUBKEY_TEMPLATE_P2SH = [OpCodes.OP_HASH160, OPPushDataGeneric(lambda x: x == 20), OpCodes.OP_EQUAL]
-SCRIPTPUBKEY_TEMPLATE_WITNESS_V0 = [OpCodes.OP_0, OPPushDataGeneric(lambda x: x in (20, 32))]
-SCRIPTPUBKEY_TEMPLATE_P2WPKH = [OpCodes.OP_0, OPPushDataGeneric(lambda x: x == 20)]
-SCRIPTPUBKEY_TEMPLATE_P2WSH = [OpCodes.OP_0, OPPushDataGeneric(lambda x: x == 32)]
-
-SCRIPTS_AUTO = [SCRIPTPUBKEY_TEMPLATE_P2PKH,
-                SCRIPTPUBKEY_TEMPLATE_P2SH,
-                SCRIPTPUBKEY_TEMPLATE_WITNESS_V0,
-                SCRIPTPUBKEY_TEMPLATE_P2WPKH,
-                SCRIPTPUBKEY_TEMPLATE_P2WSH]
-
 SCRIPTPUBKEY_TEMPLATE_P2PK = [OPPushDataGeneric(lambda x: x in (33, 65)), OpCodes.OP_CHECKSIG]
-ASSET_TEMPLATE = [OpCodes.OP_RVN_ASSET, OPPushDataGeneric(), OpCodes.OP_DROP]
 
 
 # -1 if doesn't match, positive if does. Indicates index in script
