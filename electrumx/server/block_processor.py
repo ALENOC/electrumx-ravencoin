@@ -570,10 +570,9 @@ class BlockProcessor:
                         raise Exception('Unknown script: {}'.format(txout.pk_script.hex()))
 
                     print(txout.pk_script.hex())
+                    print(txout.pk_script[:ops[ctr-1][1]].hex())
                     print(ops)
-                    print(ops[ctr])
-                    # print(txout.pk_script[:ops[ctr][1]-1].hex())
-                    # script_hashX(txout.pk_script[:ops[ctr][1]-1])
+                    hashX = script_hashX(txout.pk_script[:ops[ctr-1][1]])
                     raise Exception()
 
                 # Add UTXO info to the database
