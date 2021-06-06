@@ -56,7 +56,6 @@ class OPPushDataGeneric:
                or (isinstance(item, type) and issubclass(item, cls))
 
 
-OPPushDataPubkey = OPPushDataGeneric(lambda x: x in (33, 65))
 SCRIPTPUBKEY_TEMPLATE_P2PKH = [OpCodes.OP_DUP, OpCodes.OP_HASH160,
                                OPPushDataGeneric(lambda x: x == 20),
                                OpCodes.OP_EQUALVERIFY, OpCodes.OP_CHECKSIG]
@@ -65,8 +64,7 @@ SCRIPTPUBKEY_TEMPLATE_WITNESS_V0 = [OpCodes.OP_0, OPPushDataGeneric(lambda x: x 
 SCRIPTPUBKEY_TEMPLATE_P2WPKH = [OpCodes.OP_0, OPPushDataGeneric(lambda x: x == 20)]
 SCRIPTPUBKEY_TEMPLATE_P2WSH = [OpCodes.OP_0, OPPushDataGeneric(lambda x: x == 32)]
 
-SCRIPTS_AUTO = [OPPushDataPubkey,
-                SCRIPTPUBKEY_TEMPLATE_P2PKH,
+SCRIPTS_AUTO = [SCRIPTPUBKEY_TEMPLATE_P2PKH,
                 SCRIPTPUBKEY_TEMPLATE_P2SH,
                 SCRIPTPUBKEY_TEMPLATE_WITNESS_V0,
                 SCRIPTPUBKEY_TEMPLATE_P2WPKH,
