@@ -118,8 +118,6 @@ class Prefetcher:
 
     async def main_loop(self, bp_height):
         '''Loop forever polling for more blocks.'''
-        if not os.path.isdir(self.bad_tx_path):
-            os.mkdir(self.bad_tx_path)
         await self.reset_height(bp_height)
         while True:
             try:
@@ -1012,7 +1010,7 @@ class BlockProcessor:
         disk before exiting, as otherwise a significant amount of work
         could be lost.
         '''
-        
+
         if not os.path.isdir(self.bad_vouts_path):
             os.mkdir(self.bad_vouts_path)
 
