@@ -567,7 +567,9 @@ class BlockProcessor:
                         if ctr > -1:
                             break
                     if ctr < 0:
-                        raise Exception('Unknown script: {}'.format(txout.pk_script.hex()))
+                        b = bytearray(tx_hash)
+                        b = b.reverse()
+                        raise Exception('Unknown script: {} from txid: {}'.format(txout.pk_script.hex(), b.hex()))
 
                     hashX = script_hashX(txout.pk_script[:ops[ctr-1][1]])
 
