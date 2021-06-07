@@ -669,7 +669,7 @@ class BlockProcessor:
                         # Just assign it with a value of 1
                         put_asset(tx_hash + to_le_uint32(idx),
                                   hashX + tx_numb + to_le_uint64(100_000_000) +
-                                  asset_name)
+                                  bytes([len(asset_name)]) + asset_name)
                     else:  # Not an owner asset; has a sat amount
                         sats = asset_deserializer._read_le_int64()
                         if script_type == b'q'[0]:  # A new asset issuance
@@ -686,7 +686,7 @@ class BlockProcessor:
                                 len(asset_name).to_bytes(1, 'big') + asset_name + b'\0')
                             put_asset(tx_hash + to_le_uint32(idx),
                                       hashX + tx_numb + to_le_uint64(sats) +
-                                      asset_name)
+                                      bytes([len(asset_name)]) + asset_name)
                         elif script_type == b'r'[0]:  # An asset re-issuance
                             divisions = asset_deserializer._read_byte()
                             reissuable = asset_deserializer._read_byte()
@@ -722,12 +722,12 @@ class BlockProcessor:
                                 len(old_data).to_bytes(1, 'big') + old_data)
                             put_asset(tx_hash + to_le_uint32(idx),
                                       hashX + tx_numb + to_le_uint64(sats) +
-                                      asset_name)
+                                      bytes([len(asset_name)]) + asset_name)
                         elif script_type == b't'[0]:
                             # Put DB functions at the end to prevent them from pushing before any errors
                             put_asset(tx_hash + to_le_uint32(idx),
                                       hashX + tx_numb + to_le_uint64(sats) +
-                                      asset_name)
+                                      bytes([len(asset_name)]) + asset_name)
                         else:
                             raise Exception('Unknown asset type: {}'.format(script_type))
 
@@ -747,7 +747,7 @@ class BlockProcessor:
                         # Just assign it with a value of 1
                         put_asset(tx_hash + to_le_uint32(idx),
                                   hashX + tx_numb + to_le_uint64(100_000_000) +
-                                  asset_name)
+                                  bytes([len(asset_name)]) + asset_name)
                     else:  # Not an owner asset; has a sat amount
                         sat_b = script[:8]
                         script = script[8:]
@@ -769,7 +769,7 @@ class BlockProcessor:
                                 len(asset_name).to_bytes(1, 'big') + asset_name + b'\0')
                             put_asset(tx_hash + to_le_uint32(idx),
                                       hashX + tx_numb + to_le_uint64(sats) +
-                                      asset_name)
+                                      bytes([len(asset_name)]) + asset_name)
                         elif asset_script_type == b'r'[0]:  # An asset re-issuance
                             divisions = script[0]
                             script = script[1:]
@@ -807,12 +807,12 @@ class BlockProcessor:
                                 len(old_data).to_bytes(1, 'big') + old_data)
                             put_asset(tx_hash + to_le_uint32(idx),
                                       hashX + tx_numb + to_le_uint64(sats) +
-                                      asset_name)
+                                      bytes([len(asset_name)]) + asset_name)
                         elif asset_script_type == b't'[0]:
                             # Put DB functions at the end to prevent them from pushing before any errors
                             put_asset(tx_hash + to_le_uint32(idx),
                                       hashX + tx_numb + to_le_uint64(sats) +
-                                      asset_name)
+                                      bytes([len(asset_name)]) + asset_name)
                         else:
                             raise Exception('Unknown asset type: {}'.format(asset_script_type))
 
@@ -947,7 +947,6 @@ class BlockProcessor:
         # 32 + 4 + HASHX_LEN BYTES + 5 BYTES + 8 BYTES + 1 BYTE + VAR BYTES
         def find_asset_undo_len(max):
             assert max <= len(asset_undo_info)
-            print(asset_undo_info)
             if max == 0:
                 return 0
             else:
@@ -961,8 +960,6 @@ class BlockProcessor:
                     if next_data >= max:
                         break
                     last_val_ptr += val_len(last_val_ptr)
-                print(next_data)
-                print(max)
                 assert next_data == max
                 return max - last_val_ptr
 
