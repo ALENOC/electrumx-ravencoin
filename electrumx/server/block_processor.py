@@ -526,7 +526,7 @@ class BlockProcessor:
             hashXs = []
             append_hashX = hashXs.append
             tx_numb = to_le_uint64(tx_num)[:5]
-
+            is_asset = False
             # Spend the inputs
             for txin in tx.inputs:
                 if txin.is_generation():  # Don't spend block rewards
@@ -614,7 +614,7 @@ class BlockProcessor:
                         hashX = script_hashX(txout.pk_script[:script_hash_end])
                     elif op_ptr == 0:
                         # This is an asset qualifier
-                        # These are verifiably unspendable
+                        # These are verifiably unspendable(?)
                         if match_script_against_template(ops, ASSET_NULL_TEMPLATE) > -1:
                             h160 = ops[1][2]
                             asset_portion = ops[2][2]
@@ -843,12 +843,12 @@ class BlockProcessor:
 
                         asset_deserializer = self.coin.DESERIALIZER(asset_script)
                         try_parse_asset(asset_deserializer)
-                        asset_num += 1
+                        is_asset = True
 
                     except:
                         try:
                             try_parse_asset_iterative(txout.pk_script[ops[op_ptr][1]:])
-                            asset_num += 1
+                            is_asset = True
                         except Exception as e:
                             if self.env.write_bad_vouts_to_file:
                                 b = bytearray(tx_hash)
@@ -864,6 +864,8 @@ class BlockProcessor:
             append_hashXs(hashXs)
             update_touched(hashXs)
             tx_num += 1
+            if is_asset:
+                asset_num += 1
 
         self.db.history.add_unflushed(hashXs_by_tx, self.tx_count)
 
@@ -950,8 +952,8 @@ class BlockProcessor:
                 return 0
             else:
                 def val_len(ptr):
-                    name_len = asset_undo_info[ptr + HASHX_LEN + 13 + 32 + 4]
-                    return name_len + HASHX_LEN + 14 + 32 + 4
+                    name_len = asset_undo_info[ptr + 4 + HASHX_LEN + 13 + 32 + 4]
+                    return name_len + 4 + HASHX_LEN + 14 + 32 + 4
 
                 last_val_ptr = 0
                 while True:

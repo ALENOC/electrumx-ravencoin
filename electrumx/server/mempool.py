@@ -316,8 +316,56 @@ class MemPool(object):
                 for txout in tx.outputs:
                     value = txout.value
 
-                    hashX = to_hashX(txout.pk_script)
-                    txout_tuple_list.append((hashX, value, False, None))
+                    # Best effort for standard scripts
+                    ops = Script.get_ops(txout.pk_script)
+                    if ops[0][0] == -1:
+                        continue
+
+                    op_ptr = -1
+                    invalid_script = False
+                    for i in range(len(ops)):
+                        op = ops[i][0]  # The OpCode
+                        if op == OpCodes.OP_RVN_ASSET:
+                            op_ptr = i
+                            break
+                        if op == -1:
+                            invalid_script = True
+                            break
+
+                    if invalid_script:
+                        continue
+
+                    if op_ptr > 0:
+                        # This script has OP_RVN_ASSET. Use everything before this for the script hash.
+                        # Get the raw script bytes ending ptr from the previous opcode.
+                        script_hash_end = ops[op_ptr - 1][1]
+                        hashX = to_hashX(txout.pk_script[:script_hash_end])
+                    elif op_ptr == 0:
+                        continue
+                    else:
+                        # There is no OP_RVN_ASSET. Hash as-is.
+                        hashX = to_hashX(txout.pk_script)
+
+                    # Best effort for standard asset portions
+                    if 0 < op_ptr < len(ops):
+                        try:
+                            next_op = ops[op_ptr + 1]
+                            asset_script = next_op[2]
+                            asset_deserializer = self.coin.DESERIALIZER(asset_script)
+                            asset_deserializer._read_byte()
+                            asset_deserializer._read_byte()
+                            asset_deserializer._read_byte()
+                            asset_type = asset_deserializer._read_byte()
+                            asset_name = asset_deserializer._read_varbytes()
+                            if asset_type == b'o'[0]:
+                                txout_tuple_list.append((hashX, 100_000_000, True, asset_name))
+                            else:
+                                value = asset_deserializer._read_le_int64()
+                                txout_tuple_list.append((hashX, value, True, asset_name))
+                        except:
+                            continue
+                    else:
+                        txout_tuple_list.append((hashX, value, False, None))
 
                 txout_pairs = tuple(txout_tuple_list)
                 txs[tx_hash] = MemPoolTx(txin_pairs, None, txout_pairs,
