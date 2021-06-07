@@ -25,8 +25,7 @@
 # and warranty status of this software.
 
 '''Script-related classes and functions.'''
-
-
+import struct
 from enum import IntEnum
 from electrumx.lib.util import unpack_le_uint16_from, unpack_le_uint32_from, \
     pack_le_uint16, pack_le_uint32
@@ -274,7 +273,7 @@ class Script(object):
                     n += dlen
 
                 ops.append(op_v)
-        except IndexError:
+        except (IndexError, struct.error):
             # n - 1 because we read a byte first
             ops.append((-1, len(script), script[n-1:]))
 
