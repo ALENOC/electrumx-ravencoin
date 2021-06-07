@@ -652,9 +652,9 @@ class BlockProcessor:
                             asset_script_deserializer = self.coin.DESERIALIZER(next_op[2])
                             asset_script = asset_script_deserializer._read_varbytes()
                         elif len(ops) > op_ptr + 4 and \
-                                ops[op_ptr + 2] == b'r'[0] and \
-                                ops[op_ptr + 3] == b'v'[0] and \
-                                ops[op_ptr + 4] == b'n'[0]:
+                                ops[op_ptr + 2][0] == b'r'[0] and \
+                                ops[op_ptr + 3][0] == b'v'[0] and \
+                                ops[op_ptr + 4][0] == b'n'[0]:
                             asset_script_portion = txout.pk_script[ops[op_ptr][1]:]
                             asset_script_deserializer = self.coin.DESERIALIZER(asset_script_portion)
                             asset_script = asset_script_deserializer._read_varbytes()
