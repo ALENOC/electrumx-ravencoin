@@ -947,13 +947,13 @@ class BlockProcessor:
         # 32 + 4 + HASHX_LEN BYTES + 5 BYTES + 8 BYTES + 1 BYTE + VAR BYTES
         def find_asset_undo_len(max):
             assert max <= len(asset_undo_info)
-
+            print(asset_undo_info)
             if max == 0:
                 return 0
             else:
                 def val_len(ptr):
-                    name_len = asset_undo_info[ptr + 4 + HASHX_LEN + 13 + 32 + 4]
-                    return name_len + 4 + HASHX_LEN + 14 + 32 + 4
+                    name_len = asset_undo_info[ptr + 32 + 4 + HASHX_LEN + 5 + 8]
+                    return name_len + 32 + 4 + HASHX_LEN + 5 + 8 + 1
 
                 last_val_ptr = 0
                 while True:
@@ -961,6 +961,8 @@ class BlockProcessor:
                     if next_data >= max:
                         break
                     last_val_ptr += val_len(last_val_ptr)
+                print(next_data)
+                print(max)
                 assert next_data == max
                 return max - last_val_ptr
 
