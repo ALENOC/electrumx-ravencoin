@@ -61,6 +61,7 @@ class OPPushDataGeneric:
 
 SCRIPTPUBKEY_TEMPLATE_P2PK = [OPPushDataGeneric(lambda x: x in (33, 65)), OpCodes.OP_CHECKSIG]
 
+ASSET_NULL_TEMPLATE = [OpCodes.OP_RVN_ASSET, OPPushDataGeneric(lambda x: x == 20), OPPushDataGeneric()]
 
 # -1 if doesn't match, positive if does. Indicates index in script
 def match_script_against_template(script, template) -> int:
@@ -563,6 +564,7 @@ class BlockProcessor:
                         with open(os.path.join(self.bad_vouts_path, 'BADOPS' + file_name), 'w') as f:
                             f.write('TXID : {}\n'.format(b.hex()))
                             f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
+                            f.write('OPS : {}\n'.format(str(ops)))
                     continue
 
                 # This variable represents the op tuple where the OP_RVN_ASSET would be
@@ -587,7 +589,7 @@ class BlockProcessor:
                             break
 
                     if invalid_script:
-                        # This script could not be parsed before any OP_RVN_ASSETs.
+                        # This script could not be parsed properly before any OP_RVN_ASSETs.
                         # Hash as-is for possible spends and continue.
                         hashX = script_hashX(txout.pk_script)
                         append_hashX(hashX)
@@ -600,6 +602,7 @@ class BlockProcessor:
                             with open(os.path.join(self.bad_vouts_path, 'BADOPS' + file_name), 'w') as f:
                                 f.write('TXID : {}\n'.format(b.hex()))
                                 f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
+                                f.write('OPS : {}\n'.format(str(ops)))
                         continue
 
                     if op_ptr > 0:
@@ -609,12 +612,26 @@ class BlockProcessor:
                         hashX = script_hashX(txout.pk_script[:script_hash_end])
                     elif op_ptr == 0:
                         # This is an asset qualifier
-                        # TODO: How to implement this?
-                        # Just hash and continue for now
-                        hashX = script_hashX(txout.pk_script)
-                        append_hashX(hashX)
-                        put_utxo(tx_hash + to_le_uint32(idx),
-                                 hashX + tx_numb + to_le_uint64(txout.value))
+                        # These are verifiably unspendable
+                        if match_script_against_template(ops, ASSET_NULL_TEMPLATE) > -1:
+                            h160 = ops[1][2]
+                            asset_portion = ops[2][2]
+                            asset_portion_deserializer = self.coin.DESERIALIZER(asset_portion)
+                            try:
+                                asset_name = asset_portion_deserializer._read_varbytes()
+                                flag = asset_portion._read_byte()
+                                # TODO: Implement an asset qualifier DB
+                            except:
+                                pass
+                        else:
+                            if self.env.write_bad_vouts_to_file:
+                                b = bytearray(tx_hash)
+                                b.reverse()
+                                file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
+                                with open(os.path.join(self.bad_vouts_path, 'NULLASSET' + file_name), 'w') as f:
+                                    f.write('TXID : {}\n'.format(b.hex()))
+                                    f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
+                                    f.write('OPS : {}\n'.format(str(ops)))
                         continue
                     else:
                         # There is no OP_RVN_ASSET. Hash as-is.
@@ -634,10 +651,11 @@ class BlockProcessor:
                             # This contains the raw data. Deserialize.
                             asset_script_deserializer = self.coin.DESERIALIZER(next_op[2])
                             asset_script = asset_script_deserializer._read_varbytes()
-                        elif ops[op_ptr + 2] == b'r'[0] and \
+                        elif len(ops) > op_ptr + 4 and \
+                                ops[op_ptr + 2] == b'r'[0] and \
                                 ops[op_ptr + 3] == b'v'[0] and \
                                 ops[op_ptr + 4] == b'n'[0]:
-                            asset_script_portion = txout.pk_script[next_op[1]:]
+                            asset_script_portion = txout.pk_script[ops[op_ptr][1]:]
                             asset_script_deserializer = self.coin.DESERIALIZER(asset_script_portion)
                             asset_script = asset_script_deserializer._read_varbytes()
                         else:
