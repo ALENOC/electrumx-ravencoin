@@ -540,29 +540,30 @@ class BlockProcessor:
                 if is_unspendable(txout.pk_script):
                     continue
 
-                # deserialize the script pubkey
-                try:
-                    ops = Script.get_ops(txout.pk_script)
-                except ScriptError:  # Bad script
-                    # TODO: REMOVE
-                    if self.env.write_bad_vouts_to_file:
-                        b = bytearray(tx_hash)
-                        b.reverse()
-                        file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
-                        with open(os.path.join(self.bad_vouts_path, 'BADOPS'+file_name), 'w') as f:
-                            f.write('TXID : {}\n'.format(b.hex()))
-                            f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
-                    #TODO: THIS
+                # Many scripts are malformed. This is very problematic...
+                # We cannot assume scripts are valid just because they are from a node
+                # We need to check for:
+                # Bitcoin PUSHOPs
+                # Standard VARINTs
 
-                    # TODO: This is just to put a proper coin in the db for later use
+                # deserialize the script pubkey
+                ops = Script.get_ops(txout.pk_script)
+
+                if ops[0][0] == -1:
+                    # Quick check for invalid script.
+                    # Hash as-is for possible spends and continue.
                     hashX = script_hashX(txout.pk_script)
                     append_hashX(hashX)
                     put_utxo(tx_hash + to_le_uint32(idx),
                              hashX + tx_numb + to_le_uint64(txout.value))
-
+                    if self.env.write_bad_vouts_to_file:
+                        b = bytearray(tx_hash)
+                        b.reverse()
+                        file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
+                        with open(os.path.join(self.bad_vouts_path, 'BADOPS' + file_name), 'w') as f:
+                            f.write('TXID : {}\n'.format(b.hex()))
+                            f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
                     continue
-
-                # Assume all scripts are valid since they came from a node
 
                 # This variable represents the op tuple where the OP_RVN_ASSET would be
                 op_ptr = match_script_against_template(ops, SCRIPTPUBKEY_TEMPLATE_P2PK)
@@ -575,38 +576,45 @@ class BlockProcessor:
                     addr = public_key_to_address(addr_bytes, self.coin.P2PKH_VERBYTE)
                     hashX = self.coin.address_to_hashX(addr)
                 else:
+                    invalid_script = False
                     for i in range(len(ops)):
                         op = ops[i][0]  # The OpCode
                         if op == OpCodes.OP_RVN_ASSET:
                             op_ptr = i
                             break
+                        if op == -1:
+                            invalid_script = True
+                            break
+
+                    if invalid_script:
+                        # This script could not be parsed before any OP_RVN_ASSETs.
+                        # Hash as-is for possible spends and continue.
+                        hashX = script_hashX(txout.pk_script)
+                        append_hashX(hashX)
+                        put_utxo(tx_hash + to_le_uint32(idx),
+                                 hashX + tx_numb + to_le_uint64(txout.value))
+                        if self.env.write_bad_vouts_to_file:
+                            b = bytearray(tx_hash)
+                            b.reverse()
+                            file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
+                            with open(os.path.join(self.bad_vouts_path, 'BADOPS' + file_name), 'w') as f:
+                                f.write('TXID : {}\n'.format(b.hex()))
+                                f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
+                        continue
+
                     if op_ptr > 0:
                         # This script has OP_RVN_ASSET. Use everything before this for the script hash.
-
                         # Get the raw script bytes ending ptr from the previous opcode.
                         script_hash_end = ops[op_ptr - 1][1]
                         hashX = script_hashX(txout.pk_script[:script_hash_end])
                     elif op_ptr == 0:
                         # This is an asset qualifier
-                        # TODO: Implement this
-
-                        # TODO: REMOVE
-                        if self.env.write_bad_vouts_to_file:
-                            b = bytearray(tx_hash)
-                            b.reverse()
-                            file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
-                            with open(os.path.join(self.bad_vouts_path, 'NULLASSET' + file_name), 'w') as f:
-                                f.write('TXID : {}\n'.format(b.hex()))
-                                f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
-                                f.write('OpCodes : {}\n'.format(str(ops)))
-                        # TODO: THIS
-
-                        # TODO: This is just to put a proper coin in the db for later use
+                        # TODO: How to implement this?
+                        # Just hash and continue for now
                         hashX = script_hashX(txout.pk_script)
                         append_hashX(hashX)
                         put_utxo(tx_hash + to_le_uint32(idx),
                                  hashX + tx_numb + to_le_uint64(txout.value))
-
                         continue
                     else:
                         # There is no OP_RVN_ASSET. Hash as-is.
@@ -622,39 +630,18 @@ class BlockProcessor:
                     assert ops[op_ptr][0] == OpCodes.OP_RVN_ASSET  # Sanity check
                     try:
                         next_op = ops[op_ptr + 1]
-                        if next_op[0] >= OpCodes.OP_PUSHDATA1:
-                            try:
-                                if ops[op_ptr+2][0] == b'r'[0] and \
-                                        ops[op_ptr+3][0] == b'v'[0] and \
-                                        ops[op_ptr+4][0] == b'n'[0]:
-                                    # The length is encoded by only 1 byte.
-                                    # This is a deprecated varint after OP_RVN_ASSET.
-                                    # Get the vout script from right after OP_RVN_ASSET.
-                                    var_et_al = txout.pk_script[ops[op_ptr][1]:]
-                                    asset_script_deserializer = self.coin.DESERIALIZER(var_et_al)
-                                    # Get the asset script bytes.
-                                    asset_script = asset_script_deserializer._read_var_bytes()
-                                    # TODO: REMOVE
-                                    if self.env.write_bad_vouts_to_file:
-                                        b = bytearray(tx_hash)
-                                        b.reverse()
-                                        file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
-                                        with open(os.path.join(self.bad_vouts_path, 'VARINT'+file_name), 'w') as f:
-                                            f.write('TXID : {}\n'.format(b.hex()))
-                                            f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
-                                            f.write('OpCodes : {}\n'.format(str(ops)))
-                                    # TODO: THIS
-                                else:
-                                    # This is a good OP_PUSH
-                                    # Get the push data from after OP_RVN_ASSET
-                                    asset_script = next_op[2]
-                            except:
-                                # This is a good OP_PUSH
-                                # Get the push data from after OP_RVN_ASSET
-                                asset_script = next_op[2]
+                        if next_op[0] == -1:
+                            # This contains the raw data. Deserialize.
+                            asset_script_deserializer = self.coin.DESERIALIZER(next_op[2])
+                            asset_script = asset_script_deserializer._read_varbytes()
+                        elif ops[op_ptr + 2] == b'r'[0] and \
+                                ops[op_ptr + 3] == b'v'[0] and \
+                                ops[op_ptr + 4] == b'n'[0]:
+                            asset_script_portion = txout.pk_script[next_op[1]:]
+                            asset_script_deserializer = self.coin.DESERIALIZER(asset_script_portion)
+                            asset_script = asset_script_deserializer._read_varbytes()
                         else:
-                            # This is a good OP_PUSH
-                            # Get the push data from after OP_RVN_ASSET
+                            # Hurray! This is a properly formatted asset script
                             asset_script = next_op[2]
 
                         asset_deserializer = self.coin.DESERIALIZER(asset_script)

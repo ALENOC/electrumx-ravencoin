@@ -239,11 +239,16 @@ class Script(object):
 
     @classmethod
     def get_ops(cls, script):
+        '''
+        Returns a tuple list of (op_code, index of next op in script, pushed bytes if any)
+
+        If at any point the script fails do decode, a tuple of (-1, len(script), remaining script) is appended
+        '''
         ops = []
 
-        # The unpacks or script[n] below throw on truncated scripts
+        # The unpacks or script[n]
+        n = 0
         try:
-            n = 0
             while n < len(script):
                 op = script[n]
                 op_v = (script[n], n+1)
@@ -252,25 +257,26 @@ class Script(object):
                     # Raw bytes follow
                     if op < OpCodes.OP_PUSHDATA1:
                         dlen = op
+                        n1 = 0
                     elif op == OpCodes.OP_PUSHDATA1:
                         dlen = script[n]
-                        n += 1
+                        n1 = 1
                     elif op == OpCodes.OP_PUSHDATA2:
                         dlen, = unpack_le_uint16_from(script[n: n + 2])
-                        n += 2
+                        n1 = 2
                     else:
                         dlen, = unpack_le_uint32_from(script[n: n + 4])
-                        n += 4
-                    if n + dlen > len(script):
+                        n1 = 4
+                    if n + n1 + dlen > len(script):
                         raise IndexError
+                    n += n1
                     op_v = (op, n+dlen, script[n:n + dlen])
                     n += dlen
 
                 ops.append(op_v)
-        except Exception:
-            # Truncated script; e.g. tx_hash
-            # ebc9fa1196a59e192352d76c0f6e73167046b9d37b8302b6bb6968dfd279b767
-            raise ScriptError('truncated script') from None
+        except IndexError:
+            # n - 1 because we read a byte first
+            ops.append((-1, len(script), script[n-1:]))
 
         return ops
 

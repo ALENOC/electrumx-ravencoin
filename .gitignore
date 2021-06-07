@@ -14,3 +14,4 @@ docs/_build
 .vscode/
 .mypy_cache/
 .idea/
+test_get_ops.py
