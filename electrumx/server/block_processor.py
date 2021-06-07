@@ -62,6 +62,8 @@ class OPPushDataGeneric:
 SCRIPTPUBKEY_TEMPLATE_P2PK = [OPPushDataGeneric(lambda x: x in (33, 65)), OpCodes.OP_CHECKSIG]
 
 ASSET_NULL_TEMPLATE = [OpCodes.OP_RVN_ASSET, OPPushDataGeneric(lambda x: x == 20), OPPushDataGeneric()]
+ASSET_NULL_VERIFIER_TEMPLATE = [OpCodes.OP_RVN_ASSET, OpCodes.OP_RESERVED, OPPushDataGeneric()]
+ASSET_GLOBAL_RESTRICTION_TEMPLATE = [OpCodes.OP_RVN_ASSET, OpCodes.OP_RESERVED, OpCodes.OP_RESERVED, OPPushDataGeneric()]
 
 # -1 if doesn't match, positive if does. Indicates index in script
 def match_script_against_template(script, template) -> int:
@@ -623,6 +625,12 @@ class BlockProcessor:
                                 # TODO: Implement an asset qualifier DB
                             except:
                                 pass
+                        elif match_script_against_template(ops, ASSET_NULL_VERIFIER_TEMPLATE) > -1:
+                            # TODO: Implement
+                            pass
+                        elif match_script_against_template(ops, ASSET_GLOBAL_RESTRICTION_TEMPLATE) > -1:
+                            # TODO: Implement
+                            pass
                         else:
                             if self.env.write_bad_vouts_to_file:
                                 b = bytearray(tx_hash)
@@ -643,6 +651,177 @@ class BlockProcessor:
                          hashX + tx_numb + to_le_uint64(txout.value))
 
                 # Now try and add asset info
+                # TODO: SEE IF THERE IS ANYTHING BETTER TO DO FROM HERE
+                def try_parse_asset(asset_deserializer):
+                    op = asset_deserializer._read_byte()
+                    if op != b'r'[0]:
+                        raise Exception("Expected {}, was {}".format(b'r', op))
+                    op = asset_deserializer._read_byte()
+                    if op != b'v'[0]:
+                        raise Exception("Expected {}, was {}".format(b'v', op))
+                    op = asset_deserializer._read_byte()
+                    if op != b'n'[0]:
+                        raise Exception("Expected {}, was {}".format(b'n', op))
+                    script_type = asset_deserializer._read_byte()
+                    asset_name = asset_deserializer._read_varbytes()
+                    if script_type == b'o'[0]:
+                        # This is an ownership asset. It does not have any metadata.
+                        # Just assign it with a value of 1
+                        put_asset(tx_hash + to_le_uint32(idx),
+                                  hashX + tx_numb + to_le_uint64(100_000_000) +
+                                  asset_name)
+                    else:  # Not an owner asset; has a sat amount
+                        sats = asset_deserializer._read_le_int64()
+                        if script_type == b'q'[0]:  # A new asset issuance
+                            divisions = asset_deserializer._read_byte()
+                            reissuable = asset_deserializer._read_byte()
+                            has_meta = asset_deserializer._read_byte()
+                            asset_data = bytes([divisions, reissuable, has_meta])
+                            if has_meta != b'\0':
+                                asset_data += asset_deserializer._get_meta_raw()
+
+                            # Put DB functions at the end to prevent them from pushing before any errors
+                            put_asset_data_new(asset_name, asset_data)  # Add meta for this asset
+                            asset_meta_undo_info_append(  # Set previous meta to null in case of roll back
+                                len(asset_name).to_bytes(1, 'big') + asset_name + b'\0')
+                            put_asset(tx_hash + to_le_uint32(idx),
+                                      hashX + tx_numb + to_le_uint64(sats) +
+                                      asset_name)
+                        elif script_type == b'r'[0]:  # An asset re-issuance
+                            divisions = asset_deserializer._read_byte()
+                            reissuable = asset_deserializer._read_byte()
+
+                            # Quicker check, but it's far more likely to be in the db
+                            old_data = self.asset_data_new.pop(asset_name, None)
+                            if old_data is None:
+                                old_data = self.asset_data_reissued.pop(asset_name, None)
+                            if old_data is None:
+                                old_data = self.db.asset_info_db.get(asset_name)
+                            assert old_data is not None  # If reissuing, we should have it
+
+                            asset_data = b''
+
+                            if divisions == 0xff:  # Unchanged division amount
+                                asset_data += old_data[0].to_bytes(1, 'big')
+                            else:
+                                asset_data += divisions.to_bytes(1, 'big')
+                            asset_data += reissuable.to_bytes(1, 'big')
+                            if asset_deserializer.cursor == asset_deserializer.binary_length:
+                                # No more data
+                                asset_data += b'\0'
+                            else:
+                                asset_data += b'\x01'
+                                asset_data += asset_deserializer._get_meta_raw()
+
+                            # Put DB functions at the end to prevent them from pushing before any errors
+                            if asset_name[-1] != b'!'[0]:  # Not an ownership asset; send updated meta to clients
+                                self.asset_touched.update(asset_name)
+                            put_asset_data_reissued(asset_name, asset_data)
+                            asset_meta_undo_info_append(
+                                len(asset_name).to_bytes(1, 'big') + asset_name +
+                                len(old_data).to_bytes(1, 'big') + old_data)
+                            put_asset(tx_hash + to_le_uint32(idx),
+                                      hashX + tx_numb + to_le_uint64(sats) +
+                                      asset_name)
+                        elif script_type == b't'[0]:
+                            # Put DB functions at the end to prevent them from pushing before any errors
+                            put_asset(tx_hash + to_le_uint32(idx),
+                                      hashX + tx_numb + to_le_uint64(sats) +
+                                      asset_name)
+                        else:
+                            raise Exception('Unknown asset type: {}'.format(script_type))
+
+                def try_parse_asset_iterative(script: bytes):
+                    while script[:3] != b'rvn' and len(script) > 0:
+                        script = script[1:]
+                    assert script[:3] == b'rvn'
+                    script = script[3:]
+                    asset_script_type = script[0]
+                    script = script[1:]
+                    asset_name_length = script[0]
+                    script = script[1:]
+                    asset_name = script[:asset_name_length]
+                    script = script[asset_name_length:]
+                    if asset_script_type == b'o'[0]:
+                        # This is an ownership asset. It does not have any metadata.
+                        # Just assign it with a value of 1
+                        put_asset(tx_hash + to_le_uint32(idx),
+                                  hashX + tx_numb + to_le_uint64(100_000_000) +
+                                  asset_name)
+                    else:  # Not an owner asset; has a sat amount
+                        sat_b = script[:8]
+                        script = script[8:]
+                        sats = to_le_uint64(sat_b)
+                        if asset_script_type == b'q'[0]:  # A new asset issuance
+                            divisions = script[0]
+                            script = script[1:]
+                            reissuable = script[0]
+                            script = script[1:]
+                            has_meta = script[0]
+                            script = script[1:]
+                            asset_data = bytes([divisions, reissuable, has_meta])
+                            if has_meta != b'\0':
+                                asset_data += script[:34]
+
+                            # Put DB functions at the end to prevent them from pushing before any errors
+                            put_asset_data_new(asset_name, asset_data)  # Add meta for this asset
+                            asset_meta_undo_info_append(  # Set previous meta to null in case of roll back
+                                len(asset_name).to_bytes(1, 'big') + asset_name + b'\0')
+                            put_asset(tx_hash + to_le_uint32(idx),
+                                      hashX + tx_numb + to_le_uint64(sats) +
+                                      asset_name)
+                        elif asset_script_type == b'r'[0]:  # An asset re-issuance
+                            divisions = script[0]
+                            script = script[1:]
+                            reissuable = script[0]
+                            script = script[1:]
+
+                            # Quicker check, but it's far more likely to be in the db
+                            old_data = self.asset_data_new.pop(asset_name, None)
+                            if old_data is None:
+                                old_data = self.asset_data_reissued.pop(asset_name, None)
+                            if old_data is None:
+                                old_data = self.db.asset_info_db.get(asset_name)
+                            assert old_data is not None  # If reissuing, we should have it
+
+                            asset_data = b''
+
+                            if divisions == 0xff:  # Unchanged division amount
+                                asset_data += old_data[0].to_bytes(1, 'big')
+                            else:
+                                asset_data += divisions.to_bytes(1, 'big')
+                            asset_data += reissuable.to_bytes(1, 'big')
+                            if len(script) < 34:
+                                # No more data
+                                asset_data += b'\0'
+                            else:
+                                asset_data += b'\x01'
+                                asset_data += script[:34]
+
+                            # Put DB functions at the end to prevent them from pushing before any errors
+                            if asset_name[-1] != b'!'[0]:  # Not an ownership asset; send updated meta to clients
+                                self.asset_touched.update(asset_name)
+                            put_asset_data_reissued(asset_name, asset_data)
+                            asset_meta_undo_info_append(
+                                len(asset_name).to_bytes(1, 'big') + asset_name +
+                                len(old_data).to_bytes(1, 'big') + old_data)
+                            put_asset(tx_hash + to_le_uint32(idx),
+                                      hashX + tx_numb + to_le_uint64(sats) +
+                                      asset_name)
+                        elif asset_script_type == b't'[0]:
+                            # Put DB functions at the end to prevent them from pushing before any errors
+                            put_asset(tx_hash + to_le_uint32(idx),
+                                      hashX + tx_numb + to_le_uint64(sats) +
+                                      asset_name)
+                        else:
+                            raise Exception('Unknown asset type: {}'.format(asset_script_type))
+
+
+                #TODO: TO HERE (SEE PREVIOUS TODO)
+
+                # Me @ core devs
+                # https://www.youtube.com/watch?v=iZlpsneDGBQ
+
                 if 0 < op_ptr < len(ops):
                     assert ops[op_ptr][0] == OpCodes.OP_RVN_ASSET  # Sanity check
                     try:
@@ -659,103 +838,28 @@ class BlockProcessor:
                             asset_script_deserializer = self.coin.DESERIALIZER(asset_script_portion)
                             asset_script = asset_script_deserializer._read_varbytes()
                         else:
-                            # Hurray! This is a properly formatted asset script
+                            # Hurray! This i̶s̶ ̶a̶ COULD BE A properly formatted asset script
                             asset_script = next_op[2]
 
                         asset_deserializer = self.coin.DESERIALIZER(asset_script)
-                        op = asset_deserializer._read_byte()
-                        if op != b'r'[0]:
-                            raise Exception("Expected {}, was {}".format(b'r', op))
-                        op = asset_deserializer._read_byte()
-                        if op != b'v'[0]:
-                            raise Exception("Expected {}, was {}".format(b'v', op))
-                        op = asset_deserializer._read_byte()
-                        if op != b'n'[0]:
-                            raise Exception("Expected {}, was {}".format(b'n', op))
-                        script_type = asset_deserializer._read_byte()
-                        asset_name = asset_deserializer._read_varbytes()
-                        if script_type == b'o'[0]:
-                            # This is an ownership asset. It does not have any metadata.
-                            # Just assign it with a value of 1
+                        try_parse_asset(asset_deserializer)
+                        asset_num += 1
+
+                    except:
+                        try:
+                            try_parse_asset_iterative(txout.pk_script[ops[op_ptr][1]:])
                             asset_num += 1
-                            put_asset(tx_hash + to_le_uint32(idx),
-                                      hashX + tx_numb + to_le_uint64(100_000_000) +
-                                      asset_name)
-                        else:  # Not an owner asset; has a sat amount
-                            sats = asset_deserializer._read_le_int64()
-                            if script_type == b'q'[0]:  # A new asset issuance
-                                divisions = asset_deserializer._read_byte()
-                                reissuable = asset_deserializer._read_byte()
-                                has_meta = asset_deserializer._read_byte()
-                                asset_data = bytes([divisions, reissuable, has_meta])
-                                if has_meta != b'\0':
-                                    asset_data += asset_deserializer._get_meta_raw()
-
-                                # Put DB functions at the end to prevent them from pushing before any errors
-                                asset_num += 1
-                                put_asset_data_new(asset_name, asset_data)  # Add meta for this asset
-                                asset_meta_undo_info_append(  # Set previous meta to null in case of roll back
-                                    len(asset_name).to_bytes(1, 'big') + asset_name + b'\0')
-                                put_asset(tx_hash + to_le_uint32(idx),
-                                          hashX + tx_numb + to_le_uint64(sats) +
-                                          asset_name)
-                            elif script_type == b'r'[0]:  # An asset re-issuance
-                                divisions = asset_deserializer._read_byte()
-                                reissuable = asset_deserializer._read_byte()
-
-                                # Quicker check, but it's far more likely to be in the db
-                                old_data = self.asset_data_new.pop(asset_name, None)
-                                if old_data is None:
-                                    old_data = self.asset_data_reissued.pop(asset_name, None)
-                                if old_data is None:
-                                    old_data = self.db.asset_info_db.get(asset_name)
-                                assert old_data is not None  # If reissuing, we should have it
-
-                                asset_data = b''
-
-                                if divisions == 0xff:  # Unchanged division amount
-                                    asset_data += old_data[0].to_bytes(1, 'big')
-                                else:
-                                    asset_data += divisions.to_bytes(1, 'big')
-                                asset_data += reissuable.to_bytes(1, 'big')
-                                if asset_deserializer.cursor == asset_deserializer.binary_length:
-                                    # No more data
-                                    asset_data += b'\0'
-                                else:
-                                    asset_data += b'\x01'
-                                    asset_data += asset_deserializer._get_meta_raw()
-
-                                # Put DB functions at the end to prevent them from pushing before any errors
-                                if asset_name[-1] != b'!'[0]:  # Not an ownership asset; send updated meta to clients
-                                    self.asset_touched.update(asset_name)
-                                asset_num += 1
-                                put_asset_data_reissued(asset_name, asset_data)
-                                asset_meta_undo_info_append(
-                                    len(asset_name).to_bytes(1, 'big') + asset_name +
-                                    len(old_data).to_bytes(1, 'big') + old_data)
-                                put_asset(tx_hash + to_le_uint32(idx),
-                                          hashX + tx_numb + to_le_uint64(sats) +
-                                          asset_name)
-                            elif script_type == b't'[0]:
-                                # Put DB functions at the end to prevent them from pushing before any errors
-                                asset_num += 1
-                                put_asset(tx_hash + to_le_uint32(idx),
-                                          hashX + tx_numb + to_le_uint64(sats) +
-                                          asset_name)
-                            else:
-                                raise Exception('Unknown asset type: {}'.format(script_type))
-
-                    except Exception as e:
-                        if self.env.write_bad_vouts_to_file:
-                            b = bytearray(tx_hash)
-                            b.reverse()
-                            file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
-                            with open(os.path.join(self.bad_vouts_path, file_name), 'w') as f:
-                                f.write('TXID : {}\n'.format(b.hex()))
-                                f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
-                                f.write('OpCodes : {}\n'.format(str(ops)))
-                                f.write('Exception : {}\n'.format(repr(e)))
-                                f.write('Traceback : {}\n'.format(traceback.format_exc()))
+                        except Exception as e:
+                            if self.env.write_bad_vouts_to_file:
+                                b = bytearray(tx_hash)
+                                b.reverse()
+                                file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
+                                with open(os.path.join(self.bad_vouts_path, file_name), 'w') as f:
+                                    f.write('TXID : {}\n'.format(b.hex()))
+                                    f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
+                                    f.write('OpCodes : {}\n'.format(str(ops)))
+                                    f.write('Exception : {}\n'.format(repr(e)))
+                                    f.write('Traceback : {}\n'.format(traceback.format_exc()))
 
             append_hashXs(hashXs)
             update_touched(hashXs)
