@@ -751,7 +751,7 @@ class BlockProcessor:
                     else:  # Not an owner asset; has a sat amount
                         sat_b = script[:8]
                         script = script[8:]
-                        sats = to_le_uint64(sat_b)
+                        sats = int.from_bytes(sat_b, 'little', signed=False)
                         if asset_script_type == b'q'[0]:  # A new asset issuance
                             divisions = script[0]
                             script = script[1:]
