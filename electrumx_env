@@ -8,14 +8,7 @@ if [ -e ./env/bin/activate ]; then
 else
     virtualenv env -p `which python3`
     source ./env/bin/activate
-    pip install cmake==3.18.4
-    pip install aiohttp==3.7.4
-    pip install pylru==1.2.0
-    pip install plyvel==1.3.0
-    pip install aiorpcx==0.22.0
-    pip install x16r_hash==1.0.1
-    pip install x16rv2_hash==1.0
-    pip install kawpow==0.9.4.4
+    pip install -r requirements.txt
 fi
 
 export PYTHONPATH="/usr/local/lib/python${PYTHON_VER}/site-packages:$PYTHONPATH"

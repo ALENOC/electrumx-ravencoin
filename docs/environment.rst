@@ -237,7 +237,7 @@ These environment variables are optional:
   + ``$DONATION_ADDRESS`` is replaced with the address from the
     :envvar:`DONATION_ADDRESS` environment variable.
 
-  See `here <https://github.com/shsmith/electrumx-banner-updater>`_
+  See `here <https://github.com/Electrum-RVN-SIG/electrumx-banner-updater>`_
   for a script that updates a banner file periodically with useful
   statistics about fees, last block time and height, etc.
 

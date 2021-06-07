@@ -563,7 +563,7 @@ class BlockProcessor:
                         b = bytearray(tx_hash)
                         b.reverse()
                         file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
-                        with open(os.path.join(self.bad_vouts_path, 'BADOPS' + file_name), 'w') as f:
+                        with open(os.path.join(self.bad_vouts_path, str(self.height) + '_BADOPS_' + file_name), 'w') as f:
                             f.write('TXID : {}\n'.format(b.hex()))
                             f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
                             f.write('OPS : {}\n'.format(str(ops)))
@@ -601,7 +601,7 @@ class BlockProcessor:
                             b = bytearray(tx_hash)
                             b.reverse()
                             file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
-                            with open(os.path.join(self.bad_vouts_path, 'BADOPS' + file_name), 'w') as f:
+                            with open(os.path.join(self.bad_vouts_path, str(self.height) + '_BADOPS_' + file_name), 'w') as f:
                                 f.write('TXID : {}\n'.format(b.hex()))
                                 f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
                                 f.write('OPS : {}\n'.format(str(ops)))
@@ -636,7 +636,7 @@ class BlockProcessor:
                                 b = bytearray(tx_hash)
                                 b.reverse()
                                 file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
-                                with open(os.path.join(self.bad_vouts_path, 'NULLASSET' + file_name), 'w') as f:
+                                with open(os.path.join(self.bad_vouts_path, str(self.height) + '_NULLASSET_' + file_name), 'w') as f:
                                     f.write('TXID : {}\n'.format(b.hex()))
                                     f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
                                     f.write('OPS : {}\n'.format(str(ops)))
@@ -854,7 +854,7 @@ class BlockProcessor:
                                 b = bytearray(tx_hash)
                                 b.reverse()
                                 file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
-                                with open(os.path.join(self.bad_vouts_path, file_name), 'w') as f:
+                                with open(os.path.join(self.bad_vouts_path, str(self.height) + '_' + file_name), 'w') as f:
                                     f.write('TXID : {}\n'.format(b.hex()))
                                     f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
                                     f.write('OpCodes : {}\n'.format(str(ops)))
@@ -908,8 +908,6 @@ class BlockProcessor:
         await sleep(0)
 
     def _backup_txs(self, txs, is_unspendable):
-        # TODO: Asset meta undo infos
-
         # Prevout values, in order down the block (coinbase first if present)
         # undo_info is in reverse block order
         undo_info = self.db.read_undo_info(self.height)
