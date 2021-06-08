@@ -1,18 +1,18 @@
-﻿The Electrum Server
+# ﻿The Electrum Server
 
-Last change: 7JUN21, hyperpeek#9099
+##### Last change: 7JUN21, hyperpeek#9099
 
-Tips: RKJLzw6kB6f4nm7Fwuy4aaK4ygSSfw9qCe
+##### Tips: RKJLzw6kB6f4nm7Fwuy4aaK4ygSSfw9qCe
 
-Introduction
+### Introduction
 
 The RVN electrum wallet – currently one of the few that support the hardware wallets Trezor and Ledger – relies on special servers as an intermediary to the RVN block chain. The server interacts with a full rvn node via the rpc interface to supply (with the help of a database) transaction and payment data to the remote electrum wallets, so there is no need for the wallets to keep a full copy of the block chain, making them more light-weight than full node client wallets. Outgoing transactions are signed on the electrum wallet client (in case of Trezor or Ledger inside the hardware itself) and are transmitted via the electrum server through the rvn nodes into the network, so all sensitive data like private keys are kept in the client (or even hardware), making this a very secure solution. Even though the electrum protocol is optimized for low bandwidth and load, each server can serve only a certain amount of clients and especially with many new users trying syncing a new electrum installation from the genesis block, a single electrum server can be stretched beyond its limits pretty fast. This as well as general security and backup concerns call for a more distributed electrum server infrastructure. The aim of the guide is therefore to give a step-by-step instruction about setting up a RVN electrum server running beside a full RVN node client.
 
-System requirements
+### System requirements
 
 While pretty much any Linux distribution should work, this guide uses Ubuntu 20.04 running on a VPS server as an example setup. Performance-wise, minimum specs are 40 GB of disk space, 2 GB RAM + 2 GB swap and preferably unlimited network traffic, as 1 TB can be easily reached within a few days. CPU is not too much of a concern, as the electrumx server we will use is mostly implemented in Python running in a single thread. Higher CPU spec- and / or count may speed up syncing, though a reliable and fast network connection is still the best guarantee for a seamless operation of the system. The following guide assumes you are running the raven and electrumx server as a non-root user and all commands should be run from the user account created. 
 
-Step-by-step setup of the node
+### Step-by-step setup of the node
 
 - Setup a system running Ubuntu 20.04 or install it through a pre-build image with any of the countless VPS providers. After installation, it is good practice to do a sudo apt update to get the installation sources provided by your VPS host and bring the system up-to-date with sudo apt upgrade.
 
@@ -57,7 +57,7 @@ This way you can always access the binary files through ./raven/bin/... from you
 
 
 
-Step-by-step setup of the electrumx server
+### Step-by-step setup of the electrumx server
 
 The electrumx server is almost entirely written in python and can be found at [https](https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/releases/)[://](https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/releases/)[github](https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/releases/)[.](https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/releases/)[com](https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/releases/)[/](https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/releases/)[Electrum](https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/releases/)[-](https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/releases/)[RVN](https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/releases/)[-](https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/releases/)[SIG](https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/releases/)[/](https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/releases/)[electrumx](https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/releases/)[-](https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/releases/)[ravencoin](https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/releases/)[/](https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/releases/)[releases](https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/releases/)[/](https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/releases/).
 
