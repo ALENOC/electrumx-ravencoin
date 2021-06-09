@@ -15,7 +15,7 @@ import os
 import time
 import traceback
 from asyncio import sleep
-from typing import Callable
+from typing import Callable, Dict, Sequence
 
 from aiorpcx import TaskGroup, CancelledError
 
@@ -61,8 +61,11 @@ class OPPushDataGeneric:
 
 SCRIPTPUBKEY_TEMPLATE_P2PK = [OPPushDataGeneric(lambda x: x in (33, 65)), OpCodes.OP_CHECKSIG]
 
+# Marks an address as valid for restricted assets associated with that qualifier.
 ASSET_NULL_TEMPLATE = [OpCodes.OP_RVN_ASSET, OPPushDataGeneric(lambda x: x == 20), OPPushDataGeneric()]
+# Used with creating restricted assets. Dictates the qualifier asset.
 ASSET_NULL_VERIFIER_TEMPLATE = [OpCodes.OP_RVN_ASSET, OpCodes.OP_RESERVED, OPPushDataGeneric()]
+# Stop all movements of a restricted asset associated with the qualifier.
 ASSET_GLOBAL_RESTRICTION_TEMPLATE = [OpCodes.OP_RVN_ASSET, OpCodes.OP_RESERVED, OpCodes.OP_RESERVED, OPPushDataGeneric()]
 
 # -1 if doesn't match, positive if does. Indicates index in script
@@ -262,10 +265,8 @@ class BlockProcessor:
         # All keys in this dict will also be in the
         # utxo_cache because assets are normal tx's with no RVN value
         self.asset_cache = {}
-
         # Same as above.
         self.asset_deletes = []
-
         self.asset_undo_infos = []
 
         # A dict of the asset name -> asset data
@@ -277,6 +278,16 @@ class BlockProcessor:
 
         # To notify clients about reissuances
         self.asset_touched = set()
+
+        # For qualifier assets
+        self.restricted_to_qualifier = {}  # type: Dict[str, Sequence[str]]
+        self.restricted_to_qualifier_undos = []
+
+        self.global_freezes = []
+        self.global_freezes_undos = []
+
+        self.qualifier_to_address = {}
+        self.qualifier_to_address_undos = []
 
     async def run_with_lock(self, coro):
         # Shielded so that cancellations from shutdown don't lose work.  Cancellation will
@@ -615,31 +626,40 @@ class BlockProcessor:
                     elif op_ptr == 0:
                         # This is an asset qualifier
                         # These are verifiably unspendable(?)
-                        if match_script_against_template(ops, ASSET_NULL_TEMPLATE) > -1:
-                            h160 = ops[1][2]
-                            asset_portion = ops[2][2]
-                            asset_portion_deserializer = self.coin.DESERIALIZER(asset_portion)
-                            try:
-                                asset_name = asset_portion_deserializer._read_varbytes()
-                                flag = asset_portion._read_byte()
-                                # TODO: Implement an asset qualifier DB
-                            except:
-                                pass
-                        elif match_script_against_template(ops, ASSET_NULL_VERIFIER_TEMPLATE) > -1:
-                            # TODO: Implement
-                            pass
-                        elif match_script_against_template(ops, ASSET_GLOBAL_RESTRICTION_TEMPLATE) > -1:
-                            # TODO: Implement
-                            pass
-                        else:
-                            if self.env.write_bad_vouts_to_file:
-                                b = bytearray(tx_hash)
-                                b.reverse()
-                                file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
-                                with open(os.path.join(self.bad_vouts_path, str(self.height) + '_NULLASSET_' + file_name), 'w') as f:
-                                    f.write('TXID : {}\n'.format(b.hex()))
-                                    f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
-                                    f.write('OPS : {}\n'.format(str(ops)))
+                        print(txout.pk_script.hex())
+                        if self.env.write_bad_vouts_to_file:
+                            b = bytearray(tx_hash)
+                            b.reverse()
+                            file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
+                            with open(os.path.join(self.bad_vouts_path, str(self.height) + '_NULLASSET_' + file_name), 'w') as f:
+                                f.write('TXID : {}\n'.format(b.hex()))
+                                f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
+                                f.write('OPS : {}\n'.format(str(ops)))
+                        #if match_script_against_template(ops, ASSET_NULL_TEMPLATE) > -1:
+                        #    h160 = ops[1][2]
+                        #    asset_portion = ops[2][2]
+                        #    asset_portion_deserializer = self.coin.DESERIALIZER(asset_portion)
+                        #    try:
+                        #        asset_name = asset_portion_deserializer._read_varbytes()
+                        #        flag = asset_portion._read_byte()
+                        #        # TODO: Implement an asset qualifier DB
+                        #    except:
+                        #        pass
+                        #elif match_script_against_template(ops, ASSET_NULL_VERIFIER_TEMPLATE) > -1:
+                        #    # TODO: Implement
+                        #   pass
+                        #elif match_script_against_template(ops, ASSET_GLOBAL_RESTRICTION_TEMPLATE) > -1:
+                        #    # TODO: Implement
+                        #    pass
+                        #else:
+                        #   if self.env.write_bad_vouts_to_file:
+                        #        b = bytearray(tx_hash)
+                        #        b.reverse()
+                        #        file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
+                        #        with open(os.path.join(self.bad_vouts_path, str(self.height) + '_NULLASSET_' + file_name), 'w') as f:
+                        #            f.write('TXID : {}\n'.format(b.hex()))
+                        #            f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
+                        #            f.write('OPS : {}\n'.format(str(ops)))
                         continue
                     else:
                         # There is no OP_RVN_ASSET. Hash as-is.
