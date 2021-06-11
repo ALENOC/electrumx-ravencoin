@@ -1460,7 +1460,7 @@ class DB(object):
         return is_restricted, ret_val
 
     # For external use
-    def is_qualified(self, asset, h160):
+    async def is_qualified(self, asset, h160):
         def check():
             return self.check_if_qualified(asset, h160)
         return await run_in_thread(check)
