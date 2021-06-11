@@ -481,5 +481,11 @@ your available physical RAM:
 
   I do not recommend raising this above 2000.
 
+.. envvar:: WRITE_BAD_VOUTS_TO_FILE
+
+  For chain debugging.
+
+  Write any outpoints that could not be parsed into the database to file.
+
 .. _lib/coins.py: https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/blob/master/electrumx/lib/coins.py
 .. _uvloop: https://pypi.python.org/pypi/uvloop

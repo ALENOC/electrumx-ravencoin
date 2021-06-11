@@ -158,9 +158,6 @@ class MemPool(object):
         self.refresh_secs = refresh_secs
         self.log_status_secs = log_status_secs
 
-        self.write_bad_vouts_to_file = env.write_bad_vouts_to_file
-        self.bad_vouts_path = os.path.join(env.db_dir, 'invalid_mem_vouts')
-
     async def _logging(self, synchronized_event):
         '''Print regular logs of mempool stats.'''
         self.logger.info('beginning processing of daemon mempool.  '
@@ -392,9 +389,6 @@ class MemPool(object):
 
     async def keep_synchronized(self, synchronized_event):
         '''Keep the mempool synchronized with the daemon.'''
-
-        if self.write_bad_vouts_to_file and not os.path.isdir(self.bad_vouts_path):
-            os.mkdir(self.bad_vouts_path)
 
         async with TaskGroup() as group:
             await group.spawn(self._refresh_hashes(synchronized_event))

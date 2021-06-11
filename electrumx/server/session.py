@@ -920,7 +920,7 @@ class ElectrumX(SessionBase):
     '''A TCP server that handles incoming Electrum connections.'''
 
     PROTOCOL_MIN = (1, 4)
-    PROTOCOL_MAX = (1, 8)
+    PROTOCOL_MAX = (1, 9)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1172,7 +1172,7 @@ class ElectrumX(SessionBase):
             raise RPCError(
                 BAD_REQUEST, f'asset name greater than 31 characters'
             ) from None
-        return self.asset_subs.pop(asset, None) is not None
+        return self.asset_subs.discard(asset) is not None
 
     async def get_balance(self, hashX):
         utxos = await self.db.all_utxos(hashX)
@@ -1492,6 +1492,56 @@ class ElectrumX(SessionBase):
         self.bump_cost(1.0)
         return await self.db.lookup_asset_meta(name.encode('ascii'))
 
+    async def is_qualified(self, h160: str, asset: str):
+        if len(asset) > 32:
+            raise RPCError(
+                BAD_REQUEST, f'asset name greater than 32 characters'
+            ) from None
+        self.bump_cost(1.0)
+        return await self.db.is_qualified(asset.encode('ascii'), bytes.fromhex(h160))
+
+    async def get_associations(self, asset: str, history: bool):
+        if len(asset) > 32:
+            raise RPCError(
+                BAD_REQUEST, f'asset name greater than 32 characters'
+            ) from None
+
+        ret = await self.db.get_associated_assets_from(asset.encode('ascii'))
+
+        self.bump_cost(1.0 + len(ret['current']) / 50)
+        if history:
+            self.bump_cost(1.0 + len(ret['history']) / 50)
+        return ret
+
+    async def get_tags_for_h160(self, h160: str, history: bool):
+        ret = await self.db.get_tags_associated_with_h160(bytes.fromhex(h160), history)
+        self.bump_cost(1.0 + len(ret['current']) / 50)
+        if history:
+            self.bump_cost(1.0 + len(ret['history']) / 50)
+        return ret
+
+    async def get_h160_for_asset(self, asset: str, history: bool):
+        if len(asset) > 32:
+            raise RPCError(
+                BAD_REQUEST, f'asset name greater than 32 characters'
+            ) from None
+        ret = await self.db.get_h160s_associated_with_asset(asset.encode('ascii'), history)
+        self.bump_cost(1.0 + len(ret['current']) / 50)
+        if history:
+            self.bump_cost(1.0 + len(ret['history']) / 50)
+        return ret
+
+    async def frozen_status(self, asset: str, history: bool):
+        if len(asset) > 32:
+            raise RPCError(
+                BAD_REQUEST, f'asset name greater than 32 characters'
+            ) from None
+        ret = await self.db.get_frozen_status_of_restricted(asset.encode('ascii'), history)
+        self.bump_cost(1.0 + len(ret['current']) / 50)
+        if history:
+            self.bump_cost(1.0 + len(ret['history']) / 50)
+        return ret
+
     async def compact_fee_histogram(self):
         self.bump_cost(1.0)
         return []
@@ -1533,6 +1583,13 @@ class ElectrumX(SessionBase):
             handlers['blockchain.asset.get_meta'] = self.asset_get_meta
             handlers['blockchain.asset.subscribe'] = self.asset_subscribe
             handlers['blockchain.asset.unsubscribe'] = self.asset_unsubscribe
+
+        if ptuple >= (1, 9):
+            handlers['blockchain.asset.is_qualified'] = self.is_qualified
+            handlers['blockchain.asset.get_associations'] = self.get_associations
+            handlers['blockchain.asset.get_tags_for_h160'] = self.get_tags_for_h160
+            handlers['blockchain.asset.get_h160_for_asset'] = self.get_h160_for_asset
+            handlers['blockchain.asset.frozen_status'] = self.frozen_status
 
         self.request_handlers = handlers
 

@@ -15,7 +15,7 @@ import os
 import time
 import traceback
 from asyncio import sleep
-from typing import Callable, Dict, Sequence
+from typing import Callable, Dict, Sequence, Optional, List
 
 from aiorpcx import TaskGroup, CancelledError
 
@@ -61,11 +61,11 @@ class OPPushDataGeneric:
 
 SCRIPTPUBKEY_TEMPLATE_P2PK = [OPPushDataGeneric(lambda x: x in (33, 65)), OpCodes.OP_CHECKSIG]
 
-# Marks an address as valid for restricted assets associated with that qualifier.
+# Marks an address as valid for restricted assets via qualifier or restricted itself.
 ASSET_NULL_TEMPLATE = [OpCodes.OP_RVN_ASSET, OPPushDataGeneric(lambda x: x == 20), OPPushDataGeneric()]
-# Used with creating restricted assets. Dictates the qualifier asset.
+# Used with creating restricted assets. Dictates the qualifier assets associated.
 ASSET_NULL_VERIFIER_TEMPLATE = [OpCodes.OP_RVN_ASSET, OpCodes.OP_RESERVED, OPPushDataGeneric()]
-# Stop all movements of a restricted asset associated with the qualifier.
+# Stop all movements of a restricted asset.
 ASSET_GLOBAL_RESTRICTION_TEMPLATE = [OpCodes.OP_RVN_ASSET, OpCodes.OP_RESERVED, OpCodes.OP_RESERVED, OPPushDataGeneric()]
 
 # -1 if doesn't match, positive if does. Indicates index in script
@@ -280,14 +280,34 @@ class BlockProcessor:
         self.asset_touched = set()
 
         # For qualifier assets
-        self.restricted_to_qualifier = {}  # type: Dict[str, Sequence[str]]
+
+        # tx_hash + idx (uint32le): restricted + tx_num (uint64le[:5]) + num quals + quals
+        self.restricted_to_qualifier = {}
+
+        # Most up-to-date qualifier-restricted associations
+        self.qr_associations = {}
+
+        self.restricted_to_qualifier_deletes = []
         self.restricted_to_qualifier_undos = []
 
-        self.global_freezes = []
+        # tx_hash + idx (uint32le): restricted + tx_num (uint64le[:5]) + flag
+        self.global_freezes = {}
+        # asset : T/F
+        self.is_frozen = {}
+        self.global_freezes_deletes = []
         self.global_freezes_undos = []
 
-        self.qualifier_to_address = {}
-        self.qualifier_to_address_undos = []
+        # tx_hash + idx (uint32le): asset + tx_num (uint64le[:5]) + pubkey + flag
+        self.tag_to_address = {}
+        # asset + pubkey : T/F
+        self.is_qualified = {}
+        self.tag_to_address_deletes = []
+        self.tag_to_address_undos = []
+
+        self.current_restricted_asset = None  # type: Optional[bytes]
+        self.restricted_idx = b''
+        self.current_qualifiers = []  # type: List[bytes]
+        self.qualifiers_idx = b''
 
     async def run_with_lock(self, coro):
         # Shielded so that cancellations from shutdown don't lose work.  Cancellation will
@@ -408,7 +428,13 @@ class BlockProcessor:
                          self.asset_cache, self.asset_deletes,
                          self.asset_data_new, self.asset_data_reissued,
                          self.asset_undo_infos, self.asset_data_undo_infos,
-                         self.asset_data_deletes, self.asset_count)
+                         self.asset_data_deletes, self.asset_count,
+                         self.restricted_to_qualifier, self.restricted_to_qualifier_deletes,
+                         self.restricted_to_qualifier_undos, self.qr_associations,
+                         self.global_freezes, self.is_frozen,
+                         self.global_freezes_deletes, self.global_freezes_undos,
+                         self.tag_to_address, self.is_qualified,
+                         self.tag_to_address_deletes, self.tag_to_address_undos)
 
     async def flush(self, flush_utxos):
         self.db.flush_dbs(self.flush_data(), flush_utxos, self.estimate_txs_remaining)
@@ -494,12 +520,16 @@ class BlockProcessor:
         is_unspendable = (is_unspendable_genesis if height >= self.coin.GENESIS_ACTIVATION
                           else is_unspendable_legacy)
 
-        (undo_info, asset_undo_info, asset_meta_undo_info) = self.advance_txs(block.transactions, is_unspendable)
+        (undo_info, asset_undo_info, asset_meta_undo_info,
+         t2a_undo_info, freezes_undo_info, r2q_undo_info) = self.advance_txs(block.transactions, is_unspendable)
 
         if height >= min_height:
             self.undo_infos.append((undo_info, height))
             self.asset_undo_infos.append((asset_undo_info, height))
             self.asset_data_undo_infos.append((asset_meta_undo_info, height))
+            self.tag_to_address_undos.append((t2a_undo_info, height))
+            self.global_freezes_undos.append((freezes_undo_info, height))
+            self.restricted_to_qualifier_undos.append((r2q_undo_info, height))
             self.db.write_raw_block(block.raw, height)
 
         self.height = height
@@ -515,13 +545,26 @@ class BlockProcessor:
         undo_info = []
         asset_undo_info = []
         asset_meta_undo_info = []
+
+        r2q_undo_info = []
+        t2a_undo_info = []
+        freezes_undo_info = []
+
         tx_num = self.tx_count
         asset_num = self.asset_count
         script_hashX = self.coin.hashX_from_script
         put_utxo = self.utxo_cache.__setitem__
+
         put_asset = self.asset_cache.__setitem__
         put_asset_data_new = self.asset_data_new.__setitem__
         put_asset_data_reissued = self.asset_data_reissued.__setitem__
+
+        put_r2q = self.restricted_to_qualifier.__setitem__
+        put_t2a = self.tag_to_address.__setitem__
+        put_qualified = self.is_qualified.__setitem__
+        put_freeze = self.global_freezes.__setitem__
+        put_frozen = self.is_frozen.__setitem__
+
         spend_utxo = self.spend_utxo
         spend_asset = self.spend_asset
         undo_info_append = undo_info.append
@@ -538,6 +581,8 @@ class BlockProcessor:
             append_hashX = hashXs.append
             tx_numb = to_le_uint64(tx_num)[:5]
             is_asset = False
+            self.current_restricted_asset = None
+            self.current_qualifiers = []
             # Spend the inputs
             for txin in tx.inputs:
                 if txin.is_generation():  # Don't spend block rewards
@@ -624,42 +669,106 @@ class BlockProcessor:
                         script_hash_end = ops[op_ptr - 1][1]
                         hashX = script_hashX(txout.pk_script[:script_hash_end])
                     elif op_ptr == 0:
-                        # This is an asset qualifier
-                        # These are verifiably unspendable(?)
-                        print(txout.pk_script.hex())
-                        if self.env.write_bad_vouts_to_file:
-                            b = bytearray(tx_hash)
-                            b.reverse()
-                            file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
-                            with open(os.path.join(self.bad_vouts_path, str(self.height) + '_NULLASSET_' + file_name), 'w') as f:
-                                f.write('TXID : {}\n'.format(b.hex()))
-                                f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
-                                f.write('OPS : {}\n'.format(str(ops)))
-                        #if match_script_against_template(ops, ASSET_NULL_TEMPLATE) > -1:
-                        #    h160 = ops[1][2]
-                        #    asset_portion = ops[2][2]
-                        #    asset_portion_deserializer = self.coin.DESERIALIZER(asset_portion)
-                        #    try:
-                        #        asset_name = asset_portion_deserializer._read_varbytes()
-                        #        flag = asset_portion._read_byte()
-                        #        # TODO: Implement an asset qualifier DB
-                        #    except:
-                        #        pass
-                        #elif match_script_against_template(ops, ASSET_NULL_VERIFIER_TEMPLATE) > -1:
-                        #    # TODO: Implement
-                        #   pass
-                        #elif match_script_against_template(ops, ASSET_GLOBAL_RESTRICTION_TEMPLATE) > -1:
-                        #    # TODO: Implement
-                        #    pass
-                        #else:
-                        #   if self.env.write_bad_vouts_to_file:
-                        #        b = bytearray(tx_hash)
-                        #        b.reverse()
-                        #        file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
-                        #        with open(os.path.join(self.bad_vouts_path, str(self.height) + '_NULLASSET_' + file_name), 'w') as f:
-                        #            f.write('TXID : {}\n'.format(b.hex()))
-                        #            f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
-                        #            f.write('OPS : {}\n'.format(str(ops)))
+                        # This is an asset tag
+                        # These are verifiably unspendable
+
+                        # continue is called after this block
+
+                        idx = to_le_uint32(idx)
+
+                        try:
+                            if match_script_against_template(ops, ASSET_NULL_TEMPLATE) > -1:
+                                h160 = ops[1][2]
+                                asset_portion = ops[2][2]
+                                asset_portion_deserializer = self.coin.DESERIALIZER(asset_portion)
+                                asset_portion_deserializer = self.coin.DESERIALIZER(asset_portion_deserializer._read_varbytes())
+                                asset_name = asset_portion_deserializer._read_varbytes()
+                                flag = asset_portion._read_byte()
+
+                                # tx_hash + idx (uint32le): asset + tx_num (uint64le[:5]) + pubkey + flag
+                                put_t2a(tx_hash + idx,
+                                        bytes([len(asset_name)]) + asset_name +
+                                        tx_numb + bytes([len(h160)]) + h160 + bytes([flag]))
+
+                                # This tracks the most up-to-date asset-pubkey is qualified
+                                put_qualified(bytes([len(asset_name)]) + asset_name + bytes([len(h160)]) + h160 +
+                                              idx + tx_numb,
+                                              False if flag == 0 else True)
+                                put_qualified(bytes([len(h160)]) + h160 + bytes([len(asset_name)]) + asset_name +
+                                              idx + tx_numb,
+                                              False if flag == 0 else True)
+
+                                # During a back up, this will be used to delete keys
+                                t2a_undo_info.append(bytes([len(asset_name)]) + asset_name + bytes([len(h160)]) + h160 +
+                                                     idx + tx_numb)
+
+                                old_info = self.db.check_if_qualified(asset_name, h160)
+
+                                if old_info is None:
+                                    t2a_undo_info.append(b'\0')
+                                else:
+                                    # And this will be used to roll back the latest qualified value
+                                    t2a_undo_info.append(b'\x01' + old_info)
+
+                            elif match_script_against_template(ops, ASSET_NULL_VERIFIER_TEMPLATE) > -1:
+                                qualifiers_b = ops[2][2]
+                                qualifiers_deserializer = self.coin.DESERIALIZER(qualifiers_b)
+                                qualifiers_deserializer = self.coin.DESERIALIZER(qualifiers_deserializer._read_varbytes())
+                                asset_name = qualifiers_deserializer._read_varbytes()
+                                for asset in asset_name.decode('ascii').split('&'):
+                                    if asset[0] != '#':
+                                        if 'A' <= asset[0] <= 'Z' or '0' <= asset[0] <= '9':
+                                            # This is a valid asset name
+                                            asset = '#' + asset
+                                        elif asset == 'true':
+                                            # Dummy data to append
+                                            asset = ''
+                                        else:
+                                            raise Exception('Bad qualifier')
+
+                                    self.current_qualifiers.append(asset.encode('ascii'))
+                                self.qualifiers_idx = idx
+                            elif match_script_against_template(ops, ASSET_GLOBAL_RESTRICTION_TEMPLATE) > -1:
+                                asset_portion = ops[3][2]
+                                script = asset_portion
+                                asset_name_len = script[0]
+                                script = script[1:]
+                                asset_name = script[:asset_name_len]
+                                script = script[asset_name_len:]
+                                flag = script[0]
+
+                                # tx_hash + idx (uint32le): restricted + tx_num (uint64le[:5]) + flag
+                                put_freeze(tx_hash + idx, bytes([asset_name_len]) + asset_name + tx_numb + bytes([flag]))
+
+                                # Current info
+                                put_frozen(bytes([asset_name_len]) + asset_name + idx + tx_numb,
+                                           False if flag == 0 else True)
+
+                                # Delete this
+                                freezes_undo_info.append(bytes([asset_name_len]) + asset_name + idx + tx_numb)
+
+                                old_info = self.db.check_if_frozen(asset_name)
+
+                                if old_info is None:
+                                    freezes_undo_info.append(b'\0')
+                                else:
+                                    # And this will be used to roll back the latest frozen value
+                                    freezes_undo_info.append(b'\x01' + old_info)
+
+                            else:
+                                raise Exception('Bad null asset script ops')
+                        except Exception as e:
+                            if self.env.write_bad_vouts_to_file:
+                                b = bytearray(tx_hash)
+                                b.reverse()
+                                file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
+                                with open(os.path.join(self.bad_vouts_path,
+                                                       str(self.height) + '_NULLASSET_' + file_name), 'w') as f:
+                                    f.write('TXID : {}\n'.format(b.hex()))
+                                    f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
+                                    f.write('OpCodes : {}\n'.format(str(ops)))
+                                    f.write('Exception : {}\n'.format(repr(e)))
+                                    f.write('Traceback : {}\n'.format(traceback.format_exc()))
                         continue
                     else:
                         # There is no OP_RVN_ASSET. Hash as-is.
@@ -672,6 +781,8 @@ class BlockProcessor:
 
                 # Now try and add asset info
                 # TODO: SEE IF THERE IS ANYTHING BETTER TO DO FROM HERE
+
+                # Function for a properly formatted asset
                 def try_parse_asset(asset_deserializer):
                     op = asset_deserializer._read_byte()
                     if op != b'r'[0]:
@@ -684,6 +795,9 @@ class BlockProcessor:
                         raise Exception("Expected {}, was {}".format(b'n', op))
                     script_type = asset_deserializer._read_byte()
                     asset_name = asset_deserializer._read_varbytes()
+                    if asset_name[0] == b'$'[0]:
+                        self.current_restricted_asset = asset_name
+                        self.restricted_idx = to_le_uint32(idx)
                     if script_type == b'o'[0]:
                         # This is an ownership asset. It does not have any metadata.
                         # Just assign it with a value of 1
@@ -699,6 +813,9 @@ class BlockProcessor:
                             asset_data = bytes([divisions, reissuable, has_meta])
                             if has_meta != b'\0':
                                 asset_data += asset_deserializer._get_meta_raw()
+
+                            # To tell the client where this data came from
+                            asset_data += to_le_uint32(idx) + tx_numb + b'\0'
 
                             # Put DB functions at the end to prevent them from pushing before any errors
                             put_asset_data_new(asset_name, asset_data)  # Add meta for this asset
@@ -733,6 +850,13 @@ class BlockProcessor:
                                 asset_data += b'\x01'
                                 asset_data += asset_deserializer._get_meta_raw()
 
+                            asset_data += to_le_uint32(idx) + tx_numb
+                            if divisions == 0xff:
+                                # We need to tell the client the original tx for reissues
+                                asset_data += b'\x01' + old_data[-(4 + 5):]
+                            else:
+                                asset_data += b'\0'
+
                             # Put DB functions at the end to prevent them from pushing before any errors
                             if asset_name[-1] != b'!'[0]:  # Not an ownership asset; send updated meta to clients
                                 self.asset_touched.update(asset_name)
@@ -751,6 +875,7 @@ class BlockProcessor:
                         else:
                             raise Exception('Unknown asset type: {}'.format(script_type))
 
+                # function for malformed asset
                 def try_parse_asset_iterative(script: bytes):
                     while script[:3] != b'rvn' and len(script) > 0:
                         script = script[1:]
@@ -761,6 +886,9 @@ class BlockProcessor:
                     asset_name_length = script[0]
                     script = script[1:]
                     asset_name = script[:asset_name_length]
+                    if asset_name[0] == b'$'[0]:
+                        self.current_restricted_asset = asset_name
+                        self.restricted_idx = to_le_uint32(idx)
                     script = script[asset_name_length:]
                     if asset_script_type == b'o'[0]:
                         # This is an ownership asset. It does not have any metadata.
@@ -783,6 +911,8 @@ class BlockProcessor:
                             if has_meta != b'\0':
                                 asset_data += script[:34]
 
+                            # To tell the client where this data came from
+                            asset_data += to_le_uint32(idx) + tx_numb + b'\0'
                             # Put DB functions at the end to prevent them from pushing before any errors
                             put_asset_data_new(asset_name, asset_data)  # Add meta for this asset
                             asset_meta_undo_info_append(  # Set previous meta to null in case of roll back
@@ -817,6 +947,13 @@ class BlockProcessor:
                             else:
                                 asset_data += b'\x01'
                                 asset_data += script[:34]
+
+                            asset_data += to_le_uint32(idx) + tx_numb
+                            if divisions == 0xff:
+                                # We need to tell the client the original tx for reissues
+                                asset_data += b'\x01' + old_data[-(4 + 5):]
+                            else:
+                                asset_data += b'\0'
 
                             # Put DB functions at the end to prevent them from pushing before any errors
                             if asset_name[-1] != b'!'[0]:  # Not an ownership asset; send updated meta to clients
@@ -881,11 +1018,101 @@ class BlockProcessor:
                                     f.write('Exception : {}\n'.format(repr(e)))
                                     f.write('Traceback : {}\n'.format(traceback.format_exc()))
 
+            if self.current_restricted_asset and self.current_qualifiers:
+
+                res = self.current_restricted_asset  # type: bytes
+
+                # Parse quals
+                quals = len(self.current_qualifiers).to_bytes(1, 'big')
+                for qual in self.current_qualifiers:
+                    quals += len(qual).to_bytes(1, 'big') + qual
+
+                # tx_hash + idx (uint32le) + idx_quals: restricted + tx_num (uint64le[:5]) + num quals + quals
+                self.restricted_to_qualifier.__setitem__(tx_hash + self.restricted_idx + self.qualifiers_idx,
+                                                         len(res).to_bytes(1, 'big') + res + tx_numb + quals)
+
+                self.restricted_to_qualifier_undos.append(len(res).to_bytes(1, 'big') + res + quals + tx_numb +
+                                                          self.restricted_idx + self.qualifiers_idx)
+
+                associate = self.qr_associations.__setitem__
+
+                check = self.db.get_associated_assets_from(res)
+                qual_remove_undos = []
+                qual_add_undos = []
+                if check is None:
+                    self.restricted_to_qualifier_undos.append(len(res).to_bytes(1, 'big') + res + b'\x01\0')
+                else:
+                    is_restricted, data = check
+
+                    if is_restricted:
+                        tx_numb, res_idx, qual_idx, names = data
+                        # 1 + num quals + quals + tx_num + idx restricted + idx quals
+                        quals = b''.join(len(name).to_bytes(1, 'big') + name for name in names)
+                        # Undo info restricted -> quals
+                        self.restricted_to_qualifier_undos.append(len(res).to_bytes(1, 'big') + res + b'\x01' +
+                                                                  len(names).to_bytes(1, 'big') +
+                                                                  quals + tx_numb + res_idx + qual_idx)
+
+                        # Update qualifiers that are no longer associated
+                        for asset in names:
+                            if asset not in self.current_qualifiers:
+                                check = self.db.get_associated_assets_from(asset)
+                                if check is None:
+                                    raise Exception('Qualifier has no associations but restricted was associated with it')
+                                is_restricted, data = check
+
+                                if not is_restricted:
+                                    # num associations + (asset + tx_numb + idx of restricted + idx of qualifier) + ...
+
+                                    undo_bytes = len(asset).to_bytes(1, 'big') + asset + b'\0' + bytes([len(data)])
+                                    associate_bytes = b'\0' + bytes([len(data) - 1])
+                                    for asset_name, tx_numb, res_idx, qual_idx in data:
+                                        undo_bytes += bytes([len(asset_name)]) + asset_name + tx_numb + res_idx + qual_idx
+                                        if asset_name != self.current_restricted_asset:
+                                            associate_bytes += bytes([len(asset_name)]) + asset_name + tx_numb + res_idx + qual_idx
+
+                                    qual_remove_undos.append(undo_bytes)
+                                    associate(asset, associate_bytes)
+
+                                else:
+                                    raise Exception('Qualifying asset does not have qualifier db data')
+                    else:
+                        raise Exception('Restricted asset did not have restricted db data')
+
+                # Associate new current restricted -> qualifiers
+                associate(self.current_restricted_asset, b'\x01' + quals + tx_numb + self.restricted_idx + self.qualifiers_idx)
+
+                # Update all qualifiers with this restricted asset
+                for asset in self.current_qualifiers:
+                    check = self.db.get_associated_assets_from(asset)
+                    if check is None:
+                        qual_add_undos.append(bytes([len(asset)]) + asset + b'\0\0')
+                    else:
+                        is_restricted, data = check
+                        if not is_restricted:
+                            # num associations + (asset + tx_numb + idx of restricted + idx of qualifier) + ...
+                            undo_bytes = len(asset).to_bytes(1, 'big') + asset + b'\0' + bytes([len(data)])
+                            associate_bytes_list = []
+                            for asset_name, tx_numb_l, res_idx, qual_idx in data:
+                                undo_bytes += bytes([len(asset_name)]) + asset_name + tx_numb_l + res_idx + qual_idx
+                                if asset_name != self.current_restricted_asset:
+                                    associate_bytes_list.append(bytes([len(asset_name)]) + asset_name + tx_numb_l + res_idx + qual_idx)
+                            associate_bytes_list.append(bytes([len(res)]) + res + tx_numb + self.restricted_idx + self.qualifiers_idx)
+                            qual_add_undos.append(undo_bytes)
+                            associate(asset, b'\0' + bytes([len(associate_bytes_list)]) + b''.join(associate_bytes_list))
+                        else:
+                            raise Exception('Qualifying asset does not have qualifier db data')
+
+                self.restricted_to_qualifier_undos.append(bytes([len(qual_remove_undos)]) + b''.join(qual_remove_undos) +
+                                                          bytes([len(qual_add_undos)]) + b''.join(qual_add_undos))
+
             append_hashXs(hashXs)
             update_touched(hashXs)
             tx_num += 1
             if is_asset:
                 asset_num += 1
+            self.current_restricted_asset = None
+            self.current_qualifiers = []
 
         self.db.history.add_unflushed(hashXs_by_tx, self.tx_count)
 
@@ -896,7 +1123,7 @@ class BlockProcessor:
         # Assets aren't always in tx's... remove None types
         asset_undo_info = [i for i in asset_undo_info if i]
 
-        return undo_info, asset_undo_info, asset_meta_undo_info
+        return undo_info, asset_undo_info, asset_meta_undo_info, t2a_undo_info, freezes_undo_info, r2q_undo_info
 
     async def _backup_block(self, raw_block):
         '''Backup the raw block and flush.
@@ -947,6 +1174,86 @@ class BlockProcessor:
                 data = asset_meta_undo_info[name_len + 1:name_len + 1 + data_len]
                 self.asset_data_reissued[name] = data
             asset_meta_undo_info = asset_meta_undo_info[name_len + 2 + data_len:]
+
+        asset_undo_tag_info = self.db.read_asset_undo_tag_info(self.height)
+        while asset_undo_tag_info:
+
+            # Decode
+            asset_name_len = asset_undo_tag_info[0]
+            asset_undo_tag_info = asset_undo_tag_info[1:]
+            asset_name = asset_undo_tag_info[:asset_name_len]
+            asset_undo_tag_info = asset_undo_tag_info[asset_name_len:]
+            pkh_len = asset_undo_tag_info[0]
+            asset_undo_tag_info = asset_undo_tag_info[1:]
+            pkh = asset_undo_tag_info[:pkh_len]
+            asset_undo_tag_info = asset_undo_tag_info[pkh_len:]
+            idx = asset_undo_tag_info[:4]
+            asset_undo_tag_info = asset_undo_tag_info[4:]
+            tx_numb = asset_undo_tag_info[:5]
+            asset_undo_tag_info = asset_undo_tag_info[5:]
+            # Construct keys to delete
+            self.tag_to_address_deletes.append(b'p' + bytes([pkh_len]) + pkh + idx + tx_numb)
+            self.tag_to_address_deletes.append(b'a' + bytes([asset_name_len]) + asset_name + idx + tx_numb)
+
+            has_rollback_latest = asset_undo_tag_info[0]
+            asset_undo_tag_info = asset_undo_tag_info[1:]
+
+            if has_rollback_latest != 0:
+                flag = asset_undo_tag_info[0]
+                asset_undo_tag_info = asset_undo_tag_info[1:]
+                old_idx = asset_undo_tag_info[:4]
+                asset_undo_tag_info = asset_undo_tag_info[4:]
+                old_tx_numb = asset_undo_tag_info[:5]
+                asset_undo_tag_info = asset_undo_tag_info[5:]
+                # Roll back latest value
+                self.is_qualified.__setitem__(
+                    bytes([asset_name_len]) + asset_name + bytes([pkh_len]) + pkh + old_idx + old_tx_numb,
+                    b'\x01' + bytes([flag]))
+                self.is_qualified.__setitem__(
+                    bytes([pkh_len]) + pkh + bytes([asset_name_len]) + asset_name + old_idx + old_tx_numb,
+                    b'\x01' + bytes([flag]))
+            else:
+                # No previous latest information, mark for deletion
+                self.is_qualified.__setitem__(
+                    bytes([asset_name_len]) + asset_name + bytes([pkh_len]) + pkh,
+                    b'\0')
+                self.is_qualified.__setitem__(
+                    bytes([pkh_len]) + pkh + bytes([asset_name_len]) + asset_name,
+                    b'\0')
+
+        asset_undo_freeze_info = self.db.read_asset_undo_freeze_info(self.height)
+        while asset_undo_freeze_info:
+
+            # Decode
+            asset_len = asset_undo_freeze_info[0]
+            asset_undo_freeze_info = asset_undo_freeze_info[1:]
+            asset = asset_undo_freeze_info[:asset_len]
+            asset_undo_freeze_info = asset_undo_freeze_info[asset_len:]
+            idx = asset_undo_freeze_info[:4]
+            asset_undo_freeze_info = asset_undo_freeze_info[4:]
+            tx_numb = asset_undo_freeze_info[:5]
+            asset_undo_freeze_info = asset_undo_freeze_info[5:]
+
+            # Parse tags for deletion
+            self.global_freezes_deletes.append(b'f' + bytes(asset_len) + asset + idx + tx_numb)
+
+            has_rollback_latest = asset_undo_freeze_info[0]
+            asset_undo_freeze_info = asset_undo_freeze_info[1:]
+
+            if has_rollback_latest != 0:
+                flag = asset_undo_freeze_info[0]
+                asset_undo_freeze_info = asset_undo_freeze_info[1:]
+                old_idx = asset_undo_freeze_info[:4]
+                asset_undo_freeze_info = asset_undo_freeze_info[4:]
+                old_tx_numb = asset_undo_freeze_info[:5]
+                asset_undo_freeze_info = asset_undo_freeze_info[5:]
+                # Roll back latest value
+                self.is_frozen.__setitem__(bytes(asset_len) + asset + old_idx + old_tx_numb,
+                                           b'\x01' + bytes([flag]))
+            else:
+                # No previous latest information, mark for deletion
+                self.is_frozen.__setitem__(bytes(asset_len) + asset,
+                                           b'\0')
 
         n = len(undo_info)
         asset_n = len(asset_undo_info)
