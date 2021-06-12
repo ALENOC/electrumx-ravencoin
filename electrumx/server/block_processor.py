@@ -1074,9 +1074,9 @@ class BlockProcessor:
                                     associate(asset, associate_bytes)
 
                                 else:
-                                    raise Exception('Qualifying asset does not have qualifier db data')
+                                    raise Exception('Qualifying asset {} does not have qualifier db data'.format(asset))
                     else:
-                        raise Exception('Restricted asset did not have restricted db data')
+                        raise Exception('Restricted asset {} did not have restricted db data'.format(res))
 
                 # Associate new current restricted -> qualifiers
                 associate(self.current_restricted_asset, b'\x01' + quals + tx_numb + self.restricted_idx + self.qualifiers_idx)
@@ -1101,7 +1101,7 @@ class BlockProcessor:
                             qual_add_undos.append(undo_bytes)
                             associate(asset, b'\0' + bytes([len(associate_bytes_list)]) + b''.join(associate_bytes_list))
                         else:
-                            raise Exception('Qualifying asset does not have qualifier db data')
+                            raise Exception('Qualifying asset {} does not have qualifier db data'.format(asset))
 
                 r2q_undo_info.append(bytes([len(qual_remove_undos)]) + b''.join(qual_remove_undos) +
                                                           bytes([len(qual_add_undos)]) + b''.join(qual_add_undos))
