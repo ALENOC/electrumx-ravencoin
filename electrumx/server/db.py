@@ -1279,6 +1279,7 @@ class DB(object):
                     'txid': hash_to_hex_str(tx_hash),
                     'tx_pos': tx_pos,
                 }
+            return tags
 
         def get_h160_history():
             prefix = b'a' + bytes([len(asset)]) + asset
@@ -1334,6 +1335,7 @@ class DB(object):
                     'txid': hash_to_hex_str(tx_hash),
                     'tx_pos': tx_pos,
                 }
+            return tags
 
         def get_h160_history():
             prefix = b'p' + bytes([len(h160)]) + h160

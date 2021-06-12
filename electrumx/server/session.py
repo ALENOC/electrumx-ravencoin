@@ -1506,7 +1506,7 @@ class ElectrumX(SessionBase):
                 BAD_REQUEST, f'asset name greater than 32 characters'
             ) from None
 
-        ret = await self.db.get_associated_assets_from(asset.encode('ascii'))
+        ret = await self.db.get_associations_from_asset(asset.encode('ascii'), history)
 
         self.bump_cost(1.0 + len(ret['current']) / 50)
         if history:
