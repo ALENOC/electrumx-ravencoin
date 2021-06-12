@@ -682,7 +682,6 @@ class BlockProcessor:
                                 h160 = ops[1][2]
                                 asset_portion = ops[2][2]
                                 asset_portion_deserializer = self.coin.DESERIALIZER(asset_portion)
-                                asset_portion_deserializer = self.coin.DESERIALIZER(asset_portion_deserializer._read_varbytes())
                                 asset_name = asset_portion_deserializer._read_varbytes()
                                 flag = asset_portion._read_byte()
 
@@ -714,7 +713,6 @@ class BlockProcessor:
                             elif match_script_against_template(ops, ASSET_NULL_VERIFIER_TEMPLATE) > -1:
                                 qualifiers_b = ops[2][2]
                                 qualifiers_deserializer = self.coin.DESERIALIZER(qualifiers_b)
-                                qualifiers_deserializer = self.coin.DESERIALIZER(qualifiers_deserializer._read_varbytes())
                                 asset_name = qualifiers_deserializer._read_varbytes()
                                 for asset in asset_name.decode('ascii').split('&'):
                                     if asset[0] != '#':
