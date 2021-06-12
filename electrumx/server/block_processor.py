@@ -1027,10 +1027,10 @@ class BlockProcessor:
                     quals += len(qual).to_bytes(1, 'big') + qual
 
                 # tx_hash + idx (uint32le) + idx_quals: restricted + tx_num (uint64le[:5]) + num quals + quals
-                self.restricted_to_qualifier.__setitem__(tx_hash + self.restricted_idx + self.qualifiers_idx,
+                put_r2q(tx_hash + self.restricted_idx + self.qualifiers_idx,
                                                          len(res).to_bytes(1, 'big') + res + tx_numb + quals)
 
-                self.restricted_to_qualifier_undos.append(len(res).to_bytes(1, 'big') + res + quals + tx_numb +
+                r2q_undo_info.append(len(res).to_bytes(1, 'big') + res + quals + tx_numb +
                                                           self.restricted_idx + self.qualifiers_idx)
 
                 associate = self.qr_associations.__setitem__
@@ -1039,7 +1039,7 @@ class BlockProcessor:
                 qual_remove_undos = []
                 qual_add_undos = []
                 if check is None:
-                    self.restricted_to_qualifier_undos.append(len(res).to_bytes(1, 'big') + res + b'\x01\0')
+                    r2q_undo_info.append(len(res).to_bytes(1, 'big') + res + b'\x01\0')
                 else:
                     is_restricted, data = check
 
@@ -1048,7 +1048,7 @@ class BlockProcessor:
                         # 1 + num quals + quals + tx_num + idx restricted + idx quals
                         quals = b''.join(len(name).to_bytes(1, 'big') + name for name in names)
                         # Undo info restricted -> quals
-                        self.restricted_to_qualifier_undos.append(len(res).to_bytes(1, 'big') + res + b'\x01' +
+                        r2q_undo_info.append(len(res).to_bytes(1, 'big') + res + b'\x01' +
                                                                   len(names).to_bytes(1, 'big') +
                                                                   quals + tx_numb + res_idx + qual_idx)
 
@@ -1102,7 +1102,7 @@ class BlockProcessor:
                         else:
                             raise Exception('Qualifying asset does not have qualifier db data')
 
-                self.restricted_to_qualifier_undos.append(bytes([len(qual_remove_undos)]) + b''.join(qual_remove_undos) +
+                r2q_undo_info.append(bytes([len(qual_remove_undos)]) + b''.join(qual_remove_undos) +
                                                           bytes([len(qual_add_undos)]) + b''.join(qual_add_undos))
 
             append_hashXs(hashXs)
