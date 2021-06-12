@@ -683,7 +683,7 @@ class BlockProcessor:
                                 asset_portion = ops[2][2]
                                 asset_portion_deserializer = self.coin.DESERIALIZER(asset_portion)
                                 asset_name = asset_portion_deserializer._read_varbytes()
-                                flag = asset_portion._read_byte()
+                                flag = asset_portion_deserializer._read_byte()
 
                                 # tx_hash + idx (uint32le): asset + tx_num (uint64le[:5]) + pubkey + flag
                                 put_t2a(tx_hash + idx,
