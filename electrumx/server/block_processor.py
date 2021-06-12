@@ -1064,14 +1064,14 @@ class BlockProcessor:
                                     # num associations + (asset + tx_numb + idx of restricted + idx of qualifier) + ...
 
                                     undo_bytes = len(asset).to_bytes(1, 'big') + asset + b'\0' + bytes([len(data)])
-                                    associate_bytes = b'\0' + bytes([len(data) - 1])
+                                    associate_bytes_list = []
                                     for asset_name, tx_numb, res_idx, qual_idx in data:
                                         undo_bytes += bytes([len(asset_name)]) + asset_name + tx_numb + res_idx + qual_idx
                                         if asset_name != self.current_restricted_asset:
-                                            associate_bytes += bytes([len(asset_name)]) + asset_name + tx_numb + res_idx + qual_idx
+                                            associate_bytes_list.append(bytes([len(asset_name)]) + asset_name + tx_numb + res_idx + qual_idx)
 
                                     qual_remove_undos.append(undo_bytes)
-                                    associate(asset, associate_bytes)
+                                    associate(asset, b'\0' + bytes([len(associate_bytes_list)]) + b''.join(associate_bytes_list))
 
                                 else:
                                     raise Exception('Qualifying asset {} does not have qualifier db data'.format(asset))
