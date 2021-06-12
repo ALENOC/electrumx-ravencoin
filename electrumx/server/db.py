@@ -1388,7 +1388,7 @@ class DB(object):
                 }
 
         def get_frozen_history():
-            prefix = b'f' + bytes(len(asset)) + asset
+            prefix = b'f' + bytes([len(asset)]) + asset
             history = {}
             for db_key, db_value in self.asset_db.iterator(prefix=prefix):
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
