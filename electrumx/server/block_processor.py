@@ -309,6 +309,11 @@ class BlockProcessor:
         self.current_qualifiers = []  # type: List[bytes]
         self.qualifiers_idx = b''
 
+        # Asset broadcasts
+        self.asset_broadcast = {}
+        self.asset_broadcast_undos = []
+        self.asset_broadcast_dels = []
+
     async def run_with_lock(self, coro):
         # Shielded so that cancellations from shutdown don't lose work.  Cancellation will
         # cause fetch_and_process_blocks to block on the lock in flush(), the task completes,
@@ -434,7 +439,8 @@ class BlockProcessor:
                          self.global_freezes, self.is_frozen,
                          self.global_freezes_deletes, self.global_freezes_undos,
                          self.tag_to_address, self.is_qualified,
-                         self.tag_to_address_deletes, self.tag_to_address_undos)
+                         self.tag_to_address_deletes, self.tag_to_address_undos,
+                         self.asset_broadcast, self.asset_broadcast_undos, self.asset_broadcast_dels)
 
     async def flush(self, flush_utxos):
         self.db.flush_dbs(self.flush_data(), flush_utxos, self.estimate_txs_remaining)
@@ -522,7 +528,8 @@ class BlockProcessor:
                           else is_unspendable_legacy)
 
         (undo_info, asset_undo_info, asset_meta_undo_info,
-         t2a_undo_info, freezes_undo_info, r2q_undo_info) = self.advance_txs(block.transactions, is_unspendable)
+         t2a_undo_info, freezes_undo_info, r2q_undo_info,
+         asset_broadcast_undo_info) = self.advance_txs(block.transactions, is_unspendable)
 
         if height >= min_height:
             self.undo_infos.append((undo_info, height))
@@ -531,6 +538,7 @@ class BlockProcessor:
             self.tag_to_address_undos.append((t2a_undo_info, height))
             self.global_freezes_undos.append((freezes_undo_info, height))
             self.restricted_to_qualifier_undos.append((r2q_undo_info, height))
+            self.asset_broadcast_undos.append((asset_broadcast_undo_info, height))
             self.db.write_raw_block(block.raw, height)
 
         self.height = height
@@ -551,6 +559,8 @@ class BlockProcessor:
         t2a_undo_info = []
         freezes_undo_info = []
 
+        asset_broadcast_undo_info = []
+
         tx_num = self.tx_count
         asset_num = self.asset_count
         script_hashX = self.coin.hashX_from_script
@@ -559,6 +569,7 @@ class BlockProcessor:
         put_asset = self.asset_cache.__setitem__
         put_asset_data_new = self.asset_data_new.__setitem__
         put_asset_data_reissued = self.asset_data_reissued.__setitem__
+        put_asset_broadcast = self.asset_broadcast.__setitem__
 
         put_r2q = self.restricted_to_qualifier.__setitem__
         put_t2a = self.tag_to_address.__setitem__
@@ -871,6 +882,13 @@ class BlockProcessor:
                             put_asset(tx_hash + to_le_uint32(idx),
                                       hashX + tx_numb + to_le_uint64(sats) +
                                       bytes([len(asset_name)]) + asset_name)
+                            try:
+                                # This is a message broadcast
+                                data = asset_deserializer._get_meta_raw()
+                                put_asset_broadcast(bytes([len(asset_name)]) + asset_name + to_le_uint32(idx) + tx_numb, data)
+                                asset_broadcast_undo_info.append(bytes([len(asset_name)]) + asset_name + to_le_uint32(idx) + tx_numb)
+                            except:
+                                pass
                         else:
                             raise Exception('Unknown asset type: {}'.format(script_type))
 
@@ -969,6 +987,13 @@ class BlockProcessor:
                             put_asset(tx_hash + to_le_uint32(idx),
                                       hashX + tx_numb + to_le_uint64(sats) +
                                       bytes([len(asset_name)]) + asset_name)
+                            try:
+                                # This is a message broadcast
+                                data = asset_deserializer._get_meta_raw()
+                                put_asset_broadcast(bytes([len(asset_name)]) + asset_name + to_le_uint32(idx) + tx_numb, data)
+                                asset_broadcast_undo_info.append(bytes([len(asset_name)]) + asset_name + to_le_uint32(idx) + tx_numb)
+                            except:
+                                pass
                         else:
                             raise Exception('Unknown asset type: {}'.format(asset_script_type))
 
@@ -1017,7 +1042,7 @@ class BlockProcessor:
                                     f.write('Exception : {}\n'.format(repr(e)))
                                     f.write('Traceback : {}\n'.format(traceback.format_exc()))
 
-            if self.current_restricted_asset and self.current_qualifiers:
+            if self.current_restricted_asset and len(self.current_qualifiers) != 0:
 
                 res = self.current_restricted_asset  # type: bytes
 
@@ -1131,7 +1156,8 @@ class BlockProcessor:
         # Assets aren't always in tx's... remove None types
         asset_undo_info = [i for i in asset_undo_info if i]
 
-        return undo_info, asset_undo_info, asset_meta_undo_info, t2a_undo_info, freezes_undo_info, r2q_undo_info
+        return undo_info, asset_undo_info, asset_meta_undo_info, t2a_undo_info, freezes_undo_info, r2q_undo_info, \
+               asset_broadcast_undo_info
 
     async def _backup_block(self, raw_block):
         '''Backup the raw block and flush.
@@ -1182,6 +1208,15 @@ class BlockProcessor:
                 data = asset_meta_undo_info[name_len + 1:name_len + 1 + data_len]
                 self.asset_data_reissued[name] = data
             asset_meta_undo_info = asset_meta_undo_info[name_len + 2 + data_len:]
+
+        asset_broadcast_undo_info = self.db.read_asset_broadcast_undo_info(self.height)
+        while asset_broadcast_undo_info:
+            asset_len = asset_broadcast_undo_info[0]
+            # bytes([len(asset_name)]) + asset_name + to_le_uint32(idx) + tx_numb
+            key_len = 1 + asset_len + 4 + 5
+            key = asset_broadcast_undo_info[:key_len]
+            asset_broadcast_undo_info = asset_broadcast_undo_info[key_len:]
+            self.asset_broadcast_dels.append(b'b' + key)
 
         asset_undo_tag_info = self.db.read_asset_undo_tag_info(self.height)
         while asset_undo_tag_info:

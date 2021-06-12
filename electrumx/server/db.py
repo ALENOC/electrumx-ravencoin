@@ -54,6 +54,7 @@ class FlushData(object):
     asset_meta_undos = attr.ib()
     asset_meta_deletes = attr.ib()
     asset_count = attr.ib()
+
     # Asset Qualifiers
     asset_restricted2qual = attr.ib()
     asset_restricted2qual_del = attr.ib()
@@ -69,6 +70,11 @@ class FlushData(object):
     asset_tag2pub_current = attr.ib()
     asset_tag2pub_del = attr.ib()
     asset_tag2pub_undo = attr.ib()
+
+    # Broadcasts
+    asset_broadcasts = attr.ib()
+    asset_broadcasts_undo = attr.ib()
+    asset_broadcasts_del = attr.ib()
 
 
 class DB(object):
@@ -248,6 +254,10 @@ class DB(object):
         assert not flush_data.asset_tag2pub_undo
         assert not flush_data.asset_tag2pub_current
 
+        assert not flush_data.asset_broadcasts
+        assert not flush_data.asset_broadcasts_undo
+        assert not flush_data.asset_broadcasts_del
+
         self.history.assert_flushed()
 
     def flush_dbs(self, flush_data, flush_utxos, estimate_txs_remaining):
@@ -347,15 +357,20 @@ class DB(object):
     def flush_history(self):
         self.history.flush()
 
-    def flush_asset_info_db(self, batch, flush_data):
+    def flush_asset_info_db(self, batch, flush_data: FlushData):
         start_time = time.monotonic()
         adds = len(flush_data.asset_meta_adds)
         reissues = len(flush_data.asset_meta_reissues)
+        broadcasts = len(flush_data.asset_broadcasts)
 
         batch_delete = batch.delete
         for key in flush_data.asset_meta_deletes:
             batch_delete(key)
         flush_data.asset_meta_deletes.clear()
+
+        for key in flush_data.asset_broadcasts_del:
+            batch_delete(key)
+        flush_data.asset_broadcasts_del.clear()
 
         batch_put = batch.put
         for key, value in flush_data.asset_meta_reissues.items():
@@ -363,16 +378,24 @@ class DB(object):
         flush_data.asset_meta_reissues.clear()
 
         for key, value in flush_data.asset_meta_adds.items():
-            batch_put(key, value)
+            batch_put(b'd' + key, value)
         flush_data.asset_meta_adds.clear()
 
         self.flush_asset_meta_undos(batch_put, flush_data.asset_meta_undos)
         flush_data.asset_meta_undos.clear()
 
+        for key, value in flush_data.asset_broadcasts.items():
+            batch_put(b'b' + key, value)
+        flush_data.asset_broadcasts.clear()
+
+        self.flush_asset_broadcast_undos(batch_put, flush_data.asset_broadcasts_undo)
+        flush_data.asset_broadcasts_undo.clear()
+
         if self.asset_info_db.for_sync:
             elapsed = time.monotonic() - start_time
             self.logger.info(f'{adds:,d} assets\' metadata created, '
-                             f'{reissues:,d} assets\' metadata reissued '
+                             f'{reissues:,d} assets\' metadata reissued, '
+                             f'{broadcasts:,d} messages broadcast, '
                              f'{elapsed:.1f}s, committing...')
 
     def flush_asset_db(self, batch, flush_data: FlushData):
@@ -757,6 +780,9 @@ class DB(object):
         '''Returns a height from which we should store undo info.'''
         return max_height - self.env.reorg_limit + 1
 
+    def undo_key_broadcast(self, height):
+        return b'B' + pack_be_uint32(height)
+
     def undo_key(self, height):
         '''DB key for undo information at the given height.'''
         return b'U' + pack_be_uint32(height)
@@ -769,6 +795,9 @@ class DB(object):
 
     def undo_tag_key(self, height):
         return b'T' + pack_be_uint32(height)
+
+    def read_asset_broadcast_undo_info(self, height):
+        return self.asset_info_db.get(self.undo_key_broadcast(height))
 
     def read_asset_meta_undo_info(self, height):
         return self.asset_info_db.get(self.undo_key(height))
@@ -788,6 +817,11 @@ class DB(object):
     def read_undo_info(self, height):
         '''Read undo information from a file for the current height.'''
         return self.utxo_db.get(self.undo_key(height))
+
+    def flush_asset_broadcast_undos(self, batch_put, undo_infos):
+        for undo_info, height in undo_infos:
+            if len(undo_info) > 0:
+                batch_put(self.undo_key_broadcast(height), b''.join(undo_info))
 
     def flush_asset_meta_undos(self, batch_put, undo_infos):
         for undo_info, height in undo_infos:
@@ -1496,7 +1530,7 @@ class DB(object):
 
     async def lookup_asset_meta(self, asset_name):
         def read_assets_meta():
-            b = self.asset_info_db.get(asset_name)
+            b = self.asset_info_db.get(b'd' + asset_name)
             if not b:
                 return {}
             div_amt = b[0]
