@@ -701,6 +701,10 @@ class BlockProcessor:
                                         bytes([len(asset_name)]) + asset_name +
                                         tx_numb + bytes([len(h160)]) + h160 + bytes([flag]))
 
+                                print('tagging:')
+                                print(asset_name)
+                                print(h160)
+
                                 # This tracks the most up-to-date asset-pubkey is qualified
                                 put_qualified(bytes([len(asset_name)]) + asset_name + bytes([len(h160)]) + h160 +
                                               idx + tx_numb,
@@ -1084,6 +1088,8 @@ class BlockProcessor:
                                 if check is None:
                                     raise Exception('Qualifier {} has no associations but restricted {} was associated with it'.format(asset, res))
                                 is_restricted, data = check
+
+                                print('Removing {}; not in {}'.format(asset, self.current_qualifiers))
 
                                 if not is_restricted:
                                     # num associations + (asset + tx_numb + idx of restricted + idx of qualifier) + ...

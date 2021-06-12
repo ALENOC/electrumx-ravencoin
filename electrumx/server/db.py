@@ -573,6 +573,9 @@ class DB(object):
 
         for key, value in flush_data.asset_current_associations.items():
             # This stores / overwrites the latest restricted to qual associations
+            print('writing association:')
+            print(key)
+            print(value)
             batch_put(b'r' + key, value)
         flush_data.asset_current_associations.clear()
 
@@ -1368,6 +1371,8 @@ class DB(object):
                 tx_pos, = unpack_le_uint32(db_value[-9:-5])
                 tx_num, = unpack_le_uint64(db_value[-5:] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
+
+                print(db_key)
 
                 db_key = db_key[h160_len + 1:]
                 asset_len = db_key[0]
