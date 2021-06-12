@@ -852,7 +852,7 @@ class BlockProcessor:
                             asset_data += to_le_uint32(idx) + tx_numb
                             if divisions == 0xff:
                                 # We need to tell the client the original tx for reissues
-                                asset_data += b'\x01' + old_data[-(4 + 5):]
+                                asset_data += b'\x01' + old_data[-(4 + 5) - 1:-1] + b'\0'
                             else:
                                 asset_data += b'\0'
 
@@ -950,7 +950,7 @@ class BlockProcessor:
                             asset_data += to_le_uint32(idx) + tx_numb
                             if divisions == 0xff:
                                 # We need to tell the client the original tx for reissues
-                                asset_data += b'\x01' + old_data[-(4 + 5):]
+                                asset_data += b'\x01' + old_data[-(4 + 5) - 1:-1] + b'\0'
                             else:
                                 asset_data += b'\0'
 
@@ -1046,11 +1046,11 @@ class BlockProcessor:
                     if is_restricted:
                         tx_numb, res_idx, qual_idx, names = data
                         # 1 + num quals + quals + tx_num + idx restricted + idx quals
-                        quals = b''.join(len(name).to_bytes(1, 'big') + name for name in names)
+                        quals_old = b''.join(len(name).to_bytes(1, 'big') + name for name in names)
                         # Undo info restricted -> quals
                         r2q_undo_info.append(len(res).to_bytes(1, 'big') + res + b'\x01' +
                                                                   len(names).to_bytes(1, 'big') +
-                                                                  quals + tx_numb + res_idx + qual_idx)
+                                                                  quals_old + tx_numb + res_idx + qual_idx)
 
                         # Update qualifiers that are no longer associated
                         for asset in names:
@@ -1087,19 +1087,27 @@ class BlockProcessor:
                     if check is None:
                         qual_add_undos.append(bytes([len(asset)]) + asset + b'\0\0')
                         associate(asset, b'\0\x01' + bytes([len(res)]) + res + tx_numb + self.restricted_idx + self.qualifiers_idx)
+                        print('New qualifier association:')
+                        print(asset)
+                        print(b'\0\x01' + bytes([len(res)]) + res + tx_numb + self.restricted_idx + self.qualifiers_idx)
+
                     else:
                         is_restricted, data = check
                         if not is_restricted:
                             # num associations + (asset + tx_numb + idx of restricted + idx of qualifier) + ...
                             undo_bytes = len(asset).to_bytes(1, 'big') + asset + b'\0' + bytes([len(data)])
                             associate_bytes_list = []
-                            for asset_name, tx_numb_l, res_idx, qual_idx in data:
-                                undo_bytes += bytes([len(asset_name)]) + asset_name + tx_numb_l + res_idx + qual_idx
+                            for asset_name, tx_numb_l, res_idx_l, qual_idx in data:
+                                undo_bytes += bytes([len(asset_name)]) + asset_name + tx_numb_l + res_idx_l + qual_idx
                                 if asset_name != self.current_restricted_asset:
-                                    associate_bytes_list.append(bytes([len(asset_name)]) + asset_name + tx_numb_l + res_idx + qual_idx)
+                                    associate_bytes_list.append(bytes([len(asset_name)]) + asset_name + tx_numb_l + res_idx_l + qual_idx)
                             associate_bytes_list.append(bytes([len(res)]) + res + tx_numb + self.restricted_idx + self.qualifiers_idx)
                             qual_add_undos.append(undo_bytes)
                             associate(asset, b'\0' + bytes([len(associate_bytes_list)]) + b''.join(associate_bytes_list))
+                            print('New qualifier association:')
+                            print(asset)
+                            print(b'\0' + bytes([len(associate_bytes_list)]) + b''.join(associate_bytes_list))
+
                         else:
                             raise Exception('Qualifying asset {} does not have qualifier db data'.format(asset))
 

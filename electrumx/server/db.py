@@ -436,16 +436,23 @@ class DB(object):
             value = value[1:]
             pubkey = value[:pubkey_len]
             value = value[pubkey_len:]
-            flag = value[:1]
+            flag = value[0]
 
             suffix = idx + tx_num
             # pubkey -> asset & flag w/ tx info
             batch_put(b'p' + bytes([pubkey_len]) + pubkey + suffix,
-                      bytes([asset_len]) + asset_name + flag)
+                      bytes([asset_len]) + asset_name + bytes([flag]))
 
             # asset -> pubkey & flag w/ tx info
             batch_put(b'a' + bytes([asset_len]) + asset_name + suffix,
-                      bytes([pubkey_len]) + pubkey + flag)
+                      bytes([pubkey_len]) + pubkey + bytes([flag]))
+
+            print('Tag:')
+            print('Pubkey:')
+            print(pubkey.hex())
+            print('Asset:')
+            print(asset_name.decode('ascii'))
+
         flush_data.asset_tag2pub.clear()
 
         self.flush_t2p_undo_infos(batch_put, flush_data.asset_tag2pub_undo)
@@ -1328,7 +1335,7 @@ class DB(object):
 
                 asset_len = db_key[h160_len + 1]
                 asset = db_key[-asset_len:]  # type: bytes
-
+                print(asset.hex())
                 tags[asset.decode('ascii')] = {
                     'is_qualified': False if flag == 0 else True,
                     'height': height,
