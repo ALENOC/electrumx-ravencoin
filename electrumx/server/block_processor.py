@@ -1057,7 +1057,7 @@ class BlockProcessor:
                             if asset not in self.current_qualifiers:
                                 check = self.db.get_associated_assets_from(asset)
                                 if check is None:
-                                    raise Exception('Qualifier has no associations but restricted was associated with it')
+                                    raise Exception('Qualifier {} has no associations but restricted {} was associated with it'.format(asset, res))
                                 is_restricted, data = check
 
                                 if not is_restricted:
@@ -1086,6 +1086,7 @@ class BlockProcessor:
                     check = self.db.get_associated_assets_from(asset)
                     if check is None:
                         qual_add_undos.append(bytes([len(asset)]) + asset + b'\0\0')
+                        associate(asset, b'\0\x01' + bytes([len(res)]) + res + tx_numb + self.restricted_idx + self.qualifiers_idx)
                     else:
                         is_restricted, data = check
                         if not is_restricted:
