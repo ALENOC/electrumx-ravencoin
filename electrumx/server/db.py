@@ -365,16 +365,16 @@ class DB(object):
 
         batch_delete = batch.delete
         for key in flush_data.asset_meta_deletes:
-            batch_delete(key)
+            batch_delete(b'd' + key)
         flush_data.asset_meta_deletes.clear()
 
         for key in flush_data.asset_broadcasts_del:
-            batch_delete(key)
+            batch_delete(b'b' + key)
         flush_data.asset_broadcasts_del.clear()
 
         batch_put = batch.put
         for key, value in flush_data.asset_meta_reissues.items():
-            batch_put(key, value)
+            batch_put(b'd' + key, value)
         flush_data.asset_meta_reissues.clear()
 
         for key, value in flush_data.asset_meta_adds.items():
@@ -1229,6 +1229,7 @@ class DB(object):
             if res is None:
                 return {}
             is_restricted, data = res
+            print(data)
             if is_restricted:
                 tx_numb, res_idx, qual_idx, names = data
                 res_pos, = unpack_le_uint32(res_idx)
@@ -1311,8 +1312,9 @@ class DB(object):
                 tx_num, = unpack_le_uint64(db_value[-5:] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
 
-                h160_len = db_key[asset_len + 1]
-                h160 = db_key[-h160_len:]  # type: bytes
+                db_key = db_key[asset_len+1:]
+                h160_len = db_key[0]
+                h160 = db_key[1:1 + h160_len]  # type: bytes
 
                 tags[h160.hex()] = {
                     'is_qualified': False if flag == 0 else True,
@@ -1367,8 +1369,10 @@ class DB(object):
                 tx_num, = unpack_le_uint64(db_value[-5:] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
 
-                asset_len = db_key[h160_len + 1]
-                asset = db_key[-asset_len:]  # type: bytes
+                db_key = db_key[h160_len + 1:]
+                asset_len = db_key[0]
+                asset = db_key[1:1 + asset_len]  # type: bytes
+
                 print(asset.hex())
                 tags[asset.decode('ascii')] = {
                     'is_qualified': False if flag == 0 else True,
