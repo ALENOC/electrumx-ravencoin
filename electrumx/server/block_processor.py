@@ -455,7 +455,8 @@ class BlockProcessor:
         tx_hash_size = ((self.tx_count - self.db.fs_tx_count) * 32
                         + (self.height - self.db.fs_height) * 42)
 
-        # TODO Fix these approximations
+        # TODO Fix/add these approximations
+        # These are worst case (32 byte asset name) approximations
         asset_cache_size = len(self.asset_cache) * 235  # Added 30 bytes for the max name length
         asset_deletes_size = len(self.asset_deletes) * 57
         asset_data_new_size = len(self.asset_data_new) * 232
@@ -693,10 +694,10 @@ class BlockProcessor:
                                 # This tracks the most up-to-date asset-pubkey is qualified
                                 put_qualified(bytes([len(asset_name)]) + asset_name + bytes([len(h160)]) + h160 +
                                               idx + tx_numb,
-                                              False if flag == 0 else True)
+                                              b'\x01' + bytes([flag]))
                                 put_qualified(bytes([len(h160)]) + h160 + bytes([len(asset_name)]) + asset_name +
                                               idx + tx_numb,
-                                              False if flag == 0 else True)
+                                              b'\x01' + bytes([flag]))
 
                                 # During a back up, this will be used to delete keys
                                 t2a_undo_info.append(bytes([len(asset_name)]) + asset_name + bytes([len(h160)]) + h160 +
@@ -742,7 +743,7 @@ class BlockProcessor:
 
                                 # Current info
                                 put_frozen(bytes([asset_name_len]) + asset_name + idx + tx_numb,
-                                           False if flag == 0 else True)
+                                           b'\x01' + bytes([flag]))
 
                                 # Delete this
                                 freezes_undo_info.append(bytes([asset_name_len]) + asset_name + idx + tx_numb)
