@@ -208,6 +208,8 @@ class Deserializer(object):
 
     def _get_meta_raw(self):
         meta_len = 34
+        if self.cursor + meta_len > self.binary_length:
+            raise IndexError('Out of bounds: {}'.format(self.cursor + meta_len))
         meta = self.binary[self.cursor:self.cursor+meta_len]
         self.cursor += meta_len
         return meta

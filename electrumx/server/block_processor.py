@@ -883,8 +883,8 @@ class BlockProcessor:
                                       hashX + tx_numb + to_le_uint64(sats) +
                                       bytes([len(asset_name)]) + asset_name)
                             try:
-                                # This is a message broadcast
                                 data = asset_deserializer._get_meta_raw()
+                                # This is a message broadcast
                                 put_asset_broadcast(bytes([len(asset_name)]) + asset_name + to_le_uint32(idx) + tx_numb, data)
                                 asset_broadcast_undo_info.append(bytes([len(asset_name)]) + asset_name + to_le_uint32(idx) + tx_numb)
                             except:
@@ -1042,9 +1042,12 @@ class BlockProcessor:
                                     f.write('Exception : {}\n'.format(repr(e)))
                                     f.write('Traceback : {}\n'.format(traceback.format_exc()))
 
-            if self.current_restricted_asset and len(self.current_qualifiers) != 0:
+            if self.current_restricted_asset and self.current_qualifiers:
 
                 res = self.current_restricted_asset  # type: bytes
+
+                # Remove dummy data
+                self.current_qualifiers = [asset for asset in self.current_qualifiers if asset]
 
                 # Parse quals
                 quals = len(self.current_qualifiers).to_bytes(1, 'big')
