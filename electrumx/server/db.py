@@ -536,6 +536,8 @@ class DB(object):
                 batch_put(prefix + bytes([len(qual)]) + qual + res_idx + quals_idx + tx_numb,
                           b'\x01' + bytes([restricted_len]) + restricted)
 
+        flush_data.asset_restricted2qual.clear()
+
         self.flush_restricted2qual_undo_info(batch_put, flush_data.asset_restricted2qual_undo)
         flush_data.asset_restricted2qual_undo.clear()
 
