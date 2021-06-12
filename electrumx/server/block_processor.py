@@ -731,8 +731,8 @@ class BlockProcessor:
                                             # This is a valid asset name
                                             asset = '#' + asset
                                         elif asset == 'true':
-                                            # Dummy data to append
-                                            asset = ''
+                                            # No associated qualifiers
+                                            continue
                                         else:
                                             raise Exception('Bad qualifier')
 
@@ -1045,9 +1045,6 @@ class BlockProcessor:
             if self.current_restricted_asset and self.current_qualifiers:
 
                 res = self.current_restricted_asset  # type: bytes
-
-                # Remove dummy data
-                self.current_qualifiers = [asset for asset in self.current_qualifiers if asset]
 
                 # Parse quals
                 quals = len(self.current_qualifiers).to_bytes(1, 'big')
