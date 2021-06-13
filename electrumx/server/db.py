@@ -535,6 +535,7 @@ class DB(object):
             tx_numb = key[:5]
 
             quals = []
+            diss = []
             num_quals = value[0]
             value = value[1:]
             for _ in range(num_quals):
@@ -544,16 +545,31 @@ class DB(object):
                 value = value[qual_len:]
                 quals.append(qual)
 
+            num_dis = value[0]
+            value = value[1:]
+            for _ in range(num_dis):
+                qual_len = value[0]
+                value = value[1:]
+                qual = value[:qual_len]
+                value = value[qual_len:]
+                diss.append(qual)
+
             # We want ->
-            # restricted + restricted idx + quals idx + txnumb: num_quals + quals
+            # restricted + restricted idx + quals idx + txnumb: num_assoc + num_quals + quals + num_dis + num_quals + quals
             # qualifier + restricted idx + quals idx + txnum: 1 + restricted
 
             batch_put(prefix + bytes([restricted_len]) + restricted + res_idx + quals_idx + tx_numb,
-                      bytes([len(quals)]) + b''.join([bytes([len(qual)]) + qual for qual in quals]))
+                      bytes([len(quals)]) + b''.join([bytes([len(qual)]) + qual for qual in quals]) +
+                      bytes([len(diss)]) + b''.join([bytes([len(qual)]) + qual for qual in quals]))
 
             for qual in quals:
                 batch_put(prefix + bytes([len(qual)]) + qual + res_idx + quals_idx + tx_numb,
-                          b'\x01' + bytes([restricted_len]) + restricted)
+                          b'\x01' + bytes([restricted_len]) + restricted + b'\0')
+
+            for qual in diss:
+                batch_put(prefix + bytes([len(qual)]) + qual + res_idx + quals_idx + tx_numb,
+                          b'\0\x01' + bytes([restricted_len]) + restricted)
+
 
         flush_data.asset_restricted2qual.clear()
 
@@ -1235,7 +1251,7 @@ class DB(object):
                 return {}
             is_restricted, data = res
             if is_restricted:
-                tx_numb, res_idx, qual_idx, names = data
+                tx_numb, res_idx, qual_idx, names, old_names = data
                 res_pos, = unpack_le_uint32(res_idx)
                 qual_pos, = unpack_le_uint32(qual_idx)
                 tx_num, = unpack_le_uint64(tx_numb + bytes(3))
@@ -1243,21 +1259,30 @@ class DB(object):
                 to_ret = {}
                 for qualifier in names:
                     to_ret[qualifier.decode('ascii')] = {
+                        'associated': True,
                         'height': height,
                         'txid': hash_to_hex_str(tx_hash),
                         'restricted_pos': res_pos,
                         'qualifier_pos': qual_pos
                     }
-
+                for qualifier in old_names:
+                    to_ret[qualifier.decode('ascii')] = {
+                        'associated': False,
+                        'height': height,
+                        'txid': hash_to_hex_str(tx_hash),
+                        'restricted_pos': res_pos,
+                        'qualifier_pos': qual_pos
+                    }
                 return to_ret
             else:
                 to_ret = {}
-                for asset_name, tx_numb, res_idx, qual_idx in data:
+                for type, asset_name, tx_numb, res_idx, qual_idx in data:
                     res_pos, = unpack_le_uint32(res_idx)
                     qual_pos, = unpack_le_uint32(qual_idx)
                     tx_num, = unpack_le_uint64(tx_numb + bytes(3))
                     tx_hash, height = self.fs_tx_hash(tx_num)
                     to_ret[asset_name.decode('ascii')] = {
+                        'associated': type,
                         'height': height,
                         'txid': hash_to_hex_str(tx_hash),
                         'restricted_pos': res_pos,
@@ -1285,8 +1310,19 @@ class DB(object):
                     db_value = db_value[name_len:]
                     associates.append(asset_b.decode('ascii'))
 
+                num_un_associates = db_value[0]
+                db_value = db_value[1:]
+                disassociates = []
+                for _ in range(num_associates):
+                    name_len = db_value[0]
+                    db_value = db_value[1:]
+                    asset_b = db_value[:name_len]
+                    db_value = db_value[name_len:]
+                    disassociates.append(asset_b.decode('ascii'))
+
                 history[hash_to_hex_str(tx_hash)] = {
                     'associations': associates,
+                    'disassociations': disassociates,
                     'height': height,
                     'restricted_pos': res_tx_pos,
                     'qualifier_pos': qual_tx_pos,
@@ -1316,7 +1352,7 @@ class DB(object):
                 tx_num, = unpack_le_uint64(db_value[-5:] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
 
-                db_key = db_key[asset_len+1:]
+                db_key = db_key[asset_len+2:]
                 h160_len = db_key[0]
                 h160 = db_key[1:1 + h160_len]  # type: bytes
 
@@ -1373,9 +1409,7 @@ class DB(object):
                 tx_num, = unpack_le_uint64(db_value[-5:] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
 
-                print(db_key)
-
-                db_key = db_key[h160_len + 1:]
+                db_key = db_key[h160_len + 2:]
                 asset_len = db_key[0]
                 asset = db_key[1:1 + asset_len]  # type: bytes
 
@@ -1473,6 +1507,7 @@ class DB(object):
 
         if is_restricted:
             qualifiers = []
+            old_quals = []
             num_quals = value[0]
             value = value[1:]
             for _ in range(num_quals):
@@ -1481,18 +1516,28 @@ class DB(object):
                 qual = value[:qual_len]
                 value = value[qual_len:]
                 qualifiers.append(qual)
+            num_dis = value[0]
+            value = value[1:]
+            for _ in range(num_quals):
+                qual_len = value[0]
+                value = value[1:]
+                qual = value[:qual_len]
+                value = value[qual_len:]
+                old_quals.append(qual)
             res_idx = value[:4]
             value = value[4:]
             qual_idx = value[:4]
             value = value[4:]
             tx_numb = value[:5]
             value = value[5:]
-            return True, (tx_numb, res_idx, qual_idx, qualifiers)
+            return True, (tx_numb, res_idx, qual_idx, qualifiers, old_quals)
         else:
             restricted = []
             num_res = value[0]
             value = value[1:]
             for _ in range(num_res):
+                type = value[0]
+                value = value [1:]
                 res_len = value[0]
                 value = value[1:]
                 res = value[:res_len]
@@ -1503,20 +1548,22 @@ class DB(object):
                 value = value[4:]
                 tx_numb = value[:5]
                 value = value[5:]
-                restricted.append((res, tx_numb, res_idx, qual_idx))
+                restricted.append(((False if type == 0 else True), res, tx_numb, res_idx, qual_idx))
             return False, restricted
 
     def tuple_to_raw_assocation_data(self, tuple) -> bytes:
         b, data = tuple
         ret_val = b'\x01' if b else b'\0'
         if b:
-            tx_numb, res_idx, qual_idx, qualifiers = data
+            tx_numb, res_idx, qual_idx, qualifiers, old_quals = data
             ret_val += bytes([len(qualifiers)]) + b''.join([bytes([len(qual)]) + qual for qual in qualifiers])
+            ret_val += bytes([len(old_quals)]) + b''.join([bytes([len(qual)]) + qual for qual in old_quals])
             ret_val += res_idx + qual_idx + tx_numb
         else:
             restricted_info = []
-            for res, tx_numb, res_idx, qual_idx in data:
-                restricted_info.append(bytes([len(res)]) + res + res_idx + qual_idx + tx_numb)
+            for type, res, tx_numb, res_idx, qual_idx in data:
+                restricted_info.append((b'\x01' if type else b'\0') + bytes([len(res)]) + res +
+                                       res_idx + qual_idx + tx_numb)
             ret_val += bytes([len(restricted_info)]) + b''.join(restricted_info)
         return ret_val
 
