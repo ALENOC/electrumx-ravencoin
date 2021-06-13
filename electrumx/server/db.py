@@ -1508,7 +1508,7 @@ class DB(object):
 
     def tuple_to_raw_assocation_data(self, tuple) -> bytes:
         b, data = tuple
-        ret_val = '\x01' if b else b'\0'
+        ret_val = b'\x01' if b else b'\0'
         if b:
             tx_numb, res_idx, qual_idx, qualifiers = data
             ret_val += bytes([len(qualifiers)]) + b''.join([bytes([len(qual)]) + qual for qual in qualifiers])

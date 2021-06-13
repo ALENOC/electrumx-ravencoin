@@ -1124,7 +1124,8 @@ class BlockProcessor:
                         if qual_tup is None and old_qual_data is not None:
                             qual_tup = self.db.raw_assocation_data_to_tuple(old_qual_data[1:])
                         if qual_tup is None:
-                            current_tag(old_qual, b'\0')
+                            raise Exception('Qualifier {} has no associated data but was associated with {}'.format(
+                                            old_qual, res))
                         else:
                             old_restricted_info = []
                             for old_restricted, tx_numb_old_r, res_idx_old_r, qual_idx_old_r in qual_tup[1]:
@@ -1157,19 +1158,16 @@ class BlockProcessor:
                     if qual_tup is None and new_qual_data is not None:
                         qual_tup = self.db.raw_assocation_data_to_tuple(new_qual_data[1:])
                     if qual_tup is None:
-                        current_tag(new_qualifier, b'\0')
-                    else:
-                        old_restricted_info = []
-                        for old_restricted, tx_numb_old_r, res_idx_old_r, qual_idx_old_r in qual_tup[1]:
-                            if old_restricted != res:
-                                old_restricted_info.append(bytes([len(old_restricted)]) + old_restricted +
-                                                           res_idx_old_r + qual_idx_old_r + tx_numb_old_r)
-                        old_restricted_info.append(bytes([len(res)]) + res + res_idx + qual_idx + tx_numb)
-                        if old_restricted_info:
-                            current_tag(new_qualifier, b'\x01\0' + bytes([len(old_restricted_info)]) +
-                                        b''.join(old_restricted_info))
-                        else:
-                            current_tag(new_qualifier, b'\0')
+                        # Dummy data to work with next part
+                        qual_tup = False, []
+                    old_restricted_info = []
+                    for old_restricted, tx_numb_old_r, res_idx_old_r, qual_idx_old_r in qual_tup[1]:
+                        if old_restricted != res:
+                            old_restricted_info.append(bytes([len(old_restricted)]) + old_restricted +
+                                                       res_idx_old_r + qual_idx_old_r + tx_numb_old_r)
+                    old_restricted_info.append(bytes([len(res)]) + res + res_idx + qual_idx + tx_numb)
+                    current_tag(new_qualifier, b'\x01\0' + bytes([len(old_restricted_info)]) +
+                                b''.join(old_restricted_info))
 
                 # Append qualifier undo info
                 undo_append(bytes([len(old_qual_undo_info) + len(new_qual_undo_info)]) + b''.join(old_qual_undo_info) +
