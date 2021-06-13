@@ -524,22 +524,19 @@ class DB(object):
 
             prefix = b'q'
 
-            # decoding
-
-            # clear tx_hash
-            key = key[32:]
+            restricted_len = key[0]
+            key = key[1:]
+            restricted = key[:restricted_len]
+            key = key[restricted_len:]
             res_idx = key[:4]
             key = key[4:]
             quals_idx = key[:4]
-            restricted_len = value[0]
-            value = value[1:]
-            restricted = value[:restricted_len]
-            value = value[restricted_len:]
-            tx_numb = value[:5]
-            value = value[5:]
+            key = key[4:]
+            tx_numb = key[:5]
+
+            quals = []
             num_quals = value[0]
             value = value[1:]
-            quals = []
             for _ in range(num_quals):
                 qual_len = value[0]
                 value = value[1:]
@@ -569,7 +566,12 @@ class DB(object):
             print(key)
             print('with')
             print(value)
-            batch_put(b'r' + key, value)
+            if value[0] != 0:
+                batch_put(b'r' + key, value[1:])
+            else:
+                print('deleting')
+                print(key)
+                batch_delete(b'r' + key)
         flush_data.asset_current_associations.clear()
 
         for key, value in flush_data.asset_broadcasts.items():
@@ -1341,7 +1343,7 @@ class DB(object):
                 flag = db_value[0]
 
                 history[hash_to_hex_str(tx_hash)] = {
-                    'tag': h160.hex(),
+                    'pubkey': h160.hex(),
                     'qualified': False if flag == 0 else True,
                     'height': height,
                     'tx_pos': tx_pos
@@ -1466,45 +1468,57 @@ class DB(object):
         return await run_in_thread(calc_ret)
 
     def raw_assocation_data_to_tuple(self, value: bytes):
-        # key: qualifier
-        # num associations + (asset + tx_numb + idx of restricted + idx of qualifier) + ...
-        # key: restricted
-        # num quals + quals + tx_num + idx restricted + idx quals
-        ret_val = []
-        is_restricted = value[0]  # Else qualifier
+        is_restricted = value[0]
         value = value[1:]
-        num = value[0]
-        value = value[1:]
-        # Restricted assets are only associated with the qualifiers at a reissuing therefore:
-        if not is_restricted:
-            while not value:
-                asset_name_len = value[0]
+
+        if is_restricted:
+            qualifiers = []
+            num_quals = value[0]
+            value = value[1:]
+            for _ in range(num_quals):
+                qual_len = value[0]
                 value = value[1:]
-                asset_name = value[:asset_name_len]
-                value = value[asset_name_len:]
-                tx_numb = value[:5]
-                value = value[5:]
+                qual = value[:qual_len]
+                value = value[qual_len:]
+                qualifiers.append(qual)
+            res_idx = value[:4]
+            value = value[4:]
+            qual_idx = value[:4]
+            value = value[4:]
+            tx_numb = value[:5]
+            value = value[5:]
+            return True, (tx_numb, res_idx, qual_idx, qualifiers)
+        else:
+            restricted = []
+            num_res = value[0]
+            value = value[1:]
+            for _ in range(num_res):
+                res_len = value[0]
+                value = value[1:]
+                res = value[:res_len]
+                value = value[res_len:]
                 res_idx = value[:4]
                 value = value[4:]
                 qual_idx = value[:4]
                 value = value[4:]
-                ret_val.append((asset_name, tx_numb, res_idx, qual_idx))
-        else:
-            names = []
-            for _ in range(num):
-                asset_name_len = value[0]
-                value = value[1:]
-                asset_name = value[:asset_name_len]
-                value = value[asset_name_len:]
-                names.append(asset_name)
-            tx_numb = value[:5]
-            value = value[5:]
-            res_idx = value[:4]
-            value = value[4:]
-            qual_idx = value[:4]
+                tx_numb = value[:5]
+                value = value[5:]
+                restricted.append((res, tx_numb, res_idx, qual_idx))
+            return False, restricted
 
-            ret_val = (tx_numb, res_idx, qual_idx, names)
-        return is_restricted, ret_val
+    def tuple_to_raw_assocation_data(self, tuple) -> bytes:
+        b, data = tuple
+        ret_val = '\x01' if b else b'\0'
+        if b:
+            tx_numb, res_idx, qual_idx, qualifiers = data
+            ret_val += bytes([len(qualifiers)]) + b''.join([bytes([len(qual)]) + qual for qual in qualifiers])
+            ret_val += res_idx + qual_idx + tx_numb
+        else:
+            restricted_info = []
+            for res, tx_numb, res_idx, qual_idx in data:
+                restricted_info.append(bytes([len(res)]) + res + res_idx + qual_idx + tx_numb)
+            ret_val += bytes([len(restricted_info)]) + b''.join(restricted_info)
+        return ret_val
 
     def get_associated_assets_from(self, asset: bytes):
         key = b'r' + asset
