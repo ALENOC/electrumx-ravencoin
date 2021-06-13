@@ -1057,7 +1057,7 @@ class BlockProcessor:
 
                 historical_tag = self.restricted_to_qualifier.__setitem__
                 current_tag = self.qr_associations.__setitem__
-                undo_append = self.restricted_to_qualifier_undos.append
+                undo_append = r2q_undo_info.append
 
                 res_idx = self.restricted_idx
                 qual_idx = self.qualifiers_idx
