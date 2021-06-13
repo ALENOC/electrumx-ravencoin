@@ -1289,25 +1289,14 @@ class DB(object):
                 tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
 
-                num_associates = db_value[0]
-                db_value = db_value[1:]
+                parser = util.DataParser(db_value)
                 associates = []
-                for _ in range(num_associates):
-                    name_len = db_value[0]
-                    db_value = db_value[1:]
-                    asset_b = db_value[:name_len]
-                    db_value = db_value[name_len:]
-                    associates.append(asset_b.decode('ascii'))
+                for _ in range(parser.read_int()):
+                    associates.append(parser.read_var_bytes_as_ascii())
 
-                num_un_associates = db_value[0]
-                db_value = db_value[1:]
                 disassociates = []
-                for _ in range(num_associates):
-                    name_len = db_value[0]
-                    db_value = db_value[1:]
-                    asset_b = db_value[:name_len]
-                    db_value = db_value[name_len:]
-                    disassociates.append(asset_b.decode('ascii'))
+                for _ in range(parser.read_int()):
+                    disassociates.append(parser.read_var_bytes_as_ascii())
 
                 history[hash_to_hex_str(tx_hash)] = {
                     'associations': associates,
