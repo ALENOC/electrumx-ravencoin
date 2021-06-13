@@ -365,31 +365,20 @@ class DB(object):
 
         batch_delete = batch.delete
         for key in flush_data.asset_meta_deletes:
-            batch_delete(b'd' + key)
+            batch_delete(key)
         flush_data.asset_meta_deletes.clear()
-
-        for key in flush_data.asset_broadcasts_del:
-            batch_delete(b'b' + key)
-        flush_data.asset_broadcasts_del.clear()
 
         batch_put = batch.put
         for key, value in flush_data.asset_meta_reissues.items():
-            batch_put(b'd' + key, value)
+            batch_put(key, value)
         flush_data.asset_meta_reissues.clear()
 
         for key, value in flush_data.asset_meta_adds.items():
-            batch_put(b'd' + key, value)
+            batch_put(key, value)
         flush_data.asset_meta_adds.clear()
 
         self.flush_asset_meta_undos(batch_put, flush_data.asset_meta_undos)
         flush_data.asset_meta_undos.clear()
-
-        for key, value in flush_data.asset_broadcasts.items():
-            batch_put(b'b' + key, value)
-        flush_data.asset_broadcasts.clear()
-
-        self.flush_asset_broadcast_undos(batch_put, flush_data.asset_broadcasts_undo)
-        flush_data.asset_broadcasts_undo.clear()
 
         if self.asset_info_db.for_sync:
             elapsed = time.monotonic() - start_time
@@ -425,6 +414,10 @@ class DB(object):
         for key in sorted(flush_data.asset_tag2pub_del):
             batch_delete(key)
         flush_data.asset_tag2pub_del.clear()
+
+        for key in sorted(flush_data.asset_broadcasts_del):
+            batch_delete(b'b' + key)
+        flush_data.asset_broadcasts_del.clear()
 
         # New Assets
         batch_put = batch.put
@@ -578,6 +571,13 @@ class DB(object):
             print(value)
             batch_put(b'r' + key, value)
         flush_data.asset_current_associations.clear()
+
+        for key, value in flush_data.asset_broadcasts.items():
+            batch_put(b'b' + key, value)
+        flush_data.asset_broadcasts.clear()
+
+        self.flush_asset_broadcast_undos(batch_put, flush_data.asset_broadcasts_undo)
+        flush_data.asset_broadcasts_undo.clear()
 
         if self.asset_db.for_sync:
             elapsed = time.monotonic() - start_time

@@ -850,7 +850,7 @@ class BlockProcessor:
                             if old_data is None:
                                 old_data = self.asset_data_reissued.pop(asset_name, None)
                             if old_data is None:
-                                old_data = self.db.asset_info_db.get(b'd' + asset_name)
+                                old_data = self.db.asset_info_db.get(asset_name)
                             assert old_data is not None  # If reissuing, we should have it
 
                             asset_data = b''
@@ -957,7 +957,7 @@ class BlockProcessor:
                             if old_data is None:
                                 old_data = self.asset_data_reissued.pop(asset_name, None)
                             if old_data is None:
-                                old_data = self.db.asset_info_db.get(b'd'+asset_name)
+                                old_data = self.db.asset_info_db.get(asset_name)
                             assert old_data is not None  # If reissuing, we should have it
 
                             asset_data = b''
@@ -1065,7 +1065,7 @@ class BlockProcessor:
                                                          len(res).to_bytes(1, 'big') + res + tx_numb + quals)
 
                 r2q_undo_info.append(len(res).to_bytes(1, 'big') + res + quals + tx_numb +
-                                                          self.restricted_idx + self.qualifiers_idx)
+                                                       self.restricted_idx + self.qualifiers_idx)
 
                 associate = self.qr_associations.__setitem__
 
