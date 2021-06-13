@@ -1283,9 +1283,9 @@ class DB(object):
                     db_value = db_value[name_len:]
                     associates.append(asset_b.decode('ascii'))
 
-                history[height] = {
+                history[hash_to_hex_str(tx_hash)] = {
                     'associations': associates,
-                    'txid': hash_to_hex_str(tx_hash),
+                    'height': height,
                     'restricted_pos': res_tx_pos,
                     'qualifier_pos': qual_tx_pos,
                 }
@@ -1340,10 +1340,10 @@ class DB(object):
                 db_value = db_value[h160_len:]
                 flag = db_value[0]
 
-                history[height] = {
+                history[hash_to_hex_str(tx_hash)] = {
                     'tag': h160.hex(),
                     'qualified': False if flag == 0 else True,
-                    'txid': hash_to_hex_str(tx_hash),
+                    'height': height,
                     'tx_pos': tx_pos
                 }
 
@@ -1400,10 +1400,10 @@ class DB(object):
                 db_value = db_value[asset_len:]
                 flag = db_value[0]
 
-                history[height] = {
+                history[hash_to_hex_str(tx_hash)] = {
                     'tag': asset_name.decode('ascii'),
                     'qualified': False if flag == 0 else True,
-                    'txid': hash_to_hex_str(tx_hash),
+                    'height': height,
                     'tx_pos': tx_pos
                 }
 
@@ -1448,9 +1448,9 @@ class DB(object):
                 tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
                 frozen_flag = False if db_value[0] == 0 else True
-                history[height] = {
+                history[hash_to_hex_str(tx_hash)] = {
                     'frozen_flag': frozen_flag,
-                    'txid': hash_to_hex_str(tx_hash),
+                    'height': height,
                     'tx_pos': tx_pos,
                 }
             return history

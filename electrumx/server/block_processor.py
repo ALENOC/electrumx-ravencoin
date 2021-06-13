@@ -701,7 +701,8 @@ class BlockProcessor:
                                         bytes([len(asset_name)]) + asset_name +
                                         tx_numb + bytes([len(h160)]) + h160 + bytes([flag]))
 
-                                old_info = self.is_qualified.pop(bytes([len(asset_name)]) + asset_name + bytes([len(h160)]) + h160)
+                                old_info = self.is_qualified.pop(bytes([len(asset_name)]) + asset_name +
+                                                                 bytes([len(h160)]) + h160, None)
                                 if old_info is None:
                                     old_info = self.db.check_if_qualified(asset_name, h160)
                                 else:
@@ -751,7 +752,7 @@ class BlockProcessor:
                                 # tx_hash + idx (uint32le): restricted + tx_num (uint64le[:5]) + flag
                                 put_freeze(tx_hash + idx, bytes([asset_name_len]) + asset_name + tx_numb + bytes([flag]))
 
-                                old_info = self.is_frozen.pop(bytes([asset_name_len]) + asset_name)
+                                old_info = self.is_frozen.pop(bytes([asset_name_len]) + asset_name, None)
                                 if old_info is None:
                                     old_info = self.db.check_if_frozen(asset_name)
                                 else:
@@ -1068,7 +1069,7 @@ class BlockProcessor:
 
                 associate = self.qr_associations.__setitem__
 
-                check = self.qr_associations.pop(res)
+                check = self.qr_associations.pop(res, None)
                 if check is None:
                     check = self.db.get_associated_assets_from(res)
                 else:
@@ -1093,7 +1094,7 @@ class BlockProcessor:
                         for asset in names:
                             if asset not in self.current_qualifiers:
 
-                                check = self.qr_associations.pop(asset)
+                                check = self.qr_associations.pop(asset, None)
                                 if check is None:
                                     check = self.db.get_associated_assets_from(asset)
                                 else:
@@ -1130,7 +1131,7 @@ class BlockProcessor:
                 # Update all qualifiers with this restricted asset
                 for asset in self.current_qualifiers:
 
-                    check = self.qr_associations.pop(asset)
+                    check = self.qr_associations.pop(asset, None)
                     if check is None:
                         check = self.db.get_associated_assets_from(asset)
                     else:
