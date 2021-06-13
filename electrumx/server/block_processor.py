@@ -701,23 +701,20 @@ class BlockProcessor:
                                         bytes([len(asset_name)]) + asset_name +
                                         tx_numb + bytes([len(h160)]) + h160 + bytes([flag]))
 
-                                print('tagging:')
-                                print(asset_name)
-                                print(h160)
+                                old_info = self.is_qualified.pop(bytes([len(asset_name)]) + asset_name + bytes([len(h160)]) + h160)
+                                if old_info is None:
+                                    old_info = self.db.check_if_qualified(asset_name, h160)
+                                else:
+                                    # Popped value has 'delete' byte
+                                    old_info = old_info[1:]
 
                                 # This tracks the most up-to-date asset-pubkey is qualified
-                                put_qualified(bytes([len(asset_name)]) + asset_name + bytes([len(h160)]) + h160 +
-                                              idx + tx_numb,
-                                              b'\x01' + bytes([flag]))
-                                put_qualified(bytes([len(h160)]) + h160 + bytes([len(asset_name)]) + asset_name +
-                                              idx + tx_numb,
-                                              b'\x01' + bytes([flag]))
+                                put_qualified(bytes([len(asset_name)]) + asset_name + bytes([len(h160)]) + h160,
+                                              b'\x01' + bytes([flag]) + idx + tx_numb)
 
                                 # During a back up, this will be used to delete keys
                                 t2a_undo_info.append(bytes([len(asset_name)]) + asset_name + bytes([len(h160)]) + h160 +
                                                      idx + tx_numb)
-
-                                old_info = self.db.check_if_qualified(asset_name, h160)
 
                                 if old_info is None:
                                     t2a_undo_info.append(b'\0')
@@ -754,14 +751,19 @@ class BlockProcessor:
                                 # tx_hash + idx (uint32le): restricted + tx_num (uint64le[:5]) + flag
                                 put_freeze(tx_hash + idx, bytes([asset_name_len]) + asset_name + tx_numb + bytes([flag]))
 
+                                old_info = self.is_frozen.pop(bytes([asset_name_len]) + asset_name)
+                                if old_info is None:
+                                    old_info = self.db.check_if_frozen(asset_name)
+                                else:
+                                    # Remove delete key
+                                    old_info = old_info[1:]
+
                                 # Current info
-                                put_frozen(bytes([asset_name_len]) + asset_name + idx + tx_numb,
-                                           b'\x01' + bytes([flag]))
+                                put_frozen(bytes([asset_name_len]) + asset_name,
+                                           b'\x01' + bytes([flag]) + idx + tx_numb)
 
                                 # Delete this
                                 freezes_undo_info.append(bytes([asset_name_len]) + asset_name + idx + tx_numb)
-
-                                old_info = self.db.check_if_frozen(asset_name)
 
                                 if old_info is None:
                                     freezes_undo_info.append(b'\0')
@@ -847,7 +849,7 @@ class BlockProcessor:
                             if old_data is None:
                                 old_data = self.asset_data_reissued.pop(asset_name, None)
                             if old_data is None:
-                                old_data = self.db.asset_info_db.get(asset_name)
+                                old_data = self.db.asset_info_db.get(b'd' + asset_name)
                             assert old_data is not None  # If reissuing, we should have it
 
                             asset_data = b''
@@ -889,6 +891,8 @@ class BlockProcessor:
                             try:
                                 data = asset_deserializer._get_meta_raw()
                                 # This is a message broadcast
+                                print('Message')
+                                print(hash_to_hex_str(tx_hash))
                                 put_asset_broadcast(bytes([len(asset_name)]) + asset_name + to_le_uint32(idx) + tx_numb, data)
                                 asset_broadcast_undo_info.append(bytes([len(asset_name)]) + asset_name + to_le_uint32(idx) + tx_numb)
                             except:
@@ -952,7 +956,7 @@ class BlockProcessor:
                             if old_data is None:
                                 old_data = self.asset_data_reissued.pop(asset_name, None)
                             if old_data is None:
-                                old_data = self.db.asset_info_db.get(asset_name)
+                                old_data = self.db.asset_info_db.get(b'd'+asset_name)
                             assert old_data is not None  # If reissuing, we should have it
 
                             asset_data = b''
@@ -1064,45 +1068,56 @@ class BlockProcessor:
 
                 associate = self.qr_associations.__setitem__
 
-                check = self.db.get_associated_assets_from(res)
+                check = self.qr_associations.pop(res)
+                if check is None:
+                    check = self.db.get_associated_assets_from(res)
+                else:
+                    check = self.db.raw_assocation_data_to_tuple(check)
+
                 qual_remove_undos = []
                 qual_add_undos = []
                 if check is None:
-                    r2q_undo_info.append(len(res).to_bytes(1, 'big') + res + b'\x01\0')
+                    r2q_undo_info.append(b'\0')
                 else:
                     is_restricted, data = check
 
                     if is_restricted:
-                        tx_numb, res_idx, qual_idx, names = data
+                        tx_numb_old, res_idx_old, qual_idx_old, names = data
                         # 1 + num quals + quals + tx_num + idx restricted + idx quals
                         quals_old = b''.join(len(name).to_bytes(1, 'big') + name for name in names)
                         # Undo info restricted -> quals
-                        r2q_undo_info.append(len(res).to_bytes(1, 'big') + res + b'\x01' +
-                                                                  len(names).to_bytes(1, 'big') +
-                                                                  quals_old + tx_numb + res_idx + qual_idx)
+                        r2q_undo_info.append(len(names).to_bytes(1, 'big') +
+                                             quals_old + tx_numb_old + res_idx_old + qual_idx_old)
 
                         # Update qualifiers that are no longer associated
                         for asset in names:
                             if asset not in self.current_qualifiers:
-                                check = self.db.get_associated_assets_from(asset)
+
+                                check = self.qr_associations.pop(asset)
+                                if check is None:
+                                    check = self.db.get_associated_assets_from(asset)
+                                else:
+                                    check = self.db.raw_assocation_data_to_tuple(check)
+
                                 if check is None:
                                     raise Exception('Qualifier {} has no associations but restricted {} was associated with it'.format(asset, res))
                                 is_restricted, data = check
 
-                                print('Removing {}; not in {}'.format(asset, self.current_qualifiers))
-
                                 if not is_restricted:
                                     # num associations + (asset + tx_numb + idx of restricted + idx of qualifier) + ...
 
-                                    undo_bytes = len(asset).to_bytes(1, 'big') + asset + b'\0' + bytes([len(data)])
+                                    undo_bytes = len(asset).to_bytes(1, 'big') + asset + bytes([len(data)])
                                     associate_bytes_list = []
-                                    for asset_name, tx_numb, res_idx, qual_idx in data:
-                                        undo_bytes += bytes([len(asset_name)]) + asset_name + tx_numb + res_idx + qual_idx
+                                    for asset_name, tx_numb_old, res_idx_old, qual_idx_old in data:
+                                        undo_bytes += bytes([len(asset_name)]) + asset_name + tx_numb_old + \
+                                                      res_idx_old + qual_idx_old
                                         if asset_name != self.current_restricted_asset:
-                                            associate_bytes_list.append(bytes([len(asset_name)]) + asset_name + tx_numb + res_idx + qual_idx)
+                                            associate_bytes_list.append(bytes([len(asset_name)]) + asset_name +
+                                                                        tx_numb_old + res_idx_old + qual_idx_old)
 
                                     qual_remove_undos.append(undo_bytes)
-                                    associate(asset, b'\0' + bytes([len(associate_bytes_list)]) + b''.join(associate_bytes_list))
+                                    associate(asset, b'\0' + bytes([len(associate_bytes_list)]) +
+                                              b''.join(associate_bytes_list))
 
                                 else:
                                     raise Exception('Qualifying asset {} does not have qualifier db data'.format(asset))
@@ -1114,19 +1129,22 @@ class BlockProcessor:
 
                 # Update all qualifiers with this restricted asset
                 for asset in self.current_qualifiers:
-                    check = self.db.get_associated_assets_from(asset)
+
+                    check = self.qr_associations.pop(asset)
                     if check is None:
-                        qual_add_undos.append(bytes([len(asset)]) + asset + b'\0\0')
+                        check = self.db.get_associated_assets_from(asset)
+                    else:
+                        check = self.db.raw_assocation_data_to_tuple(check)
+
+                    if check is None:
+                        qual_add_undos.append(bytes([len(asset)]) + asset + b'\0')
                         associate(asset, b'\0\x01' + bytes([len(res)]) + res + tx_numb + self.restricted_idx + self.qualifiers_idx)
-                        print('New qualifier association:')
-                        print(asset)
-                        print(b'\0\x01' + bytes([len(res)]) + res + tx_numb + self.restricted_idx + self.qualifiers_idx)
 
                     else:
                         is_restricted, data = check
                         if not is_restricted:
                             # num associations + (asset + tx_numb + idx of restricted + idx of qualifier) + ...
-                            undo_bytes = len(asset).to_bytes(1, 'big') + asset + b'\0' + bytes([len(data)])
+                            undo_bytes = len(asset).to_bytes(1, 'big') + asset + bytes([len(data)])
                             associate_bytes_list = []
                             for asset_name, tx_numb_l, res_idx_l, qual_idx in data:
                                 undo_bytes += bytes([len(asset_name)]) + asset_name + tx_numb_l + res_idx_l + qual_idx
@@ -1135,15 +1153,12 @@ class BlockProcessor:
                             associate_bytes_list.append(bytes([len(res)]) + res + tx_numb + self.restricted_idx + self.qualifiers_idx)
                             qual_add_undos.append(undo_bytes)
                             associate(asset, b'\0' + bytes([len(associate_bytes_list)]) + b''.join(associate_bytes_list))
-                            print('New qualifier association:')
-                            print(asset)
-                            print(b'\0' + bytes([len(associate_bytes_list)]) + b''.join(associate_bytes_list))
-
                         else:
                             raise Exception('Qualifying asset {} does not have qualifier db data'.format(asset))
 
-                r2q_undo_info.append(bytes([len(qual_remove_undos)]) + b''.join(qual_remove_undos) +
-                                                          bytes([len(qual_add_undos)]) + b''.join(qual_add_undos))
+                r2q_undo_info.append(bytes([len(qual_remove_undos) + len(qual_add_undos)]) +
+                                     b''.join(qual_remove_undos) +
+                                     b''.join(qual_add_undos))
 
             append_hashXs(hashXs)
             update_touched(hashXs)
@@ -1256,18 +1271,12 @@ class BlockProcessor:
                 asset_undo_tag_info = asset_undo_tag_info[5:]
                 # Roll back latest value
                 self.is_qualified.__setitem__(
-                    bytes([asset_name_len]) + asset_name + bytes([pkh_len]) + pkh + old_idx + old_tx_numb,
-                    b'\x01' + bytes([flag]))
-                self.is_qualified.__setitem__(
-                    bytes([pkh_len]) + pkh + bytes([asset_name_len]) + asset_name + old_idx + old_tx_numb,
-                    b'\x01' + bytes([flag]))
+                    bytes([asset_name_len]) + asset_name + bytes([pkh_len]) + pkh,
+                    b'\x01' + bytes([flag]) + old_idx + old_tx_numb)
             else:
                 # No previous latest information, mark for deletion
                 self.is_qualified.__setitem__(
                     bytes([asset_name_len]) + asset_name + bytes([pkh_len]) + pkh,
-                    b'\0')
-                self.is_qualified.__setitem__(
-                    bytes([pkh_len]) + pkh + bytes([asset_name_len]) + asset_name,
                     b'\0')
 
         asset_undo_freeze_info = self.db.read_asset_undo_freeze_info(self.height)
@@ -1297,12 +1306,88 @@ class BlockProcessor:
                 old_tx_numb = asset_undo_freeze_info[:5]
                 asset_undo_freeze_info = asset_undo_freeze_info[5:]
                 # Roll back latest value
-                self.is_frozen.__setitem__(bytes(asset_len) + asset + old_idx + old_tx_numb,
-                                           b'\x01' + bytes([flag]))
+                self.is_frozen.__setitem__(bytes(asset_len) + asset,
+                                           b'\x01' + bytes([flag]) + old_idx + old_tx_numb)
             else:
                 # No previous latest information, mark for deletion
                 self.is_frozen.__setitem__(bytes(asset_len) + asset,
                                            b'\0')
+
+        asset_undo_association_info = self.db.read_asset_undo_res2qual_key(self.height)
+        while asset_undo_association_info:
+            # __Deletes__
+            # len(res) + res + num(quals) + {len(qual) + qual} + tx_numb + self.restricted_idx +
+            # self.qualifiers_idx +
+            # __Restricted Undo__
+            # num(quals) + {len(qual) + quals_old} + tx_numb + res_idx + qual_idx
+            # __Qualifier Undo__
+            # num(qualifiers) + {len(qual) + qual + num(rest) + {len(qual) + qual + tx_numb + res_idx + qual_idx}}
+
+            # Parse deletes
+            restricted_len = asset_undo_association_info[0]
+            asset_undo_association_info = asset_undo_association_info[1:]
+            restricted_asset = asset_undo_association_info[:restricted_len]
+            asset_undo_association_info = asset_undo_association_info[restricted_len:]
+            num_restricted_quals = asset_undo_association_info[0]
+            asset_undo_association_info = asset_undo_association_info[1:]
+            quals = []
+            for _ in range(num_restricted_quals):
+                asset_len = asset_undo_association_info[0]
+                asset_undo_association_info = asset_undo_association_info[1:]
+                asset = asset_undo_association_info[:asset_len]
+                asset_undo_association_info = asset_undo_association_info[asset_len:]
+                quals.append(asset)
+            tx_numb = asset_undo_association_info[:5]
+            asset_undo_association_info = asset_undo_association_info[5:]
+            restricted_idx = asset_undo_association_info[:4]
+            asset_undo_association_info = asset_undo_association_info[4:]
+            quals_idx = asset_undo_association_info[:4]
+            asset_undo_association_info = asset_undo_association_info[4:]
+
+            # Deletes
+            self.restricted_to_qualifier_deletes.append(b'q' + bytes([restricted_len]) + restricted_asset +
+                                                        restricted_idx + quals_idx + tx_numb)
+            for qualifier in quals:
+                self.restricted_to_qualifier_deletes.append(b'q' + bytes([len(qualifier)]) + qualifier +
+                                                            restricted_idx + quals_idx + tx_numb)
+
+            # Parse restricted undos
+            restricted_undo_value = b'\x01'
+            num_quals = asset_undo_association_info[0]
+            restricted_undo_value += bytes([num_quals])
+            asset_undo_association_info = asset_undo_association_info[1:]
+
+            for _ in range(num_quals):
+                asset_len = asset_undo_association_info[0]
+                restricted_undo_value += bytes([asset_len])
+                asset_undo_association_info = asset_undo_association_info[1:]
+                restricted_undo_value += asset_undo_association_info[:asset_len]
+                asset_undo_association_info = asset_undo_association_info[asset_len:]
+            restricted_undo_value += asset_undo_association_info[:5 + 4 + 4]
+            asset_undo_association_info = asset_undo_association_info[5 + 4 + 4:]
+
+            self.qr_associations.__setitem__(restricted_asset, restricted_undo_value)
+
+            num_quals = asset_undo_association_info[0]
+            asset_undo_association_info = asset_undo_association_info[1:]
+
+            for _ in range(num_quals):
+                qual_name_len = asset_undo_association_info[0]
+                asset_undo_association_info = asset_undo_association_info[1:]
+                qual_name = asset_undo_association_info[:qual_name_len]
+                asset_undo_association_info = asset_undo_association_info[qual_name_len:]
+                num_rest = asset_undo_association_info[0]
+                asset_undo_association_info = asset_undo_association_info[1:]
+                qual_undo_value = b'\0' + bytes([num_rest])
+                for _ in range(num_rest):
+                    asset_len = asset_undo_association_info[0]
+                    qual_undo_value += bytes([asset_len])
+                    asset_undo_association_info = asset_undo_association_info[1:]
+                    qual_undo_value += asset_undo_association_info[:asset_len]
+                    asset_undo_association_info = asset_undo_association_info[asset_len:]
+                    qual_undo_value += asset_undo_association_info[:5 + 4 + 4]
+                    asset_undo_association_info = asset_undo_association_info[5 + 4 + 4:]
+                self.qr_associations.__setitem__(qual_name, qual_undo_value)
 
         n = len(undo_info)
         asset_n = len(asset_undo_info)

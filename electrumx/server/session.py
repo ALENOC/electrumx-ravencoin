@@ -1508,6 +1508,10 @@ class ElectrumX(SessionBase):
 
         ret = await self.db.get_associations_from_asset(asset.encode('ascii'), history)
 
+        if not ret:
+            self.bump_cost(1.0)
+            return ret
+
         self.bump_cost(1.0 + len(ret['current']) / 50)
         if history:
             self.bump_cost(1.0 + len(ret['history']) / 50)
@@ -1515,6 +1519,9 @@ class ElectrumX(SessionBase):
 
     async def get_tags_for_h160(self, h160: str, history: bool):
         ret = await self.db.get_tags_associated_with_h160(bytes.fromhex(h160), history)
+        if not ret:
+            self.bump_cost(1.0)
+            return ret
         self.bump_cost(1.0 + len(ret['current']) / 50)
         if history:
             self.bump_cost(1.0 + len(ret['history']) / 50)
@@ -1526,6 +1533,9 @@ class ElectrumX(SessionBase):
                 BAD_REQUEST, f'asset name greater than 32 characters'
             ) from None
         ret = await self.db.get_h160s_associated_with_asset(asset.encode('ascii'), history)
+        if not ret:
+            self.bump_cost(1.0)
+            return ret
         self.bump_cost(1.0 + len(ret['current']) / 50)
         if history:
             self.bump_cost(1.0 + len(ret['history']) / 50)
@@ -1537,6 +1547,9 @@ class ElectrumX(SessionBase):
                 BAD_REQUEST, f'asset name greater than 32 characters'
             ) from None
         ret = await self.db.get_frozen_status_of_restricted(asset.encode('ascii'), history)
+        if not ret:
+            self.bump_cost(1.0)
+            return ret
         self.bump_cost(1.0 + len(ret['current']) / 50)
         if history:
             self.bump_cost(1.0 + len(ret['history']) / 50)

@@ -470,12 +470,6 @@ class DB(object):
             batch_put(b'a' + bytes([asset_len]) + asset_name + suffix,
                       bytes([pubkey_len]) + pubkey + bytes([flag]))
 
-            print('Tag:')
-            print('Pubkey:')
-            print(pubkey.hex())
-            print('Asset:')
-            print(asset_name.decode('ascii'))
-
         flush_data.asset_tag2pub.clear()
 
         self.flush_t2p_undo_infos(batch_put, flush_data.asset_tag2pub_undo)
@@ -484,14 +478,22 @@ class DB(object):
         for key, value in flush_data.asset_tag2pub_current.items():
             # This stores / overwrites the latest qualifications given an asset and pubkey hash
 
+            len_asset = key[0]
+            key = key[1:]
+            asset = key[:len_asset]
+            key = key[len_asset:]
+            len_h160 = key[0]
+            key = key[1:]
+            h160 = key[:len_h160]
+
             put_data = value[0]
 
             if put_data != 0:
-                new_key = key[:-(4 + 5)]
-                value_append = key[-(4 + 5):]
-                batch_put(b'Q' + new_key, bytes([value[1]]) + value_append)
+                batch_put(b'Q' + bytes([len_asset]) + asset + bytes([len_h160]) + h160, value[1:])
+                batch_put(b'Q' + bytes([len_h160]) + h160 + bytes([len_asset]) + asset, value[1:])
             else:
-                batch_delete(b'Q' + key)
+                batch_delete(b'Q' + bytes([len_asset]) + asset + bytes([len_h160]) + h160)
+                batch_delete(b'Q' + bytes([len_h160]) + h160 + bytes([len_asset]) + asset)
 
         flush_data.asset_tag2pub_current.clear()
 
@@ -517,10 +519,7 @@ class DB(object):
             put_data = value[0]
 
             if put_data != 0:
-                asset_len = key[0]
-                new_key = key[:asset_len + 1]
-                value_append = key[asset_len + 1:]
-                batch_put(b'l' + new_key, bytes([value[1]]) + value_append)
+                batch_put(b'l' + key, value[1:])
             else:
                 batch_delete(b'l' + key)
 
@@ -573,8 +572,9 @@ class DB(object):
 
         for key, value in flush_data.asset_current_associations.items():
             # This stores / overwrites the latest restricted to qual associations
-            print('writing association:')
+            print('Associating')
             print(key)
+            print('with')
             print(value)
             batch_put(b'r' + key, value)
         flush_data.asset_current_associations.clear()
@@ -1232,7 +1232,6 @@ class DB(object):
             if res is None:
                 return {}
             is_restricted, data = res
-            print(data)
             if is_restricted:
                 tx_numb, res_idx, qual_idx, names = data
                 res_pos, = unpack_le_uint32(res_idx)
@@ -1466,13 +1465,7 @@ class DB(object):
 
         return await run_in_thread(calc_ret)
 
-    def get_associated_assets_from(self, asset: bytes):
-        key = b'r' + asset
-        value = self.asset_db.get(key)
-
-        if value is None:
-            return None
-
+    def raw_assocation_data_to_tuple(self, value: bytes):
         # key: qualifier
         # num associations + (asset + tx_numb + idx of restricted + idx of qualifier) + ...
         # key: restricted
@@ -1513,6 +1506,14 @@ class DB(object):
             ret_val = (tx_numb, res_idx, qual_idx, names)
         return is_restricted, ret_val
 
+    def get_associated_assets_from(self, asset: bytes):
+        key = b'r' + asset
+        value = self.asset_db.get(key)
+
+        if value is None:
+            return None
+        return self.raw_assocation_data_to_tuple(value)
+
     # For external use
     async def is_qualified(self, asset, h160):
         def check():
@@ -1542,6 +1543,7 @@ class DB(object):
             b = self.asset_info_db.get(b'd' + asset_name)
             if not b:
                 return {}
+            print(b)
             div_amt = b[0]
             b = b[1:]
             reissuable = b[0]
