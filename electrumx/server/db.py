@@ -1540,7 +1540,7 @@ class DB(object):
 
     async def lookup_asset_meta(self, asset_name):
         def read_assets_meta():
-            b = self.asset_info_db.get(b'd' + asset_name)
+            b = self.asset_info_db.get(asset_name)
             if not b:
                 return {}
             print(b)
