@@ -10,6 +10,7 @@
 
 import asyncio
 import hashlib
+import itertools
 import logging
 import os
 import time
@@ -25,7 +26,7 @@ from electrumx.lib.hash import hash_to_hex_str, HASHX_LEN
 from electrumx.lib.script import is_unspendable_legacy, \
     is_unspendable_genesis, OpCodes, Script, ScriptError
 from electrumx.lib.util import (
-    class_logger, pack_le_uint32, pack_le_uint64, unpack_le_uint64, base_encode
+    class_logger, pack_le_uint32, pack_le_uint64, unpack_le_uint64, base_encode, DataParser
 )
 from electrumx.server.daemon import DaemonError
 from electrumx.server.db import FlushData
@@ -547,6 +548,7 @@ class BlockProcessor:
 
         await sleep(0)
 
+    # TODO: Clean up this mess
     def advance_txs(self, txs, is_unspendable):
         self.tx_hashes.append(b''.join(tx_hash for tx, tx_hash in txs))
 
@@ -692,14 +694,14 @@ class BlockProcessor:
                             if match_script_against_template(ops, ASSET_NULL_TEMPLATE) > -1:
                                 h160 = ops[1][2]
                                 asset_portion = ops[2][2]
-                                asset_portion_deserializer = self.coin.DESERIALIZER(asset_portion)
-                                asset_name = asset_portion_deserializer._read_varbytes()
-                                flag = asset_portion_deserializer._read_byte()
+                                asset_portion_deserializer = DataParser(asset_portion)
+                                name_byte_len, asset_name = asset_portion_deserializer.read_var_bytes_tuple_bytes()
+                                flag = asset_portion_deserializer.read_byte()
 
                                 # tx_hash + idx (uint32le): asset + tx_num (uint64le[:5]) + pubkey + flag
                                 put_t2a(tx_hash + idx,
-                                        bytes([len(asset_name)]) + asset_name +
-                                        tx_numb + bytes([len(h160)]) + h160 + bytes([flag]))
+                                        name_byte_len + asset_name +
+                                        tx_numb + bytes([len(h160)]) + h160 + flag)
 
                                 old_info = self.is_qualified.pop(bytes([len(asset_name)]) + asset_name +
                                                                  bytes([len(h160)]) + h160, None)
@@ -725,9 +727,9 @@ class BlockProcessor:
 
                             elif match_script_against_template(ops, ASSET_NULL_VERIFIER_TEMPLATE) > -1:
                                 qualifiers_b = ops[2][2]
-                                qualifiers_deserializer = self.coin.DESERIALIZER(qualifiers_b)
-                                asset_name = qualifiers_deserializer._read_varbytes()
-                                for asset in asset_name.decode('ascii').split('&'):
+                                qualifiers_deserializer = DataParser(qualifiers_b)
+                                asset_name = qualifiers_deserializer.read_var_bytes_as_ascii()
+                                for asset in asset_name.split('&'):
                                     if asset[0] != '#':
                                         if 'A' <= asset[0] <= 'Z' or '0' <= asset[0] <= '9':
                                             # This is a valid asset name
@@ -743,17 +745,15 @@ class BlockProcessor:
                                 self.qualifiers_idx = idx
                             elif match_script_against_template(ops, ASSET_GLOBAL_RESTRICTION_TEMPLATE) > -1:
                                 asset_portion = ops[3][2]
-                                script = asset_portion
-                                asset_name_len = script[0]
-                                script = script[1:]
-                                asset_name = script[:asset_name_len]
-                                script = script[asset_name_len:]
-                                flag = script[0]
+
+                                asset_portion_deserializer = DataParser(asset_portion)
+                                asset_name_len, asset_name = asset_portion_deserializer.read_var_bytes_tuple_bytes()
+                                flag = asset_portion_deserializer.read_byte()
 
                                 # tx_hash + idx (uint32le): restricted + tx_num (uint64le[:5]) + flag
-                                put_freeze(tx_hash + idx, bytes([asset_name_len]) + asset_name + tx_numb + bytes([flag]))
+                                put_freeze(tx_hash + idx, asset_name_len + asset_name + tx_numb + flag)
 
-                                old_info = self.is_frozen.pop(bytes([asset_name_len]) + asset_name, None)
+                                old_info = self.is_frozen.pop(asset_name, None)
                                 if old_info is None:
                                     old_info = self.db.check_if_frozen(asset_name)
                                 else:
@@ -761,11 +761,11 @@ class BlockProcessor:
                                     old_info = old_info[1:]
 
                                 # Current info
-                                put_frozen(bytes([asset_name_len]) + asset_name,
-                                           b'\x01' + bytes([flag]) + idx + tx_numb)
+                                put_frozen(asset_name,
+                                           b'\x01' + flag + idx + tx_numb)
 
                                 # Delete this
-                                freezes_undo_info.append(bytes([asset_name_len]) + asset_name + idx + tx_numb)
+                                freezes_undo_info.append(asset_name_len + asset_name + idx + tx_numb)
 
                                 if old_info is None:
                                     freezes_undo_info.append(b'\0')
@@ -798,39 +798,29 @@ class BlockProcessor:
                          hashX + tx_numb + to_le_uint64(txout.value))
 
                 # Now try and add asset info
-                # TODO: SEE IF THERE IS ANYTHING BETTER TO DO FROM HERE
-
-                # Function for a properly formatted asset
-                def try_parse_asset(asset_deserializer):
-                    op = asset_deserializer._read_byte()
-                    if op != b'r'[0]:
-                        raise Exception("Expected {}, was {}".format(b'r', op))
-                    op = asset_deserializer._read_byte()
-                    if op != b'v'[0]:
-                        raise Exception("Expected {}, was {}".format(b'v', op))
-                    op = asset_deserializer._read_byte()
-                    if op != b'n'[0]:
-                        raise Exception("Expected {}, was {}".format(b'n', op))
-                    script_type = asset_deserializer._read_byte()
-                    asset_name = asset_deserializer._read_varbytes()
+                def try_parse_asset(asset_deserializer: DataParser, second_loop = False):
+                    op = asset_deserializer.read_bytes(3)
+                    if op != b'rvn':
+                        raise Exception("Expected {}, was {}".format(b'rvn', op))
+                    script_type = asset_deserializer.read_byte()
+                    asset_name_len, asset_name = asset_deserializer.read_var_bytes_tuple_bytes()
                     if asset_name[0] == b'$'[0]:
                         self.current_restricted_asset = asset_name
                         self.restricted_idx = to_le_uint32(idx)
-                    if script_type == b'o'[0]:
+                    if script_type == b'o':
                         # This is an ownership asset. It does not have any metadata.
                         # Just assign it with a value of 1
                         put_asset(tx_hash + to_le_uint32(idx),
                                   hashX + tx_numb + to_le_uint64(100_000_000) +
-                                  bytes([len(asset_name)]) + asset_name)
+                                  asset_name_len + asset_name)
                     else:  # Not an owner asset; has a sat amount
-                        sats = asset_deserializer._read_le_int64()
-                        if script_type == b'q'[0]:  # A new asset issuance
-                            divisions = asset_deserializer._read_byte()
-                            reissuable = asset_deserializer._read_byte()
-                            has_meta = asset_deserializer._read_byte()
-                            asset_data = bytes([divisions, reissuable, has_meta])
+                        sats = asset_deserializer.read_bytes(8)
+                        if script_type == b'q':  # A new asset issuance
+                            asset_data = asset_deserializer.read_bytes(2)
+                            has_meta = asset_deserializer.read_byte()
+                            asset_data += has_meta
                             if has_meta != b'\0':
-                                asset_data += asset_deserializer._get_meta_raw()
+                                asset_data += asset_deserializer.read_bytes(34)
 
                             # To tell the client where this data came from
                             asset_data += to_le_uint32(idx) + tx_numb + b'\0'
@@ -838,13 +828,13 @@ class BlockProcessor:
                             # Put DB functions at the end to prevent them from pushing before any errors
                             put_asset_data_new(asset_name, asset_data)  # Add meta for this asset
                             asset_meta_undo_info_append(  # Set previous meta to null in case of roll back
-                                len(asset_name).to_bytes(1, 'big') + asset_name + b'\0')
+                                asset_name_len + asset_name + b'\0')
                             put_asset(tx_hash + to_le_uint32(idx),
-                                      hashX + tx_numb + to_le_uint64(sats) +
-                                      bytes([len(asset_name)]) + asset_name)
-                        elif script_type == b'r'[0]:  # An asset re-issuance
-                            divisions = asset_deserializer._read_byte()
-                            reissuable = asset_deserializer._read_byte()
+                                      hashX + tx_numb + sats +
+                                      asset_name_len + asset_name)
+                        elif script_type == b'r':  # An asset re-issuance
+                            divisions = asset_deserializer.read_byte()
+                            reissuable = asset_deserializer.read_byte()
 
                             # Quicker check, but it's far more likely to be in the db
                             old_data = self.asset_data_new.pop(asset_name, None)
@@ -856,20 +846,28 @@ class BlockProcessor:
 
                             asset_data = b''
 
-                            if divisions == 0xff:  # Unchanged division amount
+                            if divisions == b'\xff':  # Unchanged division amount
                                 asset_data += old_data[0].to_bytes(1, 'big')
                             else:
-                                asset_data += divisions.to_bytes(1, 'big')
-                            asset_data += reissuable.to_bytes(1, 'big')
-                            if asset_deserializer.cursor == asset_deserializer.binary_length:
+                                asset_data += divisions
+
+                            asset_data += reissuable
+                            if asset_deserializer.is_finished():
                                 # No more data
                                 asset_data += b'\0'
                             else:
-                                asset_data += b'\x01'
-                                asset_data += asset_deserializer._get_meta_raw()
+                                if second_loop:
+                                    if asset_deserializer.cursor + 34 <= asset_deserializer.length:
+                                        asset_data += b'\x01'
+                                        asset_data += asset_deserializer.read_bytes(34)
+                                    else:
+                                        asset_data += b'\0'
+                                else:
+                                    asset_data += b'\x01'
+                                    asset_data += asset_deserializer.read_bytes(34)
 
                             asset_data += to_le_uint32(idx) + tx_numb
-                            if divisions == 0xff:
+                            if divisions == b'\xff':
                                 # We need to tell the client the original tx for reissues
                                 asset_data += b'\x01' + old_data[-(4 + 5) - 1:-1] + b'\0'
                             else:
@@ -880,25 +878,34 @@ class BlockProcessor:
                                 self.asset_touched.update(asset_name)
                             put_asset_data_reissued(asset_name, asset_data)
                             asset_meta_undo_info_append(
-                                len(asset_name).to_bytes(1, 'big') + asset_name +
-                                len(old_data).to_bytes(1, 'big') + old_data)
+                                asset_name_len + asset_name +
+                                bytes([len(old_data)]) + old_data)
                             put_asset(tx_hash + to_le_uint32(idx),
-                                      hashX + tx_numb + to_le_uint64(sats) +
-                                      bytes([len(asset_name)]) + asset_name)
-                        elif script_type == b't'[0]:
+                                      hashX + tx_numb + sats +
+                                      asset_name_len + asset_name)
+                        elif script_type == b't':
                             # Put DB functions at the end to prevent them from pushing before any errors
                             put_asset(tx_hash + to_le_uint32(idx),
-                                      hashX + tx_numb + to_le_uint64(sats) +
-                                      bytes([len(asset_name)]) + asset_name)
-                            try:
-                                data = asset_deserializer._get_meta_raw()
-                                # This is a message broadcast
-                                print('Message')
-                                print(hash_to_hex_str(tx_hash))
-                                put_asset_broadcast(bytes([len(asset_name)]) + asset_name + to_le_uint32(idx) + tx_numb, data)
-                                asset_broadcast_undo_info.append(bytes([len(asset_name)]) + asset_name + to_le_uint32(idx) + tx_numb)
-                            except:
-                                pass
+                                      hashX + tx_numb + sats +
+                                      asset_name_len + asset_name)
+
+                            if not asset_deserializer.is_finished():
+                                if second_loop and asset_deserializer.cursor + 34 <= asset_deserializer.length:
+                                    data = asset_deserializer.read_bytes(34)
+                                    # This is a message broadcast
+                                    print('Message')
+                                    print(hash_to_hex_str(tx_hash))
+                                    put_asset_broadcast(asset_name + to_le_uint32(idx) + tx_numb, data)
+                                    asset_broadcast_undo_info.append(
+                                        asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
+                                else:
+                                    data = asset_deserializer.read_bytes(34)
+                                    # This is a message broadcast
+                                    print('Message')
+                                    print(hash_to_hex_str(tx_hash))
+                                    put_asset_broadcast(asset_name + to_le_uint32(idx) + tx_numb, data)
+                                    asset_broadcast_undo_info.append(
+                                        asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
                         else:
                             raise Exception('Unknown asset type: {}'.format(script_type))
 
@@ -907,108 +914,7 @@ class BlockProcessor:
                     while script[:3] != b'rvn' and len(script) > 0:
                         script = script[1:]
                     assert script[:3] == b'rvn'
-                    script = script[3:]
-                    asset_script_type = script[0]
-                    script = script[1:]
-                    asset_name_length = script[0]
-                    script = script[1:]
-                    asset_name = script[:asset_name_length]
-                    if asset_name[0] == b'$'[0]:
-                        self.current_restricted_asset = asset_name
-                        self.restricted_idx = to_le_uint32(idx)
-                    script = script[asset_name_length:]
-                    if asset_script_type == b'o'[0]:
-                        # This is an ownership asset. It does not have any metadata.
-                        # Just assign it with a value of 1
-                        put_asset(tx_hash + to_le_uint32(idx),
-                                  hashX + tx_numb + to_le_uint64(100_000_000) +
-                                  bytes([len(asset_name)]) + asset_name)
-                    else:  # Not an owner asset; has a sat amount
-                        sat_b = script[:8]
-                        script = script[8:]
-                        sats = int.from_bytes(sat_b, 'little', signed=False)
-                        if asset_script_type == b'q'[0]:  # A new asset issuance
-                            divisions = script[0]
-                            script = script[1:]
-                            reissuable = script[0]
-                            script = script[1:]
-                            has_meta = script[0]
-                            script = script[1:]
-                            asset_data = bytes([divisions, reissuable, has_meta])
-                            if has_meta != b'\0':
-                                asset_data += script[:34]
-
-                            # To tell the client where this data came from
-                            asset_data += to_le_uint32(idx) + tx_numb + b'\0'
-                            # Put DB functions at the end to prevent them from pushing before any errors
-                            put_asset_data_new(asset_name, asset_data)  # Add meta for this asset
-                            asset_meta_undo_info_append(  # Set previous meta to null in case of roll back
-                                len(asset_name).to_bytes(1, 'big') + asset_name + b'\0')
-                            put_asset(tx_hash + to_le_uint32(idx),
-                                      hashX + tx_numb + to_le_uint64(sats) +
-                                      bytes([len(asset_name)]) + asset_name)
-                        elif asset_script_type == b'r'[0]:  # An asset re-issuance
-                            divisions = script[0]
-                            script = script[1:]
-                            reissuable = script[0]
-                            script = script[1:]
-
-                            # Quicker check, but it's far more likely to be in the db
-                            old_data = self.asset_data_new.pop(asset_name, None)
-                            if old_data is None:
-                                old_data = self.asset_data_reissued.pop(asset_name, None)
-                            if old_data is None:
-                                old_data = self.db.asset_info_db.get(asset_name)
-                            assert old_data is not None  # If reissuing, we should have it
-
-                            asset_data = b''
-
-                            if divisions == 0xff:  # Unchanged division amount
-                                asset_data += old_data[0].to_bytes(1, 'big')
-                            else:
-                                asset_data += divisions.to_bytes(1, 'big')
-                            asset_data += reissuable.to_bytes(1, 'big')
-                            if len(script) < 34:
-                                # No more data
-                                asset_data += b'\0'
-                            else:
-                                asset_data += b'\x01'
-                                asset_data += script[:34]
-
-                            asset_data += to_le_uint32(idx) + tx_numb
-                            if divisions == 0xff:
-                                # We need to tell the client the original tx for reissues
-                                asset_data += b'\x01' + old_data[-(4 + 5) - 1:-1] + b'\0'
-                            else:
-                                asset_data += b'\0'
-
-                            # Put DB functions at the end to prevent them from pushing before any errors
-                            if asset_name[-1] != b'!'[0]:  # Not an ownership asset; send updated meta to clients
-                                self.asset_touched.update(asset_name)
-                            put_asset_data_reissued(asset_name, asset_data)
-                            asset_meta_undo_info_append(
-                                len(asset_name).to_bytes(1, 'big') + asset_name +
-                                len(old_data).to_bytes(1, 'big') + old_data)
-                            put_asset(tx_hash + to_le_uint32(idx),
-                                      hashX + tx_numb + to_le_uint64(sats) +
-                                      bytes([len(asset_name)]) + asset_name)
-                        elif asset_script_type == b't'[0]:
-                            # Put DB functions at the end to prevent them from pushing before any errors
-                            put_asset(tx_hash + to_le_uint32(idx),
-                                      hashX + tx_numb + to_le_uint64(sats) +
-                                      bytes([len(asset_name)]) + asset_name)
-                            try:
-                                # This is a message broadcast
-                                data = asset_deserializer._get_meta_raw()
-                                put_asset_broadcast(bytes([len(asset_name)]) + asset_name + to_le_uint32(idx) + tx_numb, data)
-                                asset_broadcast_undo_info.append(bytes([len(asset_name)]) + asset_name + to_le_uint32(idx) + tx_numb)
-                            except:
-                                pass
-                        else:
-                            raise Exception('Unknown asset type: {}'.format(asset_script_type))
-
-
-                #TODO: TO HERE (SEE PREVIOUS TODO)
+                    return try_parse_asset(DataParser(script), True)
 
                 # Me @ core devs
                 # https://www.youtube.com/watch?v=iZlpsneDGBQ
@@ -1019,20 +925,20 @@ class BlockProcessor:
                         next_op = ops[op_ptr + 1]
                         if next_op[0] == -1:
                             # This contains the raw data. Deserialize.
-                            asset_script_deserializer = self.coin.DESERIALIZER(next_op[2])
-                            asset_script = asset_script_deserializer._read_varbytes()
+                            asset_script_deserializer = DataParser(next_op[2])
+                            asset_script = asset_script_deserializer.read_var_bytes()
                         elif len(ops) > op_ptr + 4 and \
                                 ops[op_ptr + 2][0] == b'r'[0] and \
                                 ops[op_ptr + 3][0] == b'v'[0] and \
                                 ops[op_ptr + 4][0] == b'n'[0]:
                             asset_script_portion = txout.pk_script[ops[op_ptr][1]:]
-                            asset_script_deserializer = self.coin.DESERIALIZER(asset_script_portion)
-                            asset_script = asset_script_deserializer._read_varbytes()
+                            asset_script_deserializer = DataParser(asset_script_portion)
+                            asset_script = asset_script_deserializer.read_var_bytes()
                         else:
                             # Hurray! This i̶s̶ ̶a̶ COULD BE A properly formatted asset script
                             asset_script = next_op[2]
 
-                        asset_deserializer = self.coin.DESERIALIZER(asset_script)
+                        asset_deserializer = DataParser(asset_script)
                         try_parse_asset(asset_deserializer)
                         is_asset = True
 
@@ -1078,11 +984,6 @@ class BlockProcessor:
                 if old_data is not None and old_data[0] == 0:
                     old_data = None
 
-                if old_data is None:
-                    undo_append(b'\0')
-                else:
-                    undo_append(b'\x01' + old_data[2:])
-
                 # Add current restricted values
                 # value[0] is 0 if should be deleted
                 # value[1] is 1 if restricted or 0 if qualifier (different value encoding)
@@ -1096,8 +997,10 @@ class BlockProcessor:
                 disassociated_qualifiers = []
 
                 if tup is not None:
-                    tx_numb_old, res_idx_old, qual_idx_old, quals_old = tup[1]
+                    tx_numb_old, res_idx_old, qual_idx_old, quals_old, _ = tup[1]
                     for old_qual in quals_old:
+                        # For the qualifiers previously associated with this restricted asset,
+                        # and are no longer associated
                         if old_qual not in quals:
                             disassociated_qualifiers.append(old_qual)
                             # Add qual undo info
@@ -1183,6 +1086,12 @@ class BlockProcessor:
                             b''.join([bytes([len(qual)]) + qual for qual in disassociated_qualifiers]) +
                             res_idx + qual_idx + tx_numb)
 
+                # Add restricted undo info
+                if old_data is None:
+                    undo_append(b'\0')
+                else:
+                    undo_append(b'\x01' + old_data[2:])
+
                 # Append qualifier undo info
                 undo_append(bytes([len(old_qual_undo_info) + len(new_qual_undo_info)]) + b''.join(old_qual_undo_info) +
                             b''.join(new_qual_undo_info))
@@ -1245,177 +1154,125 @@ class BlockProcessor:
             raise ChainError('no undo information found for height {:,d}'
                              .format(self.height))
 
-        asset_meta_undo_info = self.db.read_asset_meta_undo_info(self.height)
-        while asset_meta_undo_info:  # Stops when None or empty
-            name_len = asset_meta_undo_info[0]
-            name = asset_meta_undo_info[1:name_len + 1]
-            data_len = asset_meta_undo_info[name_len + 1]
+        data_parser = DataParser(self.db.read_asset_meta_undo_info(self.height))
+        while not data_parser.is_finished():  # Stops when None or empty
+            name = data_parser.read_var_bytes()
+            data_len, data = data_parser.read_var_bytes_tuple()
             if data_len == 0:
                 self.asset_data_deletes.append(name)
             else:
-                data = asset_meta_undo_info[name_len + 1:name_len + 1 + data_len]
                 self.asset_data_reissued[name] = data
-            asset_meta_undo_info = asset_meta_undo_info[name_len + 2 + data_len:]
 
-        asset_broadcast_undo_info = self.db.read_asset_broadcast_undo_info(self.height)
-        while asset_broadcast_undo_info:
-            asset_len = asset_broadcast_undo_info[0]
+        data_parser = DataParser(self.db.read_asset_broadcast_undo_info(self.height))
+        while not data_parser.is_finished():
+            asset_len = data_parser.read_int()
             # bytes([len(asset_name)]) + asset_name + to_le_uint32(idx) + tx_numb
-            key_len = 1 + asset_len + 4 + 5
-            key = asset_broadcast_undo_info[:key_len]
-            asset_broadcast_undo_info = asset_broadcast_undo_info[key_len:]
+            key_len = asset_len + 4 + 5
+            key = data_parser.read_bytes(key_len)
             self.asset_broadcast_dels.append(b'b' + key)
 
-        asset_undo_tag_info = self.db.read_asset_undo_tag_info(self.height)
-        while asset_undo_tag_info:
-
+        data_parser = DataParser(self.db.read_asset_undo_tag_info(self.height))
+        while not data_parser.is_finished():
             # Decode
-            asset_name_len = asset_undo_tag_info[0]
-            asset_undo_tag_info = asset_undo_tag_info[1:]
-            asset_name = asset_undo_tag_info[:asset_name_len]
-            asset_undo_tag_info = asset_undo_tag_info[asset_name_len:]
-            pkh_len = asset_undo_tag_info[0]
-            asset_undo_tag_info = asset_undo_tag_info[1:]
-            pkh = asset_undo_tag_info[:pkh_len]
-            asset_undo_tag_info = asset_undo_tag_info[pkh_len:]
-            idx = asset_undo_tag_info[:4]
-            asset_undo_tag_info = asset_undo_tag_info[4:]
-            tx_numb = asset_undo_tag_info[:5]
-            asset_undo_tag_info = asset_undo_tag_info[5:]
+            asset_name_len, asset_name = data_parser.read_var_bytes_tuple_bytes()
+            pkh_len, pkh = data_parser.read_var_bytes_tuple_bytes()
+            idx = data_parser.read_bytes(4)
+            tx_numb = data_parser.read_bytes(5)
             # Construct keys to delete
-            self.tag_to_address_deletes.append(b'p' + bytes([pkh_len]) + pkh + idx + tx_numb)
-            self.tag_to_address_deletes.append(b'a' + bytes([asset_name_len]) + asset_name + idx + tx_numb)
-
-            has_rollback_latest = asset_undo_tag_info[0]
-            asset_undo_tag_info = asset_undo_tag_info[1:]
-
-            if has_rollback_latest != 0:
-                flag = asset_undo_tag_info[0]
-                asset_undo_tag_info = asset_undo_tag_info[1:]
-                old_idx = asset_undo_tag_info[:4]
-                asset_undo_tag_info = asset_undo_tag_info[4:]
-                old_tx_numb = asset_undo_tag_info[:5]
-                asset_undo_tag_info = asset_undo_tag_info[5:]
+            self.tag_to_address_deletes.append(b'p' + pkh_len + pkh + idx + tx_numb)
+            self.tag_to_address_deletes.append(b'a' + asset_name_len + asset_name + idx + tx_numb)
+            if data_parser.read_boolean():
+                flag = data_parser.read_byte()
+                old_idx = data_parser.read_bytes(4)
+                old_tx_numb = data_parser.read_bytes(5)
                 # Roll back latest value
                 self.is_qualified.__setitem__(
-                    bytes([asset_name_len]) + asset_name + bytes([pkh_len]) + pkh,
-                    b'\x01' + bytes([flag]) + old_idx + old_tx_numb)
+                    asset_name_len + asset_name + pkh_len + pkh,
+                    b'\x01' + flag + old_idx + old_tx_numb)
             else:
                 # No previous latest information, mark for deletion
                 self.is_qualified.__setitem__(
-                    bytes([asset_name_len]) + asset_name + bytes([pkh_len]) + pkh,
+                    asset_name_len + asset_name + pkh_len + pkh,
                     b'\0')
 
-        asset_undo_freeze_info = self.db.read_asset_undo_freeze_info(self.height)
-        while asset_undo_freeze_info:
-
+        data_parser = DataParser(self.db.read_asset_undo_freeze_info(self.height))
+        while not data_parser.is_finished():
             # Decode
-            asset_len = asset_undo_freeze_info[0]
-            asset_undo_freeze_info = asset_undo_freeze_info[1:]
-            asset = asset_undo_freeze_info[:asset_len]
-            asset_undo_freeze_info = asset_undo_freeze_info[asset_len:]
-            idx = asset_undo_freeze_info[:4]
-            asset_undo_freeze_info = asset_undo_freeze_info[4:]
-            tx_numb = asset_undo_freeze_info[:5]
-            asset_undo_freeze_info = asset_undo_freeze_info[5:]
-
+            asset_name_len, asset_name = data_parser.read_var_bytes_tuple_bytes()
+            idx = data_parser.read_bytes(4)
+            tx_numb = data_parser.read_bytes(5)
             # Parse tags for deletion
-            self.global_freezes_deletes.append(b'f' + bytes(asset_len) + asset + idx + tx_numb)
-
-            has_rollback_latest = asset_undo_freeze_info[0]
-            asset_undo_freeze_info = asset_undo_freeze_info[1:]
-
-            if has_rollback_latest != 0:
-                flag = asset_undo_freeze_info[0]
-                asset_undo_freeze_info = asset_undo_freeze_info[1:]
-                old_idx = asset_undo_freeze_info[:4]
-                asset_undo_freeze_info = asset_undo_freeze_info[4:]
-                old_tx_numb = asset_undo_freeze_info[:5]
-                asset_undo_freeze_info = asset_undo_freeze_info[5:]
-                # Roll back latest value
-                self.is_frozen.__setitem__(bytes(asset_len) + asset,
-                                           b'\x01' + bytes([flag]) + old_idx + old_tx_numb)
+            self.global_freezes_deletes.append(b'f' + asset_name_len + asset_name + idx + tx_numb)
+            # Parse rollbacks
+            if data_parser.read_boolean():
+                flag = data_parser.read_byte()
+                old_idx = data_parser.read_bytes(4)
+                old_tx_numb = data_parser.read_bytes(5)
+                self.is_frozen.__setitem__(asset_name,
+                                           b'\x01' + flag + old_idx + old_tx_numb)
             else:
                 # No previous latest information, mark for deletion
-                self.is_frozen.__setitem__(bytes(asset_len) + asset,
+                self.is_frozen.__setitem__(asset_name,
                                            b'\0')
 
-        a = self.db.read_asset_undo_res2qual_key(self.height)
-        while a:
-            # Parse deletes
-            # bytes([len(res)]) + res + res2qual_b + res_idx + qual_idx + tx_numb
-            restricted_len = a[0]
-            a = a[1:]
-            restricted = a[:restricted_len]
-            a = a[restricted_len:]
-            quals_del = []
-            num_quals = a[0]
-            a = a[1:]
-            for _ in range(num_quals):
-                qual_len = a[0]
-                a = a[1:]
-                qual = a[:qual_len]
-                a = a[qual_len:]
-                quals_del.append(qual)
-            res_idx_del = a[:4]
-            a = a[4:]
-            qual_idx_del = a[:4]
-            a = a[4:]
-            tx_num_del = a[:5]
-            a = a[5:]
+        data_parser = DataParser(self.db.read_asset_undo_res2qual_key(self.height))
+        while not data_parser.is_finished():
 
-            # Delete keys
-            self.restricted_to_qualifier_deletes.append(b'q' + bytes([restricted_len]) + restricted + res_idx_del +
-                                                        qual_idx_del + tx_num_del)
-            for qual in quals_del:
-                self.restricted_to_qualifier_deletes.append(b'q' + bytes([len(qual)]) + qual + res_idx_del +
-                                                            qual_idx_del + tx_num_del)
+            restricted_len, restricted = data_parser.read_var_bytes_tuple_bytes()
+            a_quals = []
+            d_quals = []
+            for _ in range(data_parser.read_int()):
+                a_quals.append(data_parser.read_var_bytes_tuple_bytes())
+            for _ in range(data_parser.read_int()):
+                d_quals.append(data_parser.read_var_bytes_tuple_bytes())
+            res_idx = data_parser.read_bytes(4)
+            qual_idx = data_parser.read_bytes(4)
+            tx_numb = data_parser.read_bytes(5)
 
-            # Roll back or remove current restricted assoc
-            has_res = a[0]
-            a = a[1:]
-            if has_res != 0:
-                amt_quals = a[0]
-                a = a[1:]
-                quals = []
-                for _ in range(amt_quals):
-                    qual_len = a[0]
-                    a = a[1:]
-                    qual = a[:qual_len]
-                    a = a[qual_len:]
-                    quals.append(qual)
-                next_data = a[:4 + 4 + 5]
-                a = a[4 + 4 + 5:]
-                self.qr_associations.__setitem__(restricted, b'\x01\x01' + bytes([amt_quals]) +
-                                                 b''.join([bytes([len(qual)]) + qual for qual in quals]) + next_data)
+            del_hist_prefix = b'q'
+            self.restricted_to_qualifier_deletes.append(
+                del_hist_prefix + restricted_len + restricted + res_idx + qual_idx + tx_numb
+            )
+            for qual_len, qual in itertools.chain(a_quals, d_quals):
+                self.restricted_to_qualifier_deletes.append(
+                    del_hist_prefix + qual_len + qual + res_idx + qual_idx + tx_numb
+                )
+
+            # Undo current restricted data
+            if data_parser.read_boolean():
+                old_a_quals = []
+                old_d_quals = []
+                for _ in range(data_parser.read_int()):
+                    old_a_quals.append(data_parser.read_var_bytes_tuple_bytes())
+                for _ in range(data_parser.read_int()):
+                    old_d_quals.append(data_parser.read_var_bytes_tuple_bytes())
+                old_data = data_parser.read_bytes(4 + 4 + 5)
+                self.qr_associations.__setitem__(
+                    restricted,
+                    b'\x01\x01' +
+                    bytes([len(old_a_quals)]) + b''.join([le + b for le, b in old_a_quals]) +
+                    bytes([len(old_d_quals)]) + b''.join([le + b for le, b in old_d_quals]) +
+                    old_data
+                )
             else:
                 self.qr_associations.__setitem__(restricted, b'\0')
 
-            # Roll back or remove current qualifier assoc
-            num_quals = a[0]
-            a = a[1:]
-            for _ in range(num_quals):
-                qual_len = a[0]
-                a = a[1:]
-                qual = a[:qual_len]
-                a = a[qual_len:]
-                has_res = a[0]
-                a = a[1:]
-                if has_res != 0:
-                    num_res = a[0]
-                    a = a[1:]
-                    datas = bytes([num_res])
-                    for _ in range(num_res):
-                        len_res = a[0]
-                        a = a[1:]
-                        res = a[:len_res]
-                        a = a[len_res:]
-                        rest = a[:4 + 4 + 5]
-                        a = a[4 + 4 + 5:]
-                        datas += bytes([len_res]) + res + rest
-                    self.qr_associations.__setitem__(qual, b'\x01\0' + datas)
+            # Undo current qualifier data
+            for _ in range(data_parser.read_int()):
+                qual_name = data_parser.read_var_bytes()
+                if data_parser.read_boolean():
+                    res_data = []
+                    for _ in range(data_parser.read_int()):
+                        b = data_parser.read_byte()
+                        res_len, res_name = data_parser.read_var_bytes_tuple_bytes()
+                        old_res_data = data_parser.read_bytes(4 + 4 + 5)
+                        res_data.append(b + res_len + res_name + old_res_data)
+                    self.qr_associations.__setitem__(
+                        qual_name,
+                        b'\x01\0' + bytes([len(res_data)]) + b''.join(res_data)
+                    )
                 else:
-                    self.qr_associations.__setitem__(qual, b'\0')
+                    self.qr_associations.__setitem__(qual_name, b'\0')
 
         n = len(undo_info)
         asset_n = len(asset_undo_info)

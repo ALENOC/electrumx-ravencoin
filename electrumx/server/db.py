@@ -570,7 +570,6 @@ class DB(object):
                 batch_put(prefix + bytes([len(qual)]) + qual + res_idx + quals_idx + tx_numb,
                           b'\0\x01' + bytes([restricted_len]) + restricted)
 
-
         flush_data.asset_restricted2qual.clear()
 
         self.flush_restricted2qual_undo_info(batch_put, flush_data.asset_restricted2qual_undo)
@@ -1135,16 +1134,6 @@ class DB(object):
         with self.utxo_db.write_batch() as batch:
             self.write_utxo_state(batch)
 
-    async def restricted_asset_data(self, restricted_asset: str, only_current: bool):
-        def read_restricted():
-            pass
-        while True:
-            assets = await run_in_thread(read_restricted)
-            if all(asset.tx_hash is not None for asset in assets):
-                return assets
-            self.logger.warning('read_restricted: tx hash not found (reorg?), retrying...')
-            await sleep(0.25)
-
     async def all_assets(self, hashX):
         def read_assets():
             assets = []
@@ -1458,7 +1447,7 @@ class DB(object):
     # For external use
     async def get_frozen_status_of_restricted(self, asset: bytes, get_history: bool = False):
         def get_current_info():
-            key = b'l' + bytes([len(asset)]) + asset
+            key = b'l' + asset
             value = self.asset_db.get(key)
             if value is None:
                 return {}
@@ -1502,53 +1491,27 @@ class DB(object):
         return await run_in_thread(calc_ret)
 
     def raw_assocation_data_to_tuple(self, value: bytes):
-        is_restricted = value[0]
-        value = value[1:]
-
-        if is_restricted:
+        data_parser = util.DataParser(value)
+        if data_parser.read_boolean():
             qualifiers = []
             old_quals = []
-            num_quals = value[0]
-            value = value[1:]
-            for _ in range(num_quals):
-                qual_len = value[0]
-                value = value[1:]
-                qual = value[:qual_len]
-                value = value[qual_len:]
-                qualifiers.append(qual)
-            num_dis = value[0]
-            value = value[1:]
-            for _ in range(num_quals):
-                qual_len = value[0]
-                value = value[1:]
-                qual = value[:qual_len]
-                value = value[qual_len:]
-                old_quals.append(qual)
-            res_idx = value[:4]
-            value = value[4:]
-            qual_idx = value[:4]
-            value = value[4:]
-            tx_numb = value[:5]
-            value = value[5:]
+            for _ in range(data_parser.read_int()):
+                qualifiers.append(data_parser.read_var_bytes())
+            for _ in range(data_parser.read_int()):
+                old_quals.append(data_parser.read_var_bytes())
+            res_idx = data_parser.read_bytes(4)
+            qual_idx = data_parser.read_bytes(4)
+            tx_numb = data_parser.read_bytes(5)
             return True, (tx_numb, res_idx, qual_idx, qualifiers, old_quals)
         else:
             restricted = []
-            num_res = value[0]
-            value = value[1:]
-            for _ in range(num_res):
-                type = value[0]
-                value = value [1:]
-                res_len = value[0]
-                value = value[1:]
-                res = value[:res_len]
-                value = value[res_len:]
-                res_idx = value[:4]
-                value = value[4:]
-                qual_idx = value[:4]
-                value = value[4:]
-                tx_numb = value[:5]
-                value = value[5:]
-                restricted.append(((False if type == 0 else True), res, tx_numb, res_idx, qual_idx))
+            for _ in range(data_parser.read_int()):
+                b = data_parser.read_boolean()
+                res = data_parser.read_var_bytes()
+                res_idx = data_parser.read_bytes(4)
+                qual_idx = data_parser.read_bytes(4)
+                tx_numb = data_parser.read_bytes(5)
+                restricted.append((b, res, tx_numb, res_idx, qual_idx))
             return False, restricted
 
     def tuple_to_raw_assocation_data(self, tuple) -> bytes:
@@ -1599,32 +1562,42 @@ class DB(object):
         else:
             return value
 
+    async def lookup_messages(self, asset_name: bytes):
+        def read_messages():
+            prefix = b'b' + asset_name
+            ret_val = {}
+            for db_key, db_value in self.utxo_db.iterator(prefix=prefix):
+                tx_pos, = unpack_le_uint32(db_key[-9:-5])
+                tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
+                tx_hash, height = self.fs_tx_hash(tx_num)
+                ret_val[hash_to_hex_str(tx_hash)] = {
+                    'data': base_encode(db_value, 58),
+                    'height': height,
+                    'tx_pos': tx_pos,
+                }
+            return ret_val
+        return await run_in_thread(read_messages)
+
     async def lookup_asset_meta(self, asset_name):
         def read_assets_meta():
             b = self.asset_info_db.get(asset_name)
             if not b:
                 return {}
-            print(b)
-            div_amt = b[0]
-            b = b[1:]
-            reissuable = b[0]
-            b = b[1:]
-            has_ipfs = b[0]
-            b = b[1:]
+            data_parser = util.DataParser(b)
+            div_amt = data_parser.read_int()
+            reissuable = data_parser.read_int()
+            has_ipfs = data_parser.read_int()
             to_ret = {
                 'divisions': div_amt,
                 'reissuable': reissuable,
                 'has_ipfs': has_ipfs
             }
             if has_ipfs != 0:
-                ipfs_data = b[:34]
-                b = b[34:]
+                ipfs_data = data_parser.read_bytes(34)
                 to_ret['ipfs'] = base_encode(ipfs_data, 58)
 
-            idx = b[:4]
-            b = b[4:]
-            tx_numb = b[:5]
-            b = b[5:]
+            idx = data_parser.read_bytes(4)
+            tx_numb = data_parser.read_bytes(5)
 
             tx_pos, = unpack_le_uint32(idx)
             tx_num, = unpack_le_uint64(tx_numb + bytes(3))
@@ -1636,13 +1609,9 @@ class DB(object):
                 'height': height
             }
 
-            has_prev = b[0]
-            b = b[1:]
-
-            if has_prev != 0:
-                idx_prev = b[:4]
-                b = b[4:]
-                tx_numb_prev = b[:5]
+            if data_parser.read_boolean():
+                idx_prev = data_parser.read_bytes(4)
+                tx_numb_prev = data_parser.read_bytes(5)
 
                 tx_pos, = unpack_le_uint32(idx_prev)
                 tx_num_prev, = unpack_le_uint64(tx_numb_prev + bytes(3))
