@@ -1576,13 +1576,14 @@ class ElectrumX(SessionBase):
                 BAD_REQUEST, f'asset name greater than 32 characters'
             ) from None
         ret = await self.db.get_frozen_status_of_restricted(asset.encode('ascii'), history)
-        print('post get')
+        print(ret)
         if not ret:
             self.bump_cost(1.0)
             return ret
         cost = 1.0 + len(ret['current']) / 50
         if history:
             cost += len(ret['history']) / 50
+        print(cost)
         self.bump_cost(cost)
         return ret
 
