@@ -479,18 +479,18 @@ class DB(object):
             restricted_asset = key
             qual_adds, qual_removes, bytes_append = value
             batch_put(
-                b'1' + restricted_asset + bytes_append,
+                b'1' + bytes([len(restricted_asset)]) + restricted_asset + bytes_append,
                 bytes([len(qual_adds)]) + b''.join([bytes([len(qual)]) + qual for qual in qual_adds]) +
                 bytes([len(qual_removes)]) + b''.join([bytes([len(qual)]) + qual for qual in qual_removes])
             )
             for qual in qual_adds:
                 batch_put(
-                    b'2' + qual + bytes_append,
+                    b'2' + bytes([len(qual)]) + qual + bytes_append,
                     b'\x01' + restricted_asset
                 )
             for qual in qual_removes:
                 batch_put(
-                    b'2' + qual + bytes_append,
+                    b'2' + bytes([len(qual)]) + qual + bytes_append,
                     b'\0' + restricted_asset
                 )
         flush_data.asset_restricted2qual.clear()
