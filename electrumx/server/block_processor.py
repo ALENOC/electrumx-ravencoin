@@ -775,6 +775,9 @@ class BlockProcessor:
                                 old_qual_hist.append(bytes([len(h160)]) + h160 + idx + tx_numb + flag)
                                 old_h160_hist.append(name_byte_len + asset_name + idx + tx_numb + flag)
 
+                                print('putting')
+                                print(old_qual_hist)
+
                                 put_qualified_current(
                                     b'Q' + asset_name,
                                     bytes([len(old_qual_hist)]) + b''.join(old_qual_hist)
