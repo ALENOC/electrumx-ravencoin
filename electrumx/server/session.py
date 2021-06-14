@@ -1499,7 +1499,6 @@ class ElectrumX(SessionBase):
             ) from None
         ret = await self.db.lookup_messages(name.encode('ascii'))
         self.bump_cost(1.0 + len(ret) / 50)
-        print(ret)
         return ret
 
     async def is_qualified(self, h160: str, asset: str):
@@ -1583,7 +1582,6 @@ class ElectrumX(SessionBase):
         if history:
             cost += len(ret['history']) / 50
         self.bump_cost(cost)
-        print(ret)
         return ret
 
     async def compact_fee_histogram(self):

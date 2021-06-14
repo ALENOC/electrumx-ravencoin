@@ -457,10 +457,6 @@ class DB(object):
         for key, value in flush_data.asset_tag2pub_current.items():
             # b't' h160 -> asset
             # b'Q' asset -> h160
-            print('Tagging')
-            print(key)
-            print('with')
-            print(value)
             batch_put(key, value)
         flush_data.asset_tag2pub_current.clear()
 
@@ -505,16 +501,10 @@ class DB(object):
         for key, value in flush_data.asset_current_associations.items():
             # b'r' res
             # b'c' qual
-            print('associating')
-            print(key)
-            print('with')
-            print(value)
             batch_put(key, value)
         flush_data.asset_current_associations.clear()
 
         for key, value in flush_data.asset_broadcasts.items():
-            print('Message')
-            print(key)
             batch_put(b'b' + key, value)
         flush_data.asset_broadcasts.clear()
 
@@ -1187,8 +1177,8 @@ class DB(object):
             parser = util.DataParser(data)
             for _ in range(parser.read_int()):
                 ass = parser.read_var_bytes_as_ascii()
-                res_idx = parser.read_bytes(4)
-                qual_idx = parser.read_bytes(4)
+                res_idx = unpack_le_uint32(parser.read_bytes(4))
+                qual_idx = unpack_le_uint32(parser.read_bytes(4))
                 tx_numb = parser.read_bytes(4)
                 flag = parser.read_boolean()
                 tx_num, = unpack_le_uint64(tx_numb + bytes(3))
@@ -1254,8 +1244,8 @@ class DB(object):
             parser = util.DataParser(data)
             for _ in range(parser.read_int()):
                 ass = parser.read_var_bytes_as_ascii()
-                res_idx = parser.read_bytes(4)
-                qual_idx = parser.read_bytes(4)
+                res_idx = unpack_le_uint32(parser.read_bytes(4))
+                qual_idx = unpack_le_uint32(parser.read_bytes(4))
                 tx_numb = parser.read_bytes(4)
                 flag = parser.read_boolean()
                 tx_num, = unpack_le_uint64(tx_numb + bytes(3))
@@ -1325,7 +1315,7 @@ class DB(object):
             parser = util.DataParser(data)
             for _ in range(parser.read_int()):
                 h160 = parser.read_var_bytes()
-                tx_pos = parser.read_bytes(4)
+                tx_pos = unpack_le_uint32(parser.read_bytes(4))
                 tx_numb = parser.read_bytes(5)
                 flag = parser.read_boolean()
                 tx_num, = unpack_le_uint64(tx_numb + bytes(3))
@@ -1350,7 +1340,7 @@ class DB(object):
             parser = util.DataParser(data)
             for _ in range(parser.read_int()):
                 h160 = parser.read_var_bytes()
-                tx_pos = parser.read_bytes(4)
+                tx_pos = unpack_le_uint32(parser.read_bytes(4))
                 tx_numb = parser.read_bytes(5)
                 flag = parser.read_boolean()
                 tx_num, = unpack_le_uint64(tx_numb + bytes(3))
@@ -1409,7 +1399,7 @@ class DB(object):
             parser = util.DataParser(data)
             for _ in range(parser.read_int()):
                 asset = parser.read_var_bytes_as_ascii()
-                tx_pos = parser.read_bytes(4)
+                tx_pos = unpack_le_uint32(parser.read_bytes(4))
                 tx_numb = parser.read_bytes(5)
                 flag = parser.read_boolean()
                 tx_num, = unpack_le_uint64(tx_numb + bytes(3))
@@ -1461,13 +1451,11 @@ class DB(object):
     # For external use
     async def get_frozen_status_of_restricted(self, asset: bytes, get_history: bool = False):
         def get_current_info():
-            print('current')
             data = self.asset_db.get(b'l' + asset)
-            print('post data')
             if not data:
                 return {}
             parser = util.DataParser(data)
-            tx_pos = parser.read_bytes(4)
+            tx_pos = unpack_le_uint32(parser.read_bytes(4))
             tx_numb = parser.read_bytes(5)
             flag = parser.read_boolean()
             tx_num, = unpack_le_uint64(tx_numb + bytes(3))
