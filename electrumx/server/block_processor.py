@@ -818,7 +818,7 @@ class BlockProcessor:
 
                                 freeze_undo_info.append(
                                     asset_name_len + asset_name +
-                                    (b'\x01' if len(old_frozen_info > 0) else b'\0') + old_frozen_info
+                                    (b'\x01' if len(old_frozen_info) > 0 else b'\0') + old_frozen_info
                                 )
 
                                 put_freeze_current(
@@ -947,16 +947,12 @@ class BlockProcessor:
                                     if asset_deserializer.cursor + 34 <= asset_deserializer.length:
                                         data = asset_deserializer.read_bytes(34)
                                         # This is a message broadcast
-                                        print('Message')
-                                        print(hash_to_hex_str(tx_hash))
                                         put_asset_broadcast(asset_name + to_le_uint32(idx) + tx_numb, data)
                                         asset_broadcast_undo_info.append(
                                             asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
                                 else:
                                     data = asset_deserializer.read_bytes(34)
                                     # This is a message broadcast
-                                    print('Message')
-                                    print(hash_to_hex_str(tx_hash))
                                     put_asset_broadcast(asset_name + to_le_uint32(idx) + tx_numb, data)
                                     asset_broadcast_undo_info.append(
                                         asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
