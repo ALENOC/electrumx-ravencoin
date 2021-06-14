@@ -747,10 +747,14 @@ class BlockProcessor:
                                 qual_cached = pop_qualified_current(b'Q' + asset_name)
                                 if qual_cached:
                                     old_qual_hist = parse_current_qualifier_history(qual_cached)
+                                    print('cached')
+                                    print(old_qual_hist)
                                 else:
                                     qual_writed = self.db.asset_db.get(b'Q' + asset_name)
                                     if qual_writed:
                                         old_qual_hist = parse_current_qualifier_history(qual_writed)
+                                        print('written')
+                                        print(old_qual_hist)
 
                                 h160_cached = pop_qualified_current(b't' + h160)
                                 if h160_cached:
