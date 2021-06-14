@@ -1626,7 +1626,7 @@ class ElectrumX(SessionBase):
         if ptuple >= (1, 9):
             handlers['blockchain.asset.is_qualified'] = self.is_qualified
             handlers['blockchain.asset.get_restricted_associations'] = self.get_restricted_associations
-            handlers['blockchain.asset.get_qualifier_associations'] = self.get_qualifierassociations
+            handlers['blockchain.asset.get_qualifier_associations'] = self.get_qualifier_associations
             handlers['blockchain.asset.get_tags_for_h160'] = self.get_tags_for_h160
             handlers['blockchain.asset.get_h160_for_asset'] = self.get_h160_for_asset
             handlers['blockchain.asset.frozen_status'] = self.frozen_status
