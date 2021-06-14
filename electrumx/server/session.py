@@ -1583,6 +1583,7 @@ class ElectrumX(SessionBase):
         if history:
             cost += len(ret['history']) / 50
         self.bump_cost(cost)
+        print(ret)
         return ret
 
     async def compact_fee_histogram(self):

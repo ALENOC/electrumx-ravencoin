@@ -947,13 +947,13 @@ class BlockProcessor:
                                     if asset_deserializer.cursor + 34 <= asset_deserializer.length:
                                         data = asset_deserializer.read_bytes(34)
                                         # This is a message broadcast
-                                        put_asset_broadcast(asset_name + to_le_uint32(idx) + tx_numb, data)
+                                        put_asset_broadcast(asset_name_len + asset_name + to_le_uint32(idx) + tx_numb, data)
                                         asset_broadcast_undo_info.append(
                                             asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
                                 else:
                                     data = asset_deserializer.read_bytes(34)
                                     # This is a message broadcast
-                                    put_asset_broadcast(asset_name + to_le_uint32(idx) + tx_numb, data)
+                                    put_asset_broadcast(asset_name_len + asset_name + to_le_uint32(idx) + tx_numb, data)
                                     asset_broadcast_undo_info.append(
                                         asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
                         else:

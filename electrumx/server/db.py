@@ -1514,7 +1514,7 @@ class DB(object):
 
     async def lookup_messages(self, asset_name: bytes):
         def read_messages():
-            prefix = b'b' + asset_name
+            prefix = b'b' + bytes([len(asset_name)]) + asset_name
             ret_val = {}
             for db_key, db_value in self.asset_db.iterator(prefix=prefix):
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
