@@ -67,7 +67,9 @@ ASSET_NULL_TEMPLATE = [OpCodes.OP_RVN_ASSET, OPPushDataGeneric(lambda x: x == 20
 # Used with creating restricted assets. Dictates the qualifier assets associated.
 ASSET_NULL_VERIFIER_TEMPLATE = [OpCodes.OP_RVN_ASSET, OpCodes.OP_RESERVED, OPPushDataGeneric()]
 # Stop all movements of a restricted asset.
-ASSET_GLOBAL_RESTRICTION_TEMPLATE = [OpCodes.OP_RVN_ASSET, OpCodes.OP_RESERVED, OpCodes.OP_RESERVED, OPPushDataGeneric()]
+ASSET_GLOBAL_RESTRICTION_TEMPLATE = [OpCodes.OP_RVN_ASSET, OpCodes.OP_RESERVED, OpCodes.OP_RESERVED,
+                                     OPPushDataGeneric()]
+
 
 # -1 if doesn't match, positive if does. Indicates index in script
 def match_script_against_template(script, template) -> int:
@@ -557,9 +559,9 @@ class BlockProcessor:
         asset_undo_info = []
         asset_meta_undo_info = []
 
-        r2q_undo_info = []
-        t2a_undo_info = []
-        freezes_undo_info = []
+        qualified_undo_info = []
+        freeze_undo_info = []
+        association_undo_info = []
 
         asset_broadcast_undo_info = []
 
@@ -573,11 +575,17 @@ class BlockProcessor:
         put_asset_data_reissued = self.asset_data_reissued.__setitem__
         put_asset_broadcast = self.asset_broadcast.__setitem__
 
-        put_r2q = self.restricted_to_qualifier.__setitem__
-        put_t2a = self.tag_to_address.__setitem__
-        put_qualified = self.is_qualified.__setitem__
-        put_freeze = self.global_freezes.__setitem__
-        put_frozen = self.is_frozen.__setitem__
+        put_qualified_history = self.tag_to_address.__setitem__
+        put_qualified_current = self.is_qualified.__setitem__
+
+        def pop_qualified_current(x):
+            return self.is_qualified.pop(x, None)
+
+        put_freeze_history = self.global_freezes.__setitem__
+        put_freeze_current = self.is_frozen.__setitem__
+
+        def pop_freeze_current(x):
+            return self.is_frozen.pop(x, None)
 
         spend_utxo = self.spend_utxo
         spend_asset = self.spend_asset
@@ -633,7 +641,8 @@ class BlockProcessor:
                         b = bytearray(tx_hash)
                         b.reverse()
                         file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
-                        with open(os.path.join(self.bad_vouts_path, str(self.height) + '_BADOPS_' + file_name), 'w') as f:
+                        with open(os.path.join(self.bad_vouts_path, str(self.height) + '_BADOPS_' + file_name),
+                                  'w') as f:
                             f.write('TXID : {}\n'.format(b.hex()))
                             f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
                             f.write('OPS : {}\n'.format(str(ops)))
@@ -671,7 +680,8 @@ class BlockProcessor:
                             b = bytearray(tx_hash)
                             b.reverse()
                             file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
-                            with open(os.path.join(self.bad_vouts_path, str(self.height) + '_BADOPS_' + file_name), 'w') as f:
+                            with open(os.path.join(self.bad_vouts_path, str(self.height) + '_BADOPS_' + file_name),
+                                      'w') as f:
                                 f.write('TXID : {}\n'.format(b.hex()))
                                 f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
                                 f.write('OPS : {}\n'.format(str(ops)))
@@ -698,32 +708,75 @@ class BlockProcessor:
                                 name_byte_len, asset_name = asset_portion_deserializer.read_var_bytes_tuple_bytes()
                                 flag = asset_portion_deserializer.read_byte()
 
-                                # tx_hash + idx (uint32le): asset + tx_num (uint64le[:5]) + pubkey + flag
-                                put_t2a(tx_hash + idx,
-                                        name_byte_len + asset_name +
-                                        tx_numb + bytes([len(h160)]) + h160 + flag)
+                                current_key = name_byte_len + asset_name + bytes([len(h160)]) + h160
 
-                                old_info = self.is_qualified.pop(bytes([len(asset_name)]) + asset_name +
-                                                                 bytes([len(h160)]) + h160, None)
-                                if old_info is None:
-                                    old_info = self.db.check_if_qualified(asset_name, h160)
+                                # Add tag history
+                                put_qualified_history(current_key +
+                                                      idx + tx_numb,
+                                                      flag)
+
+                                def parse_current_qualifier_history(data: bytes):
+                                    ret = []
+                                    parser = DataParser(data)
+                                    for _ in range(parser.read_int()):
+                                        old_h160_len, old_h160 = parser.read_var_bytes_tuple_bytes()
+                                        if h160 != old_h160:
+                                            ret.append(
+                                                old_h160_len + old_h160 +
+                                                parser.read_bytes(4 + 5 + 1)
+                                            )
+                                    return ret
+
+                                def parse_current_160_history(data: bytes):
+                                    ret = []
+                                    parser = DataParser(data)
+                                    for _ in range(parser.read_int()):
+                                        old_qualifier_len, old_qualifier = parser.read_var_bytes_tuple_bytes()
+                                        if asset_name != old_qualifier:
+                                            ret.append(
+                                                old_qualifier_len + old_qualifier +
+                                                parser.read_bytes(4 + 5 + 1)
+                                            )
+                                    return ret
+
+                                # b't' h160 -> asset
+                                # b'Q' asset -> h160
+                                old_qual_hist = []
+                                old_h160_hist = []
+
+                                qual_cached = pop_qualified_current(asset_name)
+                                if qual_cached:
+                                    old_qual_hist += parse_current_qualifier_history(qual_cached)
                                 else:
-                                    # Popped value has 'delete' byte
-                                    old_info = old_info[1:]
+                                    qual_writed = self.db.asset_db.get(b'Q' + asset_name)
+                                    if qual_writed:
+                                        old_qual_hist += parse_current_qualifier_history(qual_writed)
 
-                                # This tracks the most up-to-date asset-pubkey is qualified
-                                put_qualified(bytes([len(asset_name)]) + asset_name + bytes([len(h160)]) + h160,
-                                              b'\x01' + bytes([flag]) + idx + tx_numb)
-
-                                # During a back up, this will be used to delete keys
-                                t2a_undo_info.append(bytes([len(asset_name)]) + asset_name + bytes([len(h160)]) + h160 +
-                                                     idx + tx_numb)
-
-                                if old_info is None:
-                                    t2a_undo_info.append(b'\0')
+                                h160_cached = pop_qualified_current(h160)
+                                if h160_cached:
+                                    old_h160_hist += parse_current_160_history(h160_cached)
                                 else:
-                                    # And this will be used to roll back the latest qualified value
-                                    t2a_undo_info.append(b'\x01' + old_info)
+                                    h160_writed = self.db.asset_db.get(b't' + h160)
+                                    if h160_writed:
+                                        old_h160_hist += parse_current_160_history(h160_writed)
+
+                                qualified_undo_info.append(
+                                    name_byte_len + asset_name + bytes([len(old_qual_hist)]) + b''.join(old_qual_hist) +
+                                    bytes([len(h160)]) + h160 + bytes([len(old_h160_hist)]) + b''.join(old_h160_hist)
+                                )
+
+                                old_qual_hist.append(bytes([len(h160)]) + h160 + idx + tx_numb + flag)
+                                old_h160_hist.append(name_byte_len + asset_name + idx + tx_numb + flag)
+
+                                put_qualified_current(
+                                    b'Q' + asset_name,
+                                    bytes([len(old_qual_hist)]) + b''.join(old_qual_hist)
+                                )
+
+                                put_qualified_current(
+                                    b't' + h160,
+                                    bytes([len(old_h160_hist)]) + b''.join(old_h160_hist)
+                                )
 
                             elif match_script_against_template(ops, ASSET_NULL_VERIFIER_TEMPLATE) > -1:
                                 qualifiers_b = ops[2][2]
@@ -750,28 +803,28 @@ class BlockProcessor:
                                 asset_name_len, asset_name = asset_portion_deserializer.read_var_bytes_tuple_bytes()
                                 flag = asset_portion_deserializer.read_byte()
 
-                                # tx_hash + idx (uint32le): restricted + tx_num (uint64le[:5]) + flag
-                                put_freeze(tx_hash + idx, asset_name_len + asset_name + tx_numb + flag)
+                                put_freeze_history(
+                                    asset_name_len + asset_name + idx + tx_numb, flag
+                                )
 
-                                old_info = self.is_frozen.pop(asset_name, None)
-                                if old_info is None:
-                                    old_info = self.db.check_if_frozen(asset_name)
+                                old_frozen_info = b''
+                                cached_f = pop_freeze_current(asset_name)
+                                if cached_f:
+                                    old_frozen_info = cached_f
                                 else:
-                                    # Remove delete key
-                                    old_info = old_info[1:]
+                                    writed_f = self.db.asset_db.get(b'l' + asset_name)
+                                    if writed_f:
+                                        old_frozen_info = writed_f
 
-                                # Current info
-                                put_frozen(asset_name,
-                                           b'\x01' + flag + idx + tx_numb)
+                                freeze_undo_info.append(
+                                    asset_name_len + asset_name +
+                                    (b'\x01' if len(old_frozen_info > 0) else b'\0') + old_frozen_info
+                                )
 
-                                # Delete this
-                                freezes_undo_info.append(asset_name_len + asset_name + idx + tx_numb)
-
-                                if old_info is None:
-                                    freezes_undo_info.append(b'\0')
-                                else:
-                                    # And this will be used to roll back the latest frozen value
-                                    freezes_undo_info.append(b'\x01' + old_info)
+                                put_freeze_history(
+                                    asset_name,
+                                    idx + tx_numb + flag
+                                )
 
                             else:
                                 raise Exception('Bad null asset script ops')
@@ -798,7 +851,7 @@ class BlockProcessor:
                          hashX + tx_numb + to_le_uint64(txout.value))
 
                 # Now try and add asset info
-                def try_parse_asset(asset_deserializer: DataParser, second_loop = False):
+                def try_parse_asset(asset_deserializer: DataParser, second_loop=False):
                     op = asset_deserializer.read_bytes(3)
                     if op != b'rvn':
                         raise Exception("Expected {}, was {}".format(b'rvn', op))
@@ -890,14 +943,15 @@ class BlockProcessor:
                                       asset_name_len + asset_name)
 
                             if not asset_deserializer.is_finished():
-                                if second_loop and asset_deserializer.cursor + 34 <= asset_deserializer.length:
-                                    data = asset_deserializer.read_bytes(34)
-                                    # This is a message broadcast
-                                    print('Message')
-                                    print(hash_to_hex_str(tx_hash))
-                                    put_asset_broadcast(asset_name + to_le_uint32(idx) + tx_numb, data)
-                                    asset_broadcast_undo_info.append(
-                                        asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
+                                if second_loop:
+                                    if asset_deserializer.cursor + 34 <= asset_deserializer.length:
+                                        data = asset_deserializer.read_bytes(34)
+                                        # This is a message broadcast
+                                        print('Message')
+                                        print(hash_to_hex_str(tx_hash))
+                                        put_asset_broadcast(asset_name + to_le_uint32(idx) + tx_numb, data)
+                                        asset_broadcast_undo_info.append(
+                                            asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
                                 else:
                                     data = asset_deserializer.read_bytes(34)
                                     # This is a message broadcast
@@ -951,7 +1005,8 @@ class BlockProcessor:
                                 b = bytearray(tx_hash)
                                 b.reverse()
                                 file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
-                                with open(os.path.join(self.bad_vouts_path, str(self.height) + '_' + file_name), 'w') as f:
+                                with open(os.path.join(self.bad_vouts_path, str(self.height) + '_' + file_name),
+                                          'w') as f:
                                     f.write('TXID : {}\n'.format(b.hex()))
                                     f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
                                     f.write('OpCodes : {}\n'.format(str(ops)))
@@ -962,139 +1017,147 @@ class BlockProcessor:
                 res = self.current_restricted_asset  # type: bytes
                 quals = [qual for qual in self.current_qualifiers if qual]
 
-                historical_tag = self.restricted_to_qualifier.__setitem__
-                current_tag = self.qr_associations.__setitem__
-                undo_append = r2q_undo_info.append
+                tag_historical = self.restricted_to_qualifier.__setitem__
+                tag_current = self.qr_associations.__setitem__
+
+                def pop_current(x):
+                    return self.qr_associations.pop(x, None)
+
+                undo_append = association_undo_info.append
 
                 res_idx = self.restricted_idx
                 qual_idx = self.qualifiers_idx
 
-                res2qual_b = bytes([len(quals)]) + b''.join([bytes([len(qual)]) + qual for qual in quals])
+                def get_current_association_data(data: bytes):
+                    parser = DataParser(data)
+                    ret = []
+                    for _ in range(parser.read_int()):
+                        ret.append((
+                            parser.read_var_bytes(),  # asset
+                            parser.read_bytes(4 + 4 + 5),  # res idx, qual idx, tx_num
+                            parser.read_boolean(),  # Associated or un-associated
+                        ))
+                    return ret
 
-                # Add undo info to roll back current restricted values
-                old_data = self.qr_associations.pop(res, None)
-                tup = None
-                if old_data is None:
-                    tup = self.db.get_associated_assets_from(res)
-                    if tup is not None:
-                        # Add a dummy byte
-                        old_data = b'\x01' + self.db.tuple_to_raw_assocation_data(tup)
-
-                # No data
-                if old_data is not None and old_data[0] == 0:
-                    old_data = None
-
-                # Add current restricted values
-                # value[0] is 0 if should be deleted
-                # value[1] is 1 if restricted or 0 if qualifier (different value encoding)
-
-                # Update previously associated qualifiers
-                if tup is None and old_data is not None:
-                    tup = self.db.raw_assocation_data_to_tuple(old_data[1:])
-
-                old_qual_undo_info = []
-                new_qual_undo_info = []
-                disassociated_qualifiers = []
-
-                if tup is not None:
-                    tx_numb_old, res_idx_old, qual_idx_old, quals_old, _ = tup[1]
-                    for old_qual in quals_old:
-                        # For the qualifiers previously associated with this restricted asset,
-                        # and are no longer associated
-                        if old_qual not in quals:
-                            disassociated_qualifiers.append(old_qual)
-                            # Add qual undo info
-                            old_qual_data = self.qr_associations.pop(old_qual, None)
-                            qual_tup = None
-                            if old_qual_data is None:
-                                qual_tup = self.db.get_associated_assets_from(old_qual)
-                                if qual_tup is not None:
-                                    # Add a dummy byte
-                                    old_qual_data = b'\x01' + self.db.tuple_to_raw_assocation_data(qual_tup)
-
-                            if old_qual_data is not None and old_qual_data[0] == 0:
-                                old_qual_data = None
-
-                            if old_qual_data is None:
-                                old_qual_undo_info.append(bytes([len(old_qual)]) + old_qual + b'\0')
-                            else:
-                                old_qual_undo_info.append(
-                                    bytes([len(old_qual)]) + old_qual + b'\x01' + old_qual_data[2:])
-                            # Add new current qual associations
-                            if qual_tup is None and old_qual_data is not None:
-                                qual_tup = self.db.raw_assocation_data_to_tuple(old_qual_data[1:])
-                            if qual_tup is None:
-                                raise Exception('Qualifier {} has no associated data but was associated with {}'.format(
-                                    old_qual, res))
-                            else:
-                                old_restricted_info = []
-                                for type, old_restricted, tx_numb_old_r, res_idx_old_r, qual_idx_old_r in qual_tup[1]:
-                                    if old_restricted != res:
-                                        old_restricted_info.append((b'\x01' if type else b'\0') +
-                                                                   bytes([len(old_restricted)]) + old_restricted +
-                                                                   res_idx_old_r + qual_idx_old_r + tx_numb_old_r)
-
-                                old_restricted_info.append(b'\0' + bytes([len(res)]) + res + res_idx + qual_idx + tx_numb)
-                                current_tag(old_qual, b'\x01\0' + bytes([len(old_restricted_info)]) +
-                                            b''.join(old_restricted_info))
-
-                # Update new qualifiers
-                for new_qualifier in quals:
-                    # Add qual undo info
-                    new_qual_data = self.qr_associations.pop(new_qualifier, None)
-                    qual_tup = None
-                    if new_qual_data is None:
-                        qual_tup = self.db.get_associated_assets_from(new_qualifier)
-                        if qual_tup is not None:
-                            # Add a dummy byte
-                            new_qual_data = b'\x01' + self.db.tuple_to_raw_assocation_data(qual_tup)
-                    if new_qual_data is not None and new_qual_data[0] == 0:
-                        new_qual_data = None
-                    if new_qual_data is None:
-                        new_qual_undo_info.append(bytes([len(new_qualifier)]) + new_qualifier + b'\0')
-                    else:
-                        new_qual_undo_info.append(bytes([len(new_qualifier)]) + new_qualifier + b'\x01' + new_qual_data[2:])
-                    # Add new current qual associations
-                    if qual_tup is None and new_qual_data is not None:
-                        qual_tup = self.db.raw_assocation_data_to_tuple(new_qual_data[1:])
-                    if qual_tup is None:
-                        # Dummy data to work with next part
-                        qual_tup = False, []
-                    old_restricted_info = []
-                    for type, old_restricted, tx_numb_old_r, res_idx_old_r, qual_idx_old_r in qual_tup[1]:
-                        if old_restricted != res:
-                            old_restricted_info.append((b'\x01' if type else b'\0') +
-                                                       bytes([len(old_restricted)]) + old_restricted +
-                                                       res_idx_old_r + qual_idx_old_r + tx_numb_old_r)
-                    old_restricted_info.append(b'\x01' + bytes([len(res)]) + res + res_idx + qual_idx + tx_numb)
-                    current_tag(new_qualifier, b'\x01\0' + bytes([len(old_restricted_info)]) +
-                                b''.join(old_restricted_info))
-
-                current_tag(res, b'\x01\x01' + res2qual_b +
-                            bytes([len(disassociated_qualifiers)]) +
-                            b''.join([bytes([len(qual)]) + qual for qual in disassociated_qualifiers]) +
-                            res_idx + qual_idx + tx_numb)
-
-                # Add to history
-                historical_tag(bytes([len(res)]) + res + res_idx + qual_idx + tx_numb, res2qual_b +
-                               bytes([len(disassociated_qualifiers)]) +
-                               b''.join([bytes([len(qual)]) + qual for qual in disassociated_qualifiers]))
-
-                # Add undo info to delete history
-                undo_append(bytes([len(res)]) + res + res2qual_b +
-                            bytes([len(disassociated_qualifiers)]) +
-                            b''.join([bytes([len(qual)]) + qual for qual in disassociated_qualifiers]) +
-                            res_idx + qual_idx + tx_numb)
-
-                # Add restricted undo info
-                if old_data is None:
-                    undo_append(b'\0')
+                old_res_info = []
+                cached_f = pop_current(res)
+                if cached_f:
+                    old_res_info += get_current_association_data(cached_f)
                 else:
-                    undo_append(b'\x01' + old_data[2:])
+                    writed_f = self.db.asset_db.get(b'r' + res)
+                    if writed_f:
+                        old_res_info += get_current_association_data(writed_f)
 
-                # Append qualifier undo info
-                undo_append(bytes([len(old_qual_undo_info) + len(new_qual_undo_info)]) + b''.join(old_qual_undo_info) +
-                            b''.join(new_qual_undo_info))
+                qual_removals = set(tup[0] for tup in old_res_info) - set(quals)
+
+                tag_historical(
+                    res,
+                    (quals, qual_removals, res_idx + qual_idx + tx_numb)
+                )
+
+                undo_append(bytes([len(res)]) + res + res_idx + qual_idx + tx_numb +
+                            bytes([len(quals)]) + b''.join([bytes([len(q)]) + q for q in quals]) +
+                            bytes([len(qual_removals)]) + b''.join([bytes([len(q)]) + q for q in qual_removals]))
+
+                new_checked = set()
+
+                def check_name(name: bytes) -> bool:
+                    nonlocal new_checked
+                    if name in quals:
+                        new_checked.add(name)
+                        return True
+                    else:
+                        return False
+
+                new_res_info = [
+                    ((tup[0], res_idx + qual_idx + tx_numb, True) if check_name(tup[0])
+                     else (tup[0], res_idx + qual_idx + tx_numb, False))
+                    for tup in old_res_info
+                ]
+
+                for qual in set(quals) - new_checked:
+                    new_res_info.append((
+                        qual,
+                        res_idx + qual_idx + tx_numb,
+                        True
+                    ))
+
+                new_res_info = [bytes([len(tup[0])]) +
+                                tup[0] + tup[1] + (b'\x01' if tup[2] else b'\0')
+                                for tup in new_res_info]
+
+                undo_append(bytes([len(old_res_info)]) + b''.join([bytes([len(tup[0])]) +
+                            tup[0] + tup[1] + (b'\x01' if tup[2] else b'\0')
+                            for tup in old_res_info]))
+
+                tag_current(b'r' + res, bytes([len(new_res_info)]) + b''.join(new_res_info))
+
+                qual_undos = []
+
+                for qual in quals:
+                    old_qual_info = []
+                    cached_q = pop_current(qual)
+                    if cached_q:
+                        old_qual_info += get_current_association_data(cached_q)
+                    else:
+                        writed_q = self.db.asset_db.get(b'c' + qual)
+                        if writed_q:
+                            old_qual_info += get_current_association_data(writed_q)
+
+                    has_res = False
+
+                    def check_name(name: bytes) -> bool:
+                        nonlocal has_res
+                        has_res = name == res
+                        return has_res
+
+                    new_qual_info = [
+                        ((tup[0], res_idx + qual_idx + tx_numb, True) if check_name(tup[0])
+                         else tup)
+                        for tup in old_qual_info
+                    ]
+
+                    if not has_res:
+                        new_qual_info.append((res, res_idx + qual_idx + tx_numb, True))
+
+                    new_qual_info = [bytes([len(tup[0])]) +
+                                    tup[0] + tup[1] + (b'\x01' if tup[2] else b'\0')
+                                    for tup in new_qual_info]
+
+                    qual_undos.append(bytes([len(qual)]) + qual +
+                                      bytes([len(old_qual_info)]) + b''.join([bytes([len(tup[0])]) +
+                                      tup[0] + tup[1] + (b'\x01' if tup[2] else b'\0')
+                                      for tup in old_qual_info]))
+
+                    tag_current(b'c' + qual, bytes([len(new_qual_info)]) + b''.join(new_qual_info))
+
+                for qual in qual_removals:
+                    old_qual_info = []
+                    cached_q = pop_current(qual)
+                    if cached_q:
+                        old_qual_info += get_current_association_data(cached_q)
+                    else:
+                        writed_q = self.db.asset_db.get(b'c' + qual)
+                        if writed_q:
+                            old_qual_info += get_current_association_data(writed_q)
+
+                    new_qual_info = [
+                        ((tup[0], res_idx + qual_idx + tx_numb, False) if tup[0] == res
+                         else tup)
+                        for tup in old_qual_info
+                    ]
+
+                    new_qual_info = [bytes([len(tup[0])]) +
+                                     tup[0] + tup[1] + (b'\x01' if tup[2] else b'\0')
+                                     for tup in new_qual_info]
+
+                    qual_undos.append(bytes([len(qual)]) + qual +
+                                      bytes([len(old_qual_info)]) + b''.join([bytes([len(tup[0])]) +
+                                                                              tup[0] + tup[1] + (
+                                                                                  b'\x01' if tup[2] else b'\0')
+                                                                              for tup in old_qual_info]))
+
+                    tag_current(b'c' + qual, bytes([len(new_qual_info)]) + b''.join(new_qual_info))
 
             append_hashXs(hashXs)
             update_touched(hashXs)
@@ -1113,8 +1176,8 @@ class BlockProcessor:
         # Assets aren't always in tx's... remove None types
         asset_undo_info = [i for i in asset_undo_info if i]
 
-        return undo_info, asset_undo_info, asset_meta_undo_info, t2a_undo_info, freezes_undo_info, r2q_undo_info, \
-               asset_broadcast_undo_info
+        return undo_info, asset_undo_info, asset_meta_undo_info, qualified_undo_info, freeze_undo_info, \
+               association_undo_info, asset_broadcast_undo_info
 
     async def _backup_block(self, raw_block):
         '''Backup the raw block and flush.
@@ -1173,106 +1236,15 @@ class BlockProcessor:
 
         data_parser = DataParser(self.db.read_asset_undo_tag_info(self.height))
         while not data_parser.is_finished():
-            # Decode
-            asset_name_len, asset_name = data_parser.read_var_bytes_tuple_bytes()
-            pkh_len, pkh = data_parser.read_var_bytes_tuple_bytes()
-            idx = data_parser.read_bytes(4)
-            tx_numb = data_parser.read_bytes(5)
-            # Construct keys to delete
-            self.tag_to_address_deletes.append(b'p' + pkh_len + pkh + idx + tx_numb)
-            self.tag_to_address_deletes.append(b'a' + asset_name_len + asset_name + idx + tx_numb)
-            if data_parser.read_boolean():
-                flag = data_parser.read_byte()
-                old_idx = data_parser.read_bytes(4)
-                old_tx_numb = data_parser.read_bytes(5)
-                # Roll back latest value
-                self.is_qualified.__setitem__(
-                    asset_name_len + asset_name + pkh_len + pkh,
-                    b'\x01' + flag + old_idx + old_tx_numb)
-            else:
-                # No previous latest information, mark for deletion
-                self.is_qualified.__setitem__(
-                    asset_name_len + asset_name + pkh_len + pkh,
-                    b'\0')
+            pass
 
         data_parser = DataParser(self.db.read_asset_undo_freeze_info(self.height))
         while not data_parser.is_finished():
-            # Decode
-            asset_name_len, asset_name = data_parser.read_var_bytes_tuple_bytes()
-            idx = data_parser.read_bytes(4)
-            tx_numb = data_parser.read_bytes(5)
-            # Parse tags for deletion
-            self.global_freezes_deletes.append(b'f' + asset_name_len + asset_name + idx + tx_numb)
-            # Parse rollbacks
-            if data_parser.read_boolean():
-                flag = data_parser.read_byte()
-                old_idx = data_parser.read_bytes(4)
-                old_tx_numb = data_parser.read_bytes(5)
-                self.is_frozen.__setitem__(asset_name,
-                                           b'\x01' + flag + old_idx + old_tx_numb)
-            else:
-                # No previous latest information, mark for deletion
-                self.is_frozen.__setitem__(asset_name,
-                                           b'\0')
+            pass
 
         data_parser = DataParser(self.db.read_asset_undo_res2qual_key(self.height))
         while not data_parser.is_finished():
-
-            restricted_len, restricted = data_parser.read_var_bytes_tuple_bytes()
-            a_quals = []
-            d_quals = []
-            for _ in range(data_parser.read_int()):
-                a_quals.append(data_parser.read_var_bytes_tuple_bytes())
-            for _ in range(data_parser.read_int()):
-                d_quals.append(data_parser.read_var_bytes_tuple_bytes())
-            res_idx = data_parser.read_bytes(4)
-            qual_idx = data_parser.read_bytes(4)
-            tx_numb = data_parser.read_bytes(5)
-
-            del_hist_prefix = b'q'
-            self.restricted_to_qualifier_deletes.append(
-                del_hist_prefix + restricted_len + restricted + res_idx + qual_idx + tx_numb
-            )
-            for qual_len, qual in itertools.chain(a_quals, d_quals):
-                self.restricted_to_qualifier_deletes.append(
-                    del_hist_prefix + qual_len + qual + res_idx + qual_idx + tx_numb
-                )
-
-            # Undo current restricted data
-            if data_parser.read_boolean():
-                old_a_quals = []
-                old_d_quals = []
-                for _ in range(data_parser.read_int()):
-                    old_a_quals.append(data_parser.read_var_bytes_tuple_bytes())
-                for _ in range(data_parser.read_int()):
-                    old_d_quals.append(data_parser.read_var_bytes_tuple_bytes())
-                old_data = data_parser.read_bytes(4 + 4 + 5)
-                self.qr_associations.__setitem__(
-                    restricted,
-                    b'\x01\x01' +
-                    bytes([len(old_a_quals)]) + b''.join([le + b for le, b in old_a_quals]) +
-                    bytes([len(old_d_quals)]) + b''.join([le + b for le, b in old_d_quals]) +
-                    old_data
-                )
-            else:
-                self.qr_associations.__setitem__(restricted, b'\0')
-
-            # Undo current qualifier data
-            for _ in range(data_parser.read_int()):
-                qual_name = data_parser.read_var_bytes()
-                if data_parser.read_boolean():
-                    res_data = []
-                    for _ in range(data_parser.read_int()):
-                        b = data_parser.read_byte()
-                        res_len, res_name = data_parser.read_var_bytes_tuple_bytes()
-                        old_res_data = data_parser.read_bytes(4 + 4 + 5)
-                        res_data.append(b + res_len + res_name + old_res_data)
-                    self.qr_associations.__setitem__(
-                        qual_name,
-                        b'\x01\0' + bytes([len(res_data)]) + b''.join(res_data)
-                    )
-                else:
-                    self.qr_associations.__setitem__(qual_name, b'\0')
+            pass
 
         n = len(undo_info)
         asset_n = len(asset_undo_info)

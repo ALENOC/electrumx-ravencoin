@@ -1509,13 +1509,30 @@ class ElectrumX(SessionBase):
         self.bump_cost(1.0)
         return await self.db.is_qualified(asset.encode('ascii'), bytes.fromhex(h160))
 
-    async def get_associations(self, asset: str, history: bool):
+    async def get_restricted_associations(self, asset: str, history: bool):
         if len(asset) > 32:
             raise RPCError(
                 BAD_REQUEST, f'asset name greater than 32 characters'
             ) from None
 
-        ret = await self.db.get_associations_from_asset(asset.encode('ascii'), history)
+        ret = await self.db.get_associations_for_restricted(asset.encode('ascii'), history)
+
+        if not ret:
+            self.bump_cost(1.0)
+            return ret
+
+        self.bump_cost(1.0 + len(ret['current']) / 50)
+        if history:
+            self.bump_cost(1.0 + len(ret['history']) / 50)
+        return ret
+
+    async def get_qualifier_associations(self, asset: str, history: bool):
+        if len(asset) > 32:
+            raise RPCError(
+                BAD_REQUEST, f'asset name greater than 32 characters'
+            ) from None
+
+        ret = await self.db.get_associations_for_qualifier(asset.encode('ascii'), history)
 
         if not ret:
             self.bump_cost(1.0)
@@ -1608,7 +1625,8 @@ class ElectrumX(SessionBase):
 
         if ptuple >= (1, 9):
             handlers['blockchain.asset.is_qualified'] = self.is_qualified
-            handlers['blockchain.asset.get_associations'] = self.get_associations
+            handlers['blockchain.asset.get_restricted_associations'] = self.get_restricted_associations
+            handlers['blockchain.asset.get_qualifier_associations'] = self.get_qualifierassociations
             handlers['blockchain.asset.get_tags_for_h160'] = self.get_tags_for_h160
             handlers['blockchain.asset.get_h160_for_asset'] = self.get_h160_for_asset
             handlers['blockchain.asset.frozen_status'] = self.frozen_status
