@@ -1493,6 +1493,7 @@ class ElectrumX(SessionBase):
         return await self.db.lookup_asset_meta(name.encode('ascii'))
 
     async def get_messages(self, name):
+        return 'test'
         if len(name) > 32:
             raise RPCError(
                 BAD_REQUEST, f'asset name greater than 32 characters'
@@ -1570,20 +1571,17 @@ class ElectrumX(SessionBase):
         return ret
 
     async def frozen_status(self, asset: str, history: bool):
-        print('called frozen_status')
         if len(asset) > 32:
             raise RPCError(
                 BAD_REQUEST, f'asset name greater than 32 characters'
             ) from None
         ret = await self.db.get_frozen_status_of_restricted(asset.encode('ascii'), history)
-        return ret
         if not ret:
             self.bump_cost(1.0)
             return ret
         cost = 1.0 + len(ret['current']) / 50
         if history:
             cost += len(ret['history']) / 50
-        print(cost)
         self.bump_cost(cost)
         return ret
 
