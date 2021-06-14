@@ -1036,7 +1036,7 @@ class BlockProcessor:
                     return ret
 
                 old_res_info = []
-                cached_f = pop_current(res)
+                cached_f = pop_current(b'r' + res)
                 if cached_f:
                     old_res_info += get_current_association_data(cached_f)
                 else:
@@ -1092,7 +1092,7 @@ class BlockProcessor:
 
                 for qual in quals:
                     old_qual_info = []
-                    cached_q = pop_current(qual)
+                    cached_q = pop_current(b'c' + qual)
                     if cached_q:
                         old_qual_info += get_current_association_data(cached_q)
                     else:
@@ -1129,7 +1129,7 @@ class BlockProcessor:
 
                 for qual in qual_removals:
                     old_qual_info = []
-                    cached_q = pop_current(qual)
+                    cached_q = pop_current(b'c' + qual)
                     if cached_q:
                         old_qual_info += get_current_association_data(cached_q)
                     else:
