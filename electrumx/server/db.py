@@ -1177,9 +1177,9 @@ class DB(object):
             parser = util.DataParser(data)
             for _ in range(parser.read_int()):
                 ass = parser.read_var_bytes_as_ascii()
-                res_idx = unpack_le_uint32(parser.read_bytes(4))
-                qual_idx = unpack_le_uint32(parser.read_bytes(4))
-                tx_numb = parser.read_bytes(4)
+                res_idx, = unpack_le_uint32(parser.read_bytes(4))
+                qual_idx, = unpack_le_uint32(parser.read_bytes(4))
+                tx_numb = parser.read_bytes(5)
                 flag = parser.read_boolean()
                 tx_num, = unpack_le_uint64(tx_numb + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
@@ -1244,9 +1244,9 @@ class DB(object):
             parser = util.DataParser(data)
             for _ in range(parser.read_int()):
                 ass = parser.read_var_bytes_as_ascii()
-                res_idx = unpack_le_uint32(parser.read_bytes(4))
-                qual_idx = unpack_le_uint32(parser.read_bytes(4))
-                tx_numb = parser.read_bytes(4)
+                res_idx, = unpack_le_uint32(parser.read_bytes(4))
+                qual_idx, = unpack_le_uint32(parser.read_bytes(4))
+                tx_numb = parser.read_bytes(5)
                 flag = parser.read_boolean()
                 tx_num, = unpack_le_uint64(tx_numb + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
@@ -1315,7 +1315,7 @@ class DB(object):
             parser = util.DataParser(data)
             for _ in range(parser.read_int()):
                 h160 = parser.read_var_bytes()
-                tx_pos = unpack_le_uint32(parser.read_bytes(4))
+                tx_pos, = unpack_le_uint32(parser.read_bytes(4))
                 tx_numb = parser.read_bytes(5)
                 flag = parser.read_boolean()
                 tx_num, = unpack_le_uint64(tx_numb + bytes(3))
@@ -1340,7 +1340,7 @@ class DB(object):
             parser = util.DataParser(data)
             for _ in range(parser.read_int()):
                 h160 = parser.read_var_bytes()
-                tx_pos = unpack_le_uint32(parser.read_bytes(4))
+                tx_pos, = unpack_le_uint32(parser.read_bytes(4))
                 tx_numb = parser.read_bytes(5)
                 flag = parser.read_boolean()
                 tx_num, = unpack_le_uint64(tx_numb + bytes(3))
@@ -1399,7 +1399,7 @@ class DB(object):
             parser = util.DataParser(data)
             for _ in range(parser.read_int()):
                 asset = parser.read_var_bytes_as_ascii()
-                tx_pos = unpack_le_uint32(parser.read_bytes(4))
+                tx_pos, = unpack_le_uint32(parser.read_bytes(4))
                 tx_numb = parser.read_bytes(5)
                 flag = parser.read_boolean()
                 tx_num, = unpack_le_uint64(tx_numb + bytes(3))
@@ -1455,7 +1455,7 @@ class DB(object):
             if not data:
                 return {}
             parser = util.DataParser(data)
-            tx_pos = unpack_le_uint32(parser.read_bytes(4))
+            tx_pos, = unpack_le_uint32(parser.read_bytes(4))
             tx_numb = parser.read_bytes(5)
             flag = parser.read_boolean()
             tx_num, = unpack_le_uint64(tx_numb + bytes(3))

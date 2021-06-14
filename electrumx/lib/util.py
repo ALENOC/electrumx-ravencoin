@@ -381,12 +381,38 @@ def base_encode(v: bytes, base: int) -> str:
 
 
 class DataParser:
+
+    class ParserException(Exception):
+        def __init__(self, *args):
+            if args:
+                parser = args[0]  # type: DataParser
+                text = args[1]  # type: str
+                self.message = text + '\n'
+                parse_str = parser.data.hex()
+                ptr = parser.cursor
+                self.message += parse_str[:ptr*2] + '|' + \
+                                parse_str[ptr*2:(ptr+1)*2] + '|' + \
+                                parse_str[(ptr+1)*2:]
+            else:
+                self.message = None
+
+        def __str__(self):
+            if self.message:
+                return 'ParserException, {}'.format(self.message)
+            else:
+                return 'ParserException raised'
+
     def __init__(self, data: bytes):
         self.data = data
         self.cursor = 0
         self.length = len(data)
 
+    def _assert_space(self, length: int):
+        if self.cursor + length > self.length:
+            raise self.ParserException(self, 'Out of bounds: trying to read {} byte(s)'.format(length))
+
     def read_byte(self):
+        self._assert_space(1)
         data = self.data[self.cursor]
         self.cursor += 1
         return bytes([data])
@@ -396,11 +422,12 @@ class DataParser:
 
     def read_boolean(self):
         data = self.read_byte()
-        assert data in (b'\0', b'\x01')
+        if data not in (b'\0', b'\x01'):
+            raise self.ParserException(self, 'Not a boolean')
         return False if data[0] == 0 else True
 
     def read_bytes(self, length: int):
-        assert self.cursor + length <= self.length
+        self._assert_space(length)
         data = self.data[self.cursor:self.cursor + length]
         self.cursor += length
         return data
