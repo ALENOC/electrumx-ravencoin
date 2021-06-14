@@ -748,6 +748,8 @@ class BlockProcessor:
                                 print(ops)
                                 qual_cached = pop_qualified_current(b'Q' + asset_name)
                                 if qual_cached:
+                                    print('pre cached')
+                                    print(qual_cached)
                                     old_qual_hist = parse_current_qualifier_history(qual_cached)
                                     print('cached')
                                     print(old_qual_hist)
