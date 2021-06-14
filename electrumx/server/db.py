@@ -1322,7 +1322,7 @@ class DB(object):
                 tx_hash, height = self.fs_tx_hash(tx_num)
                 if hex == h160:
                     return {
-                        'qualified': flag,
+                        'flag': flag,
                         'height': height,
                         'txid': hash_to_hex_str(tx_hash),
                         'tx_pos': tx_pos,
@@ -1346,7 +1346,7 @@ class DB(object):
                 tx_num, = unpack_le_uint64(tx_numb + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
                 ret[h160.hex()] = {
-                    'qualified': flag,
+                    'flag': flag,
                     'height': height,
                     'txid': hash_to_hex_str(tx_hash),
                     'tx_pos': tx_pos,
@@ -1367,14 +1367,14 @@ class DB(object):
                     ret[height][hash_to_hex_str(tx_hash)] = {
                         'pubkey': h160.hex(),
                         'tx_pos': tx_pos,
-                        'qualified': flag,
+                        'flag': flag,
                     }
                 else:
                     ret[height] = {
                         hash_to_hex_str(tx_hash): {
                             'pubkey': h160.hex(),
                             'tx_pos': tx_pos,
-                            'qualified': flag,
+                            'flag': flag,
                         }
                     }
             return ret
@@ -1405,7 +1405,7 @@ class DB(object):
                 tx_num, = unpack_le_uint64(tx_numb + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
                 ret[asset] = {
-                    'qualified': flag,
+                    'flag': flag,
                     'height': height,
                     'txid': hash_to_hex_str(tx_hash),
                     'tx_pos': tx_pos,
@@ -1426,14 +1426,14 @@ class DB(object):
                     ret[height][hash_to_hex_str(tx_hash)] = {
                         'tag': asset,
                         'tx_pos': tx_pos,
-                        'qualified': flag,
+                        'flag': flag,
                     }
                 else:
                     ret[height] = {
                         hash_to_hex_str(tx_hash): {
                             'tag': asset,
                             'tx_pos': tx_pos,
-                            'qualified': flag,
+                            'flag': flag,
                         }
                     }
             return ret

@@ -761,6 +761,7 @@ class BlockProcessor:
                                         old_h160_hist = parse_current_160_history(h160_writed)
 
                                 qualified_undo_info.append(
+                                    idx + tx_numb +
                                     name_byte_len + asset_name + bytes([len(old_qual_hist)]) + b''.join(old_qual_hist) +
                                     bytes([len(h160)]) + h160 + bytes([len(old_h160_hist)]) + b''.join(old_h160_hist)
                                 )
@@ -778,6 +779,7 @@ class BlockProcessor:
                                     bytes([len(old_h160_hist)]) + b''.join(old_h160_hist)
                                 )
 
+                                # We can remove the following after we ensure everything works
                                 def try_read_data(data: bytes):
                                     parser = DataParser(data)
                                     for _ in range(parser.read_int()):
@@ -828,7 +830,7 @@ class BlockProcessor:
                                         old_frozen_info = writed_f
 
                                 freeze_undo_info.append(
-                                    asset_name_len + asset_name +
+                                    asset_name_len + asset_name + idx + tx_numb +
                                     (b'\x01' if len(old_frozen_info) > 0 else b'\0') + old_frozen_info
                                 )
 
@@ -836,6 +838,15 @@ class BlockProcessor:
                                     asset_name,
                                     idx + tx_numb + flag
                                 )
+
+                                # We can remove the following after we ensure everything works
+                                def try_read_data(data: bytes):
+                                    parser = DataParser(data)
+                                    parser.read_bytes(4)
+                                    parser.read_bytes(5)
+                                    parser.read_boolean()
+
+                                try_read_data(self.is_frozen[asset_name])
 
                             else:
                                 raise Exception('Bad null asset script ops')
@@ -1167,6 +1178,21 @@ class BlockProcessor:
                                                                               for tup in old_qual_info]))
 
                     tag_current(b'c' + qual, bytes([len(new_qual_info)]) + b''.join(new_qual_info))
+
+                    # We can remove the following after we ensure everything works
+                    def try_read(data: bytes):
+                        parser = DataParser(data)
+                        for _ in range(parser.read_int()):
+                            parser.read_var_bytes_as_ascii()
+                            parser.read_bytes(4)
+                            parser.read_bytes(4)
+                            parser.read_bytes(5)
+                            parser.read_boolean()
+
+                    try_read(self.qr_associations[b'r' + res])
+
+                    for qual in itertools.chain(quals, qual_removals):
+                        try_read(self.qr_associations[b'c' + qual])
 
             append_hashXs(hashXs)
             update_touched(hashXs)
