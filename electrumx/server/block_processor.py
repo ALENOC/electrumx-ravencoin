@@ -851,8 +851,6 @@ class BlockProcessor:
                             else:
                                 raise Exception('Bad null asset script ops')
                         except Exception as e:
-                            if isinstance(e, (DataParser.ParserException, KeyError)):
-                                raise e
                             if self.env.write_bad_vouts_to_file:
                                 b = bytearray(tx_hash)
                                 b.reverse()
@@ -864,6 +862,8 @@ class BlockProcessor:
                                     f.write('OpCodes : {}\n'.format(str(ops)))
                                     f.write('Exception : {}\n'.format(repr(e)))
                                     f.write('Traceback : {}\n'.format(traceback.format_exc()))
+                            if isinstance(e, (DataParser.ParserException, KeyError)):
+                                raise e
                         continue
                     else:
                         # There is no OP_RVN_ASSET. Hash as-is.
