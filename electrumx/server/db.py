@@ -1459,7 +1459,9 @@ class DB(object):
     # For external use
     async def get_frozen_status_of_restricted(self, asset: bytes, get_history: bool = False):
         def get_current_info():
+            print('current')
             data = self.asset_db.get(b'l' + asset)
+            print('post data')
             if not data:
                 return {}
             parser = util.DataParser(data)
@@ -1512,7 +1514,7 @@ class DB(object):
         def read_messages():
             prefix = b'b' + asset_name
             ret_val = {}
-            for db_key, db_value in self.utxo_db.iterator(prefix=prefix):
+            for db_key, db_value in self.asset_db.iterator(prefix=prefix):
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
                 tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)

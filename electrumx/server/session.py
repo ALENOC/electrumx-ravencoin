@@ -1568,11 +1568,13 @@ class ElectrumX(SessionBase):
         return ret
 
     async def frozen_status(self, asset: str, history: bool):
+        print('called frozen_status')
         if len(asset) > 32:
             raise RPCError(
                 BAD_REQUEST, f'asset name greater than 32 characters'
             ) from None
         ret = await self.db.get_frozen_status_of_restricted(asset.encode('ascii'), history)
+        print('post get')
         if not ret:
             self.bump_cost(1.0)
             return ret
