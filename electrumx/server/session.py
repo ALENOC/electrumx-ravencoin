@@ -1520,10 +1520,10 @@ class ElectrumX(SessionBase):
         if not ret:
             self.bump_cost(1.0)
             return ret
-
-        self.bump_cost(1.0 + len(ret['current']) / 50)
+        cost = 1.0 + len(ret['current']) / 50
         if history:
-            self.bump_cost(1.0 + len(ret['history']) / 50)
+            cost += len(ret['history']) / 50
+        self.bump_cost(cost)
         return ret
 
     async def get_qualifier_associations(self, asset: str, history: bool):
