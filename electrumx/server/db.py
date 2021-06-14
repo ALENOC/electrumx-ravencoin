@@ -1200,6 +1200,7 @@ class DB(object):
                     'res_tx_pos': res_idx,
                     'qual_tx_pos': qual_idx,
                 }
+            return ret
 
         def get_asset_history():
             ret = {}
@@ -1266,6 +1267,7 @@ class DB(object):
                     'res_tx_pos': res_idx,
                     'qual_tx_pos': qual_idx,
                 }
+            return ret
 
         def get_asset_history():
             ret = {}
