@@ -1493,13 +1493,13 @@ class ElectrumX(SessionBase):
         return await self.db.lookup_asset_meta(name.encode('ascii'))
 
     async def get_messages(self, name):
-        return 'test'
         if len(name) > 32:
             raise RPCError(
                 BAD_REQUEST, f'asset name greater than 32 characters'
             ) from None
         ret = await self.db.lookup_messages(name.encode('ascii'))
         self.bump_cost(1.0 + len(ret) / 50)
+        print(ret)
         return ret
 
     async def is_qualified(self, h160: str, asset: str):
