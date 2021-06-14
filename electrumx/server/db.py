@@ -457,6 +457,10 @@ class DB(object):
         for key, value in flush_data.asset_tag2pub_current.items():
             # b't' h160 -> asset
             # b'Q' asset -> h160
+            print('Tagging')
+            print(key)
+            print('with')
+            print(value)
             batch_put(key, value)
         flush_data.asset_tag2pub_current.clear()
 
@@ -509,6 +513,8 @@ class DB(object):
         flush_data.asset_current_associations.clear()
 
         for key, value in flush_data.asset_broadcasts.items():
+            print('Message')
+            print(key)
             batch_put(b'b' + key, value)
         flush_data.asset_broadcasts.clear()
 
@@ -1307,6 +1313,30 @@ class DB(object):
             return ret
 
         return await run_in_thread(calc_ret)
+
+    # For external use
+    async def is_qualified(self, asset: bytes, hex: bytes):
+        def run():
+            data = self.asset_db.get(b'Q' + asset)
+            if data is None:
+                return {}
+            parser = util.DataParser(data)
+            for _ in range(parser.read_int()):
+                h160 = parser.read_var_bytes()
+                tx_pos = parser.read_bytes(4)
+                tx_numb = parser.read_bytes(5)
+                flag = parser.read_boolean()
+                tx_num, = unpack_le_uint64(tx_numb + bytes(3))
+                tx_hash, height = self.fs_tx_hash(tx_num)
+                if hex == h160:
+                    return {
+                        'qualified': flag,
+                        'height': height,
+                        'txid': hash_to_hex_str(tx_hash),
+                        'tx_pos': tx_pos,
+                    }
+            return {}
+        return await run_in_thread(run)
 
     # For external use
     async def get_h160s_associated_with_asset(self, asset: bytes, history: bool = False):
