@@ -790,7 +790,7 @@ class BlockProcessor:
                                         elif asset == 'true':
                                             # No associated qualifiers
                                             # Dummy data
-                                            asset = b''
+                                            asset = ''
                                         else:
                                             raise Exception('Bad qualifier')
 
@@ -821,7 +821,7 @@ class BlockProcessor:
                                     (b'\x01' if len(old_frozen_info > 0) else b'\0') + old_frozen_info
                                 )
 
-                                put_freeze_history(
+                                put_freeze_current(
                                     asset_name,
                                     idx + tx_numb + flag
                                 )
