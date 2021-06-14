@@ -777,6 +777,7 @@ class BlockProcessor:
 
                                 print('putting')
                                 print(old_qual_hist)
+                                print(bytes([len(old_qual_hist)]) + b''.join(old_qual_hist))
 
                                 put_qualified_current(
                                     b'Q' + asset_name,
