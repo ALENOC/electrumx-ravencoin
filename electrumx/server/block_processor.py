@@ -745,7 +745,7 @@ class BlockProcessor:
                                 old_h160_hist = []
 
                                 print(asset_name)
-                                print(asset_portion)
+                                print(ops)
                                 qual_cached = pop_qualified_current(b'Q' + asset_name)
                                 if qual_cached:
                                     old_qual_hist = parse_current_qualifier_history(qual_cached)
