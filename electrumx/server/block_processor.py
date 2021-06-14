@@ -789,7 +789,7 @@ class BlockProcessor:
                                         parser.read_boolean()
 
                                 try_read_data(self.is_qualified[b'Q' + asset_name])
-                                try_read_data(self.is_qualified[b't' + asset_name])
+                                try_read_data(self.is_qualified[b't' + h160])
 
                             elif match_script_against_template(ops, ASSET_NULL_VERIFIER_TEMPLATE) > -1:
                                 qualifiers_b = ops[2][2]
@@ -851,8 +851,8 @@ class BlockProcessor:
                             else:
                                 raise Exception('Bad null asset script ops')
                         except Exception as e:
-                            if e is DataParser.ParserException:
-                                raise
+                            if isinstance(e, (DataParser.ParserException, KeyError)):
+                                raise e
                             if self.env.write_bad_vouts_to_file:
                                 b = bytearray(tx_hash)
                                 b.reverse()
