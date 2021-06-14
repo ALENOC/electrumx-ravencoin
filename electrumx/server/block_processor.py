@@ -746,19 +746,19 @@ class BlockProcessor:
 
                                 qual_cached = pop_qualified_current(b'Q' + asset_name)
                                 if qual_cached:
-                                    old_qual_hist += parse_current_qualifier_history(qual_cached)
+                                    old_qual_hist = parse_current_qualifier_history(qual_cached)
                                 else:
                                     qual_writed = self.db.asset_db.get(b'Q' + asset_name)
                                     if qual_writed:
-                                        old_qual_hist += parse_current_qualifier_history(qual_writed)
+                                        old_qual_hist = parse_current_qualifier_history(qual_writed)
 
                                 h160_cached = pop_qualified_current(b't' + h160)
                                 if h160_cached:
-                                    old_h160_hist += parse_current_160_history(h160_cached)
+                                    old_h160_hist = parse_current_160_history(h160_cached)
                                 else:
                                     h160_writed = self.db.asset_db.get(b't' + h160)
                                     if h160_writed:
-                                        old_h160_hist += parse_current_160_history(h160_writed)
+                                        old_h160_hist = parse_current_160_history(h160_writed)
 
                                 qualified_undo_info.append(
                                     name_byte_len + asset_name + bytes([len(old_qual_hist)]) + b''.join(old_qual_hist) +
@@ -777,6 +777,17 @@ class BlockProcessor:
                                     b't' + h160,
                                     bytes([len(old_h160_hist)]) + b''.join(old_h160_hist)
                                 )
+
+                                def try_read_data(data: bytes):
+                                    parser = DataParser(data)
+                                    for _ in range(parser.read_int()):
+                                        parser.read_var_bytes()
+                                        parser.read_bytes(4)
+                                        parser.read_bytes(5)
+                                        parser.read_boolean()
+
+                                try_read_data(self.is_qualified[b'Q' + asset_name])
+                                try_read_data(self.is_qualified[b't' + asset_name])
 
                             elif match_script_against_template(ops, ASSET_NULL_VERIFIER_TEMPLATE) > -1:
                                 qualifiers_b = ops[2][2]
@@ -829,6 +840,8 @@ class BlockProcessor:
                             else:
                                 raise Exception('Bad null asset script ops')
                         except Exception as e:
+                            if e is DataParser.ParserException:
+                                raise
                             if self.env.write_bad_vouts_to_file:
                                 b = bytearray(tx_hash)
                                 b.reverse()

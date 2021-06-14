@@ -486,12 +486,12 @@ class DB(object):
             for qual in qual_adds:
                 batch_put(
                     b'2' + bytes([len(qual)]) + qual + bytes_append,
-                    b'\x01' + restricted_asset
+                    b'\x01' + bytes([len(restricted_asset)]) + restricted_asset
                 )
             for qual in qual_removes:
                 batch_put(
                     b'2' + bytes([len(qual)]) + qual + bytes_append,
-                    b'\0' + restricted_asset
+                    b'\0' + bytes([len(restricted_asset)]) + restricted_asset
                 )
         flush_data.asset_restricted2qual.clear()
 
