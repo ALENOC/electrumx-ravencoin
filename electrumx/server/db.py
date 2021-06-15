@@ -476,37 +476,28 @@ class DB(object):
         for key, value in flush_data.asset_restricted2qual.items():
             #b'1' res
             #b'2' qual
-            restricted_asset = key
-            qual_adds, qual_removes, bytes_append = value
+            parser = util.DataParser(key)
+            restricted_len, restricted_asset = parser.read_var_bytes_tuple_bytes()
+            bytes_append = parser.read_bytes(4 + 4 + 5)
+            qual_adds, qual_removes = value
             batch_put(
-                b'1' + bytes([len(restricted_asset)]) + restricted_asset + bytes_append,
+                b'1' + restricted_len + restricted_asset + bytes_append,
                 bytes([len(qual_adds)]) + b''.join([bytes([len(qual)]) + qual for qual in qual_adds]) +
                 bytes([len(qual_removes)]) + b''.join([bytes([len(qual)]) + qual for qual in qual_removes])
             )
-            print('Writing')
-            print(restricted_asset)
-            print('Value')
-            print(bytes([len(qual_adds)]) + b''.join([bytes([len(qual)]) + qual for qual in qual_adds]) +
-                bytes([len(qual_removes)]) + b''.join([bytes([len(qual)]) + qual for qual in qual_removes]))
 
             for qual in qual_adds:
                 batch_put(
                     b'2' + bytes([len(qual)]) + qual + bytes_append,
-                    b'\x01' + bytes([len(restricted_asset)]) + restricted_asset
+                    b'\x01' + restricted_len + restricted_asset
                 )
-                print('Writing')
-                print(qual)
-                print('Value')
-                print(b'\x01' + bytes([len(restricted_asset)]) + restricted_asset)
+
             for qual in qual_removes:
                 batch_put(
                     b'2' + bytes([len(qual)]) + qual + bytes_append,
-                    b'\0' + bytes([len(restricted_asset)]) + restricted_asset
+                    b'\0' + restricted_len + restricted_asset
                 )
-                print('Writing')
-                print(qual)
-                print('Value')
-                print(b'\0' + bytes([len(restricted_asset)]) + restricted_asset)
+
         flush_data.asset_restricted2qual.clear()
 
         self.flush_restricted2qual_undo_info(batch_put, flush_data.asset_restricted2qual_undo)

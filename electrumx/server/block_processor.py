@@ -1072,16 +1072,9 @@ class BlockProcessor:
 
                 qual_removals = set(tup[0] for tup in old_res_info) - set(quals)
 
-                print('Restricted')
-                print(res)
-                print('Adds')
-                print(quals)
-                print('Removals')
-                print(qual_removals)
-
                 tag_historical(
-                    res,
-                    (quals, qual_removals, res_idx + qual_idx + tx_numb)
+                    bytes([len(res)]) + res + res_idx + qual_idx + tx_numb,
+                    (quals, qual_removals)
                 )
 
                 undo_append(bytes([len(res)]) + res + res_idx + qual_idx + tx_numb +
