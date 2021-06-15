@@ -1507,6 +1507,15 @@ class DB(object):
 
     async def lookup_messages(self, asset_name: bytes):
         def read_messages():
+
+            prefix = b'b'
+            assets = set()
+            for key, _ in self.asset_db.iterator(prefix):
+                parser = util.DataParser(key)
+                assets.add(parser.read_var_bytes_as_ascii())
+
+            print(assets)
+
             prefix = b'b' + bytes([len(asset_name)]) + asset_name
             ret_val = {}
             for db_key, db_value in self.asset_db.iterator(prefix=prefix):

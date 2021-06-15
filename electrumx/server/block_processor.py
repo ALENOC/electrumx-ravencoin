@@ -969,19 +969,28 @@ class BlockProcessor:
                                       asset_name_len + asset_name)
 
                             if not asset_deserializer.is_finished():
+
+                                asset_name_m = asset_name
+                                asset_name_len_m = asset_name_len
+
+                                if asset_name_m[-1] == b'!':
+                                    # This is an ownership token that was passed in;
+                                    # Truncate to associate it with normal assets
+                                    asset_name_m = asset_name_m[:-1]
+                                    asset_name_len_m = bytes([asset_name_m[0] - 1])
                                 if second_loop:
                                     if asset_deserializer.cursor + 34 <= asset_deserializer.length:
                                         data = asset_deserializer.read_bytes(34)
                                         # This is a message broadcast
-                                        put_asset_broadcast(asset_name_len + asset_name + to_le_uint32(idx) + tx_numb, data)
+                                        put_asset_broadcast(asset_name_len_m + asset_name_m + to_le_uint32(idx) + tx_numb, data)
                                         asset_broadcast_undo_info.append(
-                                            asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
+                                            asset_name_len_m + asset_name_m + to_le_uint32(idx) + tx_numb)
                                 else:
                                     data = asset_deserializer.read_bytes(34)
                                     # This is a message broadcast
-                                    put_asset_broadcast(asset_name_len + asset_name + to_le_uint32(idx) + tx_numb, data)
+                                    put_asset_broadcast(asset_name_len_m + asset_name_m + to_le_uint32(idx) + tx_numb, data)
                                     asset_broadcast_undo_info.append(
-                                        asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
+                                        asset_name_len_m + asset_name_m + to_le_uint32(idx) + tx_numb)
                         else:
                             raise Exception('Unknown asset type: {}'.format(script_type))
 
