@@ -504,6 +504,7 @@ class BlockProcessor:
         # requesting size from Python (see deep_getsizeof).
 
         # Testing lengths
+        print(self.undo_infos)
         if len(self.undo_infos) > 0:
             self.undo_info_total += deep_getsizeof(self.undo_infos)
             self.undo_info_count += len(self.undo_infos)
