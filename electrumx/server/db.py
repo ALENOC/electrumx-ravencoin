@@ -1510,7 +1510,7 @@ class DB(object):
 
             prefix = b'b'
             assets = set()
-            for key, _ in self.asset_db.iterator(prefix):
+            for key, _ in self.asset_db.iterator(prefix=prefix):
                 parser = util.DataParser(key)
                 assets.add(parser.read_var_bytes_as_ascii())
 
