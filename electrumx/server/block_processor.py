@@ -26,7 +26,7 @@ from electrumx.lib.hash import hash_to_hex_str, HASHX_LEN
 from electrumx.lib.script import is_unspendable_legacy, \
     is_unspendable_genesis, OpCodes, Script, ScriptError
 from electrumx.lib.util import (
-    class_logger, pack_le_uint32, pack_le_uint64, unpack_le_uint64, base_encode, DataParser
+    class_logger, pack_le_uint32, pack_le_uint64, unpack_le_uint64, base_encode, DataParser, deep_getsizeof
 )
 from electrumx.server.daemon import DaemonError
 from electrumx.server.db import FlushData
@@ -284,7 +284,6 @@ class BlockProcessor:
 
         # For qualifier assets
 
-        # tx_hash + idx (uint32le): restricted + tx_num (uint64le[:5]) + num quals + quals
         self.restricted_to_qualifier = {}
 
         # Most up-to-date qualifier-restricted associations
@@ -293,14 +292,12 @@ class BlockProcessor:
         self.restricted_to_qualifier_deletes = []
         self.restricted_to_qualifier_undos = []
 
-        # tx_hash + idx (uint32le): restricted + tx_num (uint64le[:5]) + flag
         self.global_freezes = {}
         # asset : T/F
         self.is_frozen = {}
         self.global_freezes_deletes = []
         self.global_freezes_undos = []
 
-        # tx_hash + idx (uint32le): asset + tx_num (uint64le[:5]) + pubkey + flag
         self.tag_to_address = {}
         # asset + pubkey : T/F
         self.is_qualified = {}
@@ -316,6 +313,58 @@ class BlockProcessor:
         self.asset_broadcast = {}
         self.asset_broadcast_undos = []
         self.asset_broadcast_dels = []
+
+        # Testing lengths
+        self.undo_info_total = 0
+        self.undo_info_count = 1
+
+        self.asset_cache_total = 0
+        self.asset_cache_count = 1
+
+        self.asset_undo_infos_total = 0
+        self.asset_undo_infos_count = 1
+
+        self.asset_data_new_total = 0
+        self.asset_data_new_count = 1
+
+        self.asset_data_reissued_total = 0
+        self.asset_data_reissued_count = 1
+
+        self.asset_data_undo_infos_total = 0
+        self.asset_data_undo_infos_count = 1
+
+        self.restricted_to_qualifier_total = 0
+        self.restricted_to_qualifier_count = 1
+
+        self.qr_associations_total = 0
+        self.qr_associations_count = 1
+
+        self.restricted_to_qualifier_undos_total = 0
+        self.restricted_to_qualifier_undos_count = 1
+
+        self.global_freezes_total = 0
+        self.global_freezes_count = 1
+
+        self.is_frozen_total = 0
+        self.is_frozen_count = 1
+
+        self.global_freezes_undos_total = 0
+        self.global_freezes_undos_count = 1
+
+        self.tag_to_address_total = 0
+        self.tag_to_address_count = 1
+
+        self.is_qualified_total = 0
+        self.is_qualified_count = 1
+
+        self.tag_to_address_undos_total = 0
+        self.tag_to_address_undos_count = 1
+
+        self.asset_broadcast_total = 0
+        self.asset_broadcast_count = 1
+
+        self.asset_broadcast_undos_total = 0
+        self.asset_broadcast_undos_count = 1
 
     async def run_with_lock(self, coro):
         # Shielded so that cancellations from shutdown don't lose work.  Cancellation will
@@ -453,6 +502,109 @@ class BlockProcessor:
         '''Flush a cache if it gets too big.'''
         # Good average estimates based on traversal of subobjects and
         # requesting size from Python (see deep_getsizeof).
+
+        # Testing lengths
+        self.undo_info_total += deep_getsizeof(self.undo_infos)
+        self.undo_info_count += len(self.undo_infos)
+
+        print('Current average of self.undo_infos')
+        print(self.undo_info_total / self.undo_info_count)
+
+        self.asset_cache_total += deep_getsizeof(self.asset_cache)
+        self.asset_cache_count += len(self.asset_cache)
+
+        print('Current average of self.asset_cache')
+        print(self.asset_cache_total / self.asset_cache_count)
+
+        self.asset_undo_infos_total += deep_getsizeof(self.asset_undo_infos)
+        self.asset_undo_infos_count += len(self.asset_undo_infos)
+
+        print('Current average of self.asset_undo_infos')
+        print(self.asset_undo_infos_total / self.asset_undo_infos_count)
+
+        self.asset_data_new_total += deep_getsizeof(self.asset_data_new)
+        self.asset_data_new_count += len(self.asset_data_new)
+
+        print('Current average of self.asset_data_new')
+        print(self.asset_data_new_total / self.asset_data_new_count)
+
+        self.asset_data_reissued_total += deep_getsizeof(self.asset_data_reissued)
+        self.asset_data_reissued_count += len(self.asset_data_reissued)
+
+        print('Current average of self.asset_data_reissued')
+        print(self.asset_data_reissued_total / self.asset_data_reissued_count)
+
+        self.asset_data_undo_infos_total += deep_getsizeof(self.asset_data_undo_infos)
+        self.asset_data_undo_infos_count += len(self.asset_data_undo_infos)
+
+        print('Current average of self.asset_data_undo_infos')
+        print(self.asset_data_undo_infos_total / self.asset_data_undo_infos_count)
+
+        self.restricted_to_qualifier_total += deep_getsizeof(self.restricted_to_qualifier)
+        self.restricted_to_qualifier_count += len(self.restricted_to_qualifier)
+
+        print('Current average of self.restricted_to_qualifier')
+        print(self.restricted_to_qualifier_total / self.restricted_to_qualifier_count)
+
+        self.qr_associations_total += deep_getsizeof(self.qr_associations)
+        self.qr_associations_count += len(self.qr_associations)
+
+        print('Current average of self.qr_associations')
+        print(self.qr_associations_total / self.qr_associations_count)
+
+        self.restricted_to_qualifier_undos_total += deep_getsizeof(self.restricted_to_qualifier_undos)
+        self.restricted_to_qualifier_undos_count += len(self.restricted_to_qualifier_undos)
+
+        print('Current average of self.restricted_to_qualifier_undos')
+        print(self.restricted_to_qualifier_undos_total / self.restricted_to_qualifier_undos_count)
+
+        self.global_freezes_total += deep_getsizeof(self.global_freezes)
+        self.global_freezes_count += len(self.global_freezes)
+
+        print('Current average of self.global_freezes')
+        print(self.global_freezes_total / self.global_freezes_count)
+
+        self.is_frozen_total += deep_getsizeof(self.is_frozen)
+        self.is_frozen_count += len(self.is_frozen)
+
+        print('Current average of self.is_frozen')
+        print(self.is_frozen_total / self.is_frozen_count)
+
+        self.global_freezes_undos_total += deep_getsizeof(self.global_freezes_undos)
+        self.global_freezes_undos_count += len(self.global_freezes_undos)
+
+        print('Current average of self.global_freezes_undos')
+        print(self.global_freezes_undos_total / self.global_freezes_undos_count)
+
+        self.tag_to_address_total += deep_getsizeof(self.tag_to_address)
+        self.tag_to_address_count += len(self.tag_to_address)
+
+        print('Current average of self.tag_to_address')
+        print(self.tag_to_address_total / self.tag_to_address_count)
+
+        self.is_qualified_total += deep_getsizeof(self.is_qualified)
+        self.is_qualified_count += len(self.is_qualified)
+
+        print('Current average of self.is_qualified')
+        print(self.is_qualified_total / self.is_qualified_count)
+
+        self.tag_to_address_undos_total += deep_getsizeof(self.tag_to_address_undos)
+        self.tag_to_address_undos_count += len(self.tag_to_address_undos)
+
+        print('Current average of self.tag_to_address_undos')
+        print(self.tag_to_address_undos_total / self.tag_to_address_undos_count)
+
+        self.asset_broadcast_total += deep_getsizeof(self.asset_broadcast)
+        self.asset_broadcast_count += len(self.asset_broadcast)
+
+        print('Current average of self.asset_broadcast')
+        print(self.asset_broadcast_total / self.asset_broadcast_count)
+
+        self.asset_broadcast_undos_total += deep_getsizeof(self.asset_broadcast_undos)
+        self.asset_broadcast_undos_count += len(self.asset_broadcast_undos)
+
+        print('Current average of self.asset_broadcast_undos')
+        print(self.asset_broadcast_undos_total / self.asset_broadcast_undos_count)
 
         # TODO: Add undo info checks
 
@@ -969,28 +1121,19 @@ class BlockProcessor:
                                       asset_name_len + asset_name)
 
                             if not asset_deserializer.is_finished():
-
-                                asset_name_m = asset_name
-                                asset_name_len_m = asset_name_len
-
-                                if asset_name_m[-1] == b'!':
-                                    # This is an ownership token that was passed in;
-                                    # Truncate to associate it with normal assets
-                                    asset_name_m = asset_name_m[:-1]
-                                    asset_name_len_m = bytes([asset_name_m[0] - 1])
                                 if second_loop:
                                     if asset_deserializer.cursor + 34 <= asset_deserializer.length:
                                         data = asset_deserializer.read_bytes(34)
                                         # This is a message broadcast
-                                        put_asset_broadcast(asset_name_len_m + asset_name_m + to_le_uint32(idx) + tx_numb, data)
+                                        put_asset_broadcast(asset_name_len + asset_name + to_le_uint32(idx) + tx_numb, data)
                                         asset_broadcast_undo_info.append(
-                                            asset_name_len_m + asset_name_m + to_le_uint32(idx) + tx_numb)
+                                            asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
                                 else:
                                     data = asset_deserializer.read_bytes(34)
                                     # This is a message broadcast
-                                    put_asset_broadcast(asset_name_len_m + asset_name_m + to_le_uint32(idx) + tx_numb, data)
+                                    put_asset_broadcast(asset_name_len + asset_name + to_le_uint32(idx) + tx_numb, data)
                                     asset_broadcast_undo_info.append(
-                                        asset_name_len_m + asset_name_m + to_le_uint32(idx) + tx_numb)
+                                        asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
                         else:
                             raise Exception('Unknown asset type: {}'.format(script_type))
 
@@ -1087,8 +1230,9 @@ class BlockProcessor:
                 )
 
                 undo_append(bytes([len(res)]) + res + res_idx + qual_idx + tx_numb +
-                            bytes([len(quals)]) + b''.join([bytes([len(q)]) + q for q in quals]) +
-                            bytes([len(qual_removals)]) + b''.join([bytes([len(q)]) + q for q in qual_removals]))
+                            bytes([len(quals) + len(qual_removals)]) +
+                            b''.join([bytes([len(q)]) + q for q in quals]) +
+                            b''.join([bytes([len(q)]) + q for q in qual_removals]))
 
                 new_checked = set()
 
@@ -1186,6 +1330,8 @@ class BlockProcessor:
                                                                               tup[0] + tup[1] + (
                                                                                   b'\x01' if tup[2] else b'\0')
                                                                               for tup in old_qual_info]))
+
+                    undo_append(bytes([len(qual_undos)]) + b''.join(qual_undos))
 
                     tag_current(b'c' + qual, bytes([len(new_qual_info)]) + b''.join(new_qual_info))
 
@@ -1286,15 +1432,141 @@ class BlockProcessor:
 
         data_parser = DataParser(self.db.read_asset_undo_tag_info(self.height))
         while not data_parser.is_finished():
-            pass
+            #qualified_undo_info.append(
+            #    idx + tx_numb +
+            #    name_byte_len + asset_name + bytes([len(old_qual_hist)]) + b''.join(old_qual_hist) +
+            #   bytes([len(h160)]) + h160 + bytes([len(old_h160_hist)]) + b''.join(old_h160_hist)
+            #
+
+            idx_del = data_parser.read_bytes(4)
+            tx_numb_del = data_parser.read_bytes(5)
+
+            asset_len, asset = data_parser.read_var_bytes_tuple_bytes()
+            asset_rollback = []
+            num_asset_rollback = data_parser.read_int()
+            for _ in range(num_asset_rollback):
+                # bytes([len(h160)]) + h160 + idx + tx_numb + flag
+                h160_len, h160 = data_parser.read_var_bytes_tuple_bytes()
+                data = data_parser.read_bytes(4 + 5 + 1)
+                asset_rollback.append((h160_len, h160, data))
+
+            h160_len, h160 = data_parser.read_var_bytes_tuple_bytes()
+            h160_rollback = []
+            num_h160_rollback = data_parser.read_int()
+            for _ in range(num_h160_rollback):
+                # name_byte_len + asset_name + idx + tx_numb + flag
+                asset_len, asset = data_parser.read_var_bytes_tuple_bytes()
+                data = data_parser.read_bytes(4 + 5 + 1)
+                h160_rollback.append((asset_len, asset, data))
+
+            # Delete history
+            self.tag_to_address_deletes.append(b'p' + h160_len + h160 + idx_del + tx_numb_del)
+            self.tag_to_address_deletes.append(b'a' + asset_len + asset + idx_del + tx_numb_del)
+
+            # Rollback or delete current
+            if num_asset_rollback == 0:
+                self.tag_to_address_deletes.append(b'Q' + asset)
+            else:
+                self.is_qualified.__setitem__(
+                    b'Q' + asset,
+                    bytes([num_asset_rollback]) + b''.join([x + y + z for x, y, z in asset_rollback])
+                )
+
+            if num_h160_rollback == 0:
+                self.tag_to_address_deletes.append(b't' + h160)
+            else:
+                self.is_qualified.__setitem__(
+                    b't' + h160,
+                    bytes([num_h160_rollback]) + b''.join([x + y + z for x, y, z in h160_rollback])
+                )
 
         data_parser = DataParser(self.db.read_asset_undo_freeze_info(self.height))
         while not data_parser.is_finished():
-            pass
+            #freeze_undo_info.append(
+            #    asset_name_len + asset_name + idx + tx_numb +
+            #    (b'\x01' if len(old_frozen_info) > 0 else b'\0') + old_frozen_info
+            #)
+
+            asset_len, asset = data_parser.read_var_bytes_tuple_bytes()
+            idx_del = data_parser.read_bytes(4)
+            tx_numb_del = data_parser.read_bytes(5)
+            has_undo = data_parser.read_boolean()
+
+            # Delete history
+            self.global_freezes_deletes.append(b'f' + asset_len + asset + idx_del + tx_numb_del)
+
+            # Delete or rollback
+            if has_undo:
+                data = data_parser.read_bytes(4 + 5 + 1)
+                self.is_frozen.__setitem__(
+                    b'l' + asset,
+                    data
+                )
+            else:
+                self.global_freezes_deletes.append(b'l' + asset)
 
         data_parser = DataParser(self.db.read_asset_undo_res2qual_key(self.height))
         while not data_parser.is_finished():
-            pass
+            #undo_append(bytes([len(res)]) + res + res_idx + qual_idx + tx_numb +
+            #            bytes([len(quals) + len(qual_removals)]) +
+            #            b''.join([bytes([len(q)]) + q for q in quals]) +
+            #            b''.join([bytes([len(q)]) + q for q in qual_removals]))
+
+            #undo_append(bytes([len(old_res_info)]) +
+            #            b''.join([bytes([len(tup[0])]) +
+            #            tup[0] + tup[1] + (b'\x01' if tup[2] else b'\0')
+            #            for tup in old_res_info]))
+
+            #undo_append(bytes([len(qual_undos)]) + b''.join(qual_undos))
+
+            restricted_len, restricted = data_parser.read_var_bytes_tuple_bytes()
+            res_idx_del = data_parser.read_bytes(4)
+            qual_idx_del = data_parser.read_bytes(4)
+            tx_numb_del = data_parser.read_bytes(5)
+
+            qual_dels = []
+            for _ in range(data_parser.read_int()):
+                qual_dels.append(data_parser.read_var_bytes_tuple_bytes())
+
+            # Delete history
+            self.restricted_to_qualifier_deletes.append(b'1' + restricted_len + restricted +
+                                                        res_idx_del + qual_idx_del + tx_numb_del)
+            for qual_len, qual in qual_dels:
+                self.restricted_to_qualifier_deletes.append(b'2' + qual_len + qual +
+                                                            res_idx_del + qual_idx_del + tx_numb_del)
+
+            # Rollback or delete restricted current
+            restricted_undo_len = data_parser.read_int()
+            restricted_undos = []
+            for _ in range(restricted_undo_len):
+                qual_len, qual = data_parser.read_var_bytes_tuple_bytes()
+                data = data_parser.read_bytes(4 + 4 + 5 + 1)
+                restricted_undos.append((qual_len, qual, data))
+
+            if restricted_undo_len == 0:
+                self.restricted_to_qualifier_deletes.append(b'r' + restricted)
+            else:
+                self.qr_associations.__setitem__(
+                    b'r' + restricted,
+                    bytes([restricted_undo_len]) + b''.join([x + y + z for x, y, z in restricted_undos])
+                )
+
+            for _ in range(data_parser.read_int()):
+                qual_len, qual = data_parser.read_var_bytes_tuple_bytes()
+                qual_undo_len = data_parser.read_int()
+                qual_undos = []
+                for _ in range(qual_undo_len):
+                    res_len, res = data_parser.read_var_bytes_tuple_bytes()
+                    data = data_parser.read_bytes(4 + 4 + 5 + 1)
+                    qual_undos.append((res_len, res, data))
+
+                if qual_undo_len == 0:
+                    self.restricted_to_qualifier_deletes.append(b'c' + qual)
+                else:
+                    self.qr_associations.__setitem__(
+                        b'c' + qual,
+                        bytes([qual_undo_len]) + b''.join([x + y + z for x, y, z in qual_undos])
+                    )
 
         n = len(undo_info)
         asset_n = len(asset_undo_info)
