@@ -720,10 +720,11 @@ class BlockProcessor:
                                     parser = DataParser(data)
                                     for _ in range(parser.read_int()):
                                         old_h160_len, old_h160 = parser.read_var_bytes_tuple_bytes()
+                                        data = parser.read_bytes(4 + 5 + 1)
                                         if h160 != old_h160:
                                             ret.append(
                                                 old_h160_len + old_h160 +
-                                                parser.read_bytes(4 + 5 + 1)
+                                                data
                                             )
                                     return ret
 
@@ -732,10 +733,11 @@ class BlockProcessor:
                                     parser = DataParser(data)
                                     for _ in range(parser.read_int()):
                                         old_qualifier_len, old_qualifier = parser.read_var_bytes_tuple_bytes()
+                                        data = parser.read_bytes(4 + 5 + 1)
                                         if asset_name != old_qualifier:
                                             ret.append(
                                                 old_qualifier_len + old_qualifier +
-                                                parser.read_bytes(4 + 5 + 1)
+                                                data
                                             )
                                     return ret
 
@@ -744,21 +746,13 @@ class BlockProcessor:
                                 old_qual_hist = []
                                 old_h160_hist = []
 
-                                print(asset_name)
-                                print(ops)
                                 qual_cached = pop_qualified_current(b'Q' + asset_name)
                                 if qual_cached:
-                                    print('pre cached')
-                                    print(qual_cached)
                                     old_qual_hist = parse_current_qualifier_history(qual_cached)
-                                    print('cached')
-                                    print(old_qual_hist)
                                 else:
                                     qual_writed = self.db.asset_db.get(b'Q' + asset_name)
                                     if qual_writed:
                                         old_qual_hist = parse_current_qualifier_history(qual_writed)
-                                        print('written')
-                                        print(old_qual_hist)
 
                                 h160_cached = pop_qualified_current(b't' + h160)
                                 if h160_cached:
@@ -776,10 +770,6 @@ class BlockProcessor:
 
                                 old_qual_hist.append(bytes([len(h160)]) + h160 + idx + tx_numb + flag)
                                 old_h160_hist.append(name_byte_len + asset_name + idx + tx_numb + flag)
-
-                                print('putting')
-                                print(old_qual_hist)
-                                print(bytes([len(old_qual_hist)]) + b''.join(old_qual_hist))
 
                                 put_qualified_current(
                                     b'Q' + asset_name,
