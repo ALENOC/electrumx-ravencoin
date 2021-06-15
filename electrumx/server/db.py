@@ -1512,6 +1512,7 @@ class DB(object):
             assets = set()
             for key, _ in self.asset_db.iterator(prefix=prefix):
                 parser = util.DataParser(key)
+                parser.read_int()
                 assets.add(parser.read_var_bytes_as_ascii())
 
             print(assets)
