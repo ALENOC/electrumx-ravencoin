@@ -503,25 +503,14 @@ class BlockProcessor:
         # Good average estimates based on traversal of subobjects and
         # requesting size from Python (see deep_getsizeof).
 
-        # Testing lengths
-        print(self.undo_infos)
-        if len(self.undo_infos) > 0:
-            self.undo_info_total += deep_getsizeof(self.undo_infos)
-            self.undo_info_count += len(self.undo_infos)
-        print('Current average of self.undo_infos')
-        print(self.undo_info_total / self.undo_info_count)
+        # Undo info is only appended after sync; ignore here
+        # Deletes are only during rollbacks; ignore here
 
         if len(self.asset_cache) > 0:
             self.asset_cache_total += deep_getsizeof(self.asset_cache)
             self.asset_cache_count += len(self.asset_cache)
         print('Current average of self.asset_cache')
         print(self.asset_cache_total / self.asset_cache_count)
-
-        if len(self.asset_undo_infos) > 0:
-            self.asset_undo_infos_total += deep_getsizeof(self.asset_undo_infos)
-            self.asset_undo_infos_count += len(self.asset_undo_infos)
-        print('Current average of self.asset_undo_infos')
-        print(self.asset_undo_infos_total / self.asset_undo_infos_count)
 
         if len(self.asset_data_new) > 0:
             self.asset_data_new_total += deep_getsizeof(self.asset_data_new)
@@ -535,12 +524,6 @@ class BlockProcessor:
         print('Current average of self.asset_data_reissued')
         print(self.asset_data_reissued_total / self.asset_data_reissued_count)
 
-        if len(self.asset_data_undo_infos) > 0:
-            self.asset_data_undo_infos_total += deep_getsizeof(self.asset_data_undo_infos)
-            self.asset_data_undo_infos_count += len(self.asset_data_undo_infos)
-        print('Current average of self.asset_data_undo_infos')
-        print(self.asset_data_undo_infos_total / self.asset_data_undo_infos_count)
-
         if len(self.restricted_to_qualifier) > 0:
             self.restricted_to_qualifier_total += deep_getsizeof(self.restricted_to_qualifier)
             self.restricted_to_qualifier_count += len(self.restricted_to_qualifier)
@@ -552,12 +535,6 @@ class BlockProcessor:
             self.qr_associations_count += len(self.qr_associations)
         print('Current average of self.qr_associations')
         print(self.qr_associations_total / self.qr_associations_count)
-
-        if len(self.restricted_to_qualifier_undos) > 0:
-            self.restricted_to_qualifier_undos_total += deep_getsizeof(self.restricted_to_qualifier_undos)
-            self.restricted_to_qualifier_undos_count += len(self.restricted_to_qualifier_undos)
-        print('Current average of self.restricted_to_qualifier_undos')
-        print(self.restricted_to_qualifier_undos_total / self.restricted_to_qualifier_undos_count)
 
         if len(self.global_freezes) > 0:
             self.global_freezes_total += deep_getsizeof(self.global_freezes)
@@ -571,12 +548,6 @@ class BlockProcessor:
         print('Current average of self.is_frozen')
         print(self.is_frozen_total / self.is_frozen_count)
 
-        if len(self.global_freezes_undos) > 0:
-            self.global_freezes_undos_total += deep_getsizeof(self.global_freezes_undos)
-            self.global_freezes_undos_count += len(self.global_freezes_undos)
-        print('Current average of self.global_freezes_undos')
-        print(self.global_freezes_undos_total / self.global_freezes_undos_count)
-
         if len(self.tag_to_address) > 0:
             self.tag_to_address_total += deep_getsizeof(self.tag_to_address)
             self.tag_to_address_count += len(self.tag_to_address)
@@ -589,25 +560,11 @@ class BlockProcessor:
         print('Current average of self.is_qualified')
         print(self.is_qualified_total / self.is_qualified_count)
 
-        if len(self.tag_to_address_undos) > 0:
-            self.tag_to_address_undos_total += deep_getsizeof(self.tag_to_address_undos)
-            self.tag_to_address_undos_count += len(self.tag_to_address_undos)
-        print('Current average of self.tag_to_address_undos')
-        print(self.tag_to_address_undos_total / self.tag_to_address_undos_count)
-
         if len(self.asset_broadcast) > 0:
             self.asset_broadcast_total += deep_getsizeof(self.asset_broadcast)
             self.asset_broadcast_count += len(self.asset_broadcast)
         print('Current average of self.asset_broadcast')
         print(self.asset_broadcast_total / self.asset_broadcast_count)
-
-        if len(self.asset_broadcast_undos) > 0:
-            self.asset_broadcast_undos_total += deep_getsizeof(self.asset_broadcast_undos)
-            self.asset_broadcast_undos_count += len(self.asset_broadcast_undos)
-        print('Current average of self.asset_broadcast_undos')
-        print(self.asset_broadcast_undos_total / self.asset_broadcast_undos_count)
-
-        # TODO: Add undo info checks
 
         one_MB = 1000 * 1000
         utxo_cache_size = len(self.utxo_cache) * 205
