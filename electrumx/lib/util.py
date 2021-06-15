@@ -36,7 +36,7 @@ from struct import Struct
 
 
 # Logging utilities
-from typing import Iterable
+from typing import Iterable, Tuple
 
 
 class ConnectionLogger(logging.LoggerAdapter):
@@ -123,6 +123,9 @@ def deep_getsizeof(obj):
         r = sys.getsizeof(o)
         ids.add(id(o))
 
+        if isinstance(o, Tuple):
+            return r + sum(size(x) for x in o)
+
         if isinstance(o, (str, bytes, bytearray, array.array)):
             return r
 
@@ -130,9 +133,6 @@ def deep_getsizeof(obj):
             return r + sum(size(k) + size(v) for k, v in o.items())
 
         if isinstance(o, Container):
-            return r + sum(size(x) for x in o)
-
-        if isinstance(o, Iterable):
             return r + sum(size(x) for x in o)
 
         return r
