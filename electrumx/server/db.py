@@ -483,16 +483,30 @@ class DB(object):
                 bytes([len(qual_adds)]) + b''.join([bytes([len(qual)]) + qual for qual in qual_adds]) +
                 bytes([len(qual_removes)]) + b''.join([bytes([len(qual)]) + qual for qual in qual_removes])
             )
+            print('Writing')
+            print(restricted_asset)
+            print('Value')
+            print(bytes([len(qual_adds)]) + b''.join([bytes([len(qual)]) + qual for qual in qual_adds]) +
+                bytes([len(qual_removes)]) + b''.join([bytes([len(qual)]) + qual for qual in qual_removes]))
+
             for qual in qual_adds:
                 batch_put(
                     b'2' + bytes([len(qual)]) + qual + bytes_append,
                     b'\x01' + bytes([len(restricted_asset)]) + restricted_asset
                 )
+                print('Writing')
+                print(qual)
+                print('Value')
+                print(b'\x01' + bytes([len(restricted_asset)]) + restricted_asset)
             for qual in qual_removes:
                 batch_put(
                     b'2' + bytes([len(qual)]) + qual + bytes_append,
                     b'\0' + bytes([len(restricted_asset)]) + restricted_asset
                 )
+                print('Writing')
+                print(qual)
+                print('Value')
+                print(b'\0' + bytes([len(restricted_asset)]) + restricted_asset)
         flush_data.asset_restricted2qual.clear()
 
         self.flush_restricted2qual_undo_info(batch_put, flush_data.asset_restricted2qual_undo)

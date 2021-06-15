@@ -1070,13 +1070,15 @@ class BlockProcessor:
                     if writed_f:
                         old_res_info = get_current_association_data(writed_f)
 
-                print('Restricted info')
-                print(ops)
-                print(res)
-                print(quals)
-                print(old_res_info)
                 qual_removals = set(tup[0] for tup in old_res_info) - set(quals)
+
+                print('Restricted')
+                print(res)
+                print('Adds')
+                print(quals)
+                print('Removals')
                 print(qual_removals)
+
                 tag_historical(
                     res,
                     (quals, qual_removals, res_idx + qual_idx + tx_numb)
@@ -1102,8 +1104,6 @@ class BlockProcessor:
                     for tup in old_res_info
                 ]
 
-                print(new_checked)
-
                 for qual in set(quals) - new_checked:
                     new_res_info.append((
                         qual,
@@ -1111,13 +1111,9 @@ class BlockProcessor:
                         True
                     ))
 
-                print(new_res_info)
-
                 new_res_info = [bytes([len(tup[0])]) +
                                 tup[0] + tup[1] + (b'\x01' if tup[2] else b'\0')
                                 for tup in new_res_info]
-
-                print(new_res_info)
 
                 undo_append(bytes([len(old_res_info)]) + b''.join([bytes([len(tup[0])]) +
                             tup[0] + tup[1] + (b'\x01' if tup[2] else b'\0')
@@ -1127,9 +1123,7 @@ class BlockProcessor:
 
                 qual_undos = []
 
-                print('adding quals')
                 for qual in quals:
-                    print(qual)
                     old_qual_info = []
                     cached_q = pop_current(b'c' + qual)
                     if cached_q:
@@ -1139,14 +1133,14 @@ class BlockProcessor:
                         if writed_q:
                             old_qual_info = get_current_association_data(writed_q)
 
-                    print(old_qual_info)
-
                     has_res = False
 
                     def check_name(name: bytes) -> bool:
                         nonlocal has_res
-                        has_res = name == res
-                        return has_res
+                        b = name == res
+                        if not has_res:
+                            has_res = b
+                        return b
 
                     new_qual_info = [
                         ((tup[0], res_idx + qual_idx + tx_numb, True) if check_name(tup[0])
@@ -1157,13 +1151,9 @@ class BlockProcessor:
                     if not has_res:
                         new_qual_info.append((res, res_idx + qual_idx + tx_numb, True))
 
-                    print(new_qual_info)
-
                     new_qual_info = [bytes([len(tup[0])]) +
                                     tup[0] + tup[1] + (b'\x01' if tup[2] else b'\0')
                                     for tup in new_qual_info]
-
-                    print(new_qual_info)
 
                     qual_undos.append(bytes([len(qual)]) + qual +
                                       bytes([len(old_qual_info)]) + b''.join([bytes([len(tup[0])]) +
@@ -1173,8 +1163,6 @@ class BlockProcessor:
                     tag_current(b'c' + qual, bytes([len(new_qual_info)]) + b''.join(new_qual_info))
 
                 for qual in qual_removals:
-                    print('Qual removes')
-                    print(qual)
                     old_qual_info = []
                     cached_q = pop_current(b'c' + qual)
                     if cached_q:
@@ -1183,17 +1171,14 @@ class BlockProcessor:
                         writed_q = self.db.asset_db.get(b'c' + qual)
                         if writed_q:
                             old_qual_info = get_current_association_data(writed_q)
-                    print(old_qual_info)
                     new_qual_info = [
                         ((tup[0], res_idx + qual_idx + tx_numb, False) if tup[0] == res
                          else tup)
                         for tup in old_qual_info
                     ]
-                    print(new_qual_info)
                     new_qual_info = [bytes([len(tup[0])]) +
                                      tup[0] + tup[1] + (b'\x01' if tup[2] else b'\0')
                                      for tup in new_qual_info]
-                    print(new_qual_info)
                     qual_undos.append(bytes([len(qual)]) + qual +
                                       bytes([len(old_qual_info)]) + b''.join([bytes([len(tup[0])]) +
                                                                               tup[0] + tup[1] + (
