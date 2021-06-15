@@ -314,57 +314,20 @@ class BlockProcessor:
         self.asset_broadcast_undos = []
         self.asset_broadcast_dels = []
 
-        # Testing lengths
-        self.undo_info_total = 0
-        self.undo_info_count = 1
+        self.reset_size_cache()
 
-        self.asset_cache_total = 0
-        self.asset_cache_count = 1
+    def reset_size_cache(self):
+        self.restricted_to_qualifier_size = 0
+        self.restricted_to_qualifier_len = 0
 
-        self.asset_undo_infos_total = 0
-        self.asset_undo_infos_count = 1
+        self.qr_associations_size = 0
+        self.qr_associations_len = 0
 
-        self.asset_data_new_total = 0
-        self.asset_data_new_count = 1
+        self.tag_to_address_size = 0
+        self.tag_to_address_len = 0
 
-        self.asset_data_reissued_total = 0
-        self.asset_data_reissued_count = 1
-
-        self.asset_data_undo_infos_total = 0
-        self.asset_data_undo_infos_count = 1
-
-        self.restricted_to_qualifier_total = 0
-        self.restricted_to_qualifier_count = 1
-
-        self.qr_associations_total = 0
-        self.qr_associations_count = 1
-
-        self.restricted_to_qualifier_undos_total = 0
-        self.restricted_to_qualifier_undos_count = 1
-
-        self.global_freezes_total = 0
-        self.global_freezes_count = 1
-
-        self.is_frozen_total = 0
-        self.is_frozen_count = 1
-
-        self.global_freezes_undos_total = 0
-        self.global_freezes_undos_count = 1
-
-        self.tag_to_address_total = 0
-        self.tag_to_address_count = 1
-
-        self.is_qualified_total = 0
-        self.is_qualified_count = 1
-
-        self.tag_to_address_undos_total = 0
-        self.tag_to_address_undos_count = 1
-
-        self.asset_broadcast_total = 0
-        self.asset_broadcast_count = 1
-
-        self.asset_broadcast_undos_total = 0
-        self.asset_broadcast_undos_count = 1
+        self.is_qualified_size = 0
+        self.is_qualified_len = 0
 
     async def run_with_lock(self, coro):
         # Shielded so that cancellations from shutdown don't lose work.  Cancellation will
@@ -495,6 +458,8 @@ class BlockProcessor:
                          self.asset_broadcast, self.asset_broadcast_undos, self.asset_broadcast_dels)
 
     async def flush(self, flush_utxos):
+        if flush_utxos:
+            self.reset_size_cache()
         self.db.flush_dbs(self.flush_data(), flush_utxos, self.estimate_txs_remaining)
         self.next_cache_check = time.monotonic() + 30
 
@@ -506,66 +471,6 @@ class BlockProcessor:
         # Undo info is only appended after sync; ignore here
         # Deletes are only during rollbacks; ignore here
 
-        if len(self.asset_cache) > 0:
-            self.asset_cache_total += deep_getsizeof(self.asset_cache)
-            self.asset_cache_count += len(self.asset_cache)
-        print('Current average of self.asset_cache')
-        print(self.asset_cache_total / self.asset_cache_count)
-
-        if len(self.asset_data_new) > 0:
-            self.asset_data_new_total += deep_getsizeof(self.asset_data_new)
-            self.asset_data_new_count += len(self.asset_data_new)
-        print('Current average of self.asset_data_new')
-        print(self.asset_data_new_total / self.asset_data_new_count)
-
-        if len(self.asset_data_reissued) > 0:
-            self.asset_data_reissued_total += deep_getsizeof(self.asset_data_reissued)
-            self.asset_data_reissued_count += len(self.asset_data_reissued)
-        print('Current average of self.asset_data_reissued')
-        print(self.asset_data_reissued_total / self.asset_data_reissued_count)
-
-        if len(self.restricted_to_qualifier) > 0:
-            self.restricted_to_qualifier_total += deep_getsizeof(self.restricted_to_qualifier)
-            self.restricted_to_qualifier_count += len(self.restricted_to_qualifier)
-        print('Current average of self.restricted_to_qualifier')
-        print(self.restricted_to_qualifier_total / self.restricted_to_qualifier_count)
-
-        if len(self.qr_associations) > 0:
-            self.qr_associations_total += deep_getsizeof(self.qr_associations)
-            self.qr_associations_count += len(self.qr_associations)
-        print('Current average of self.qr_associations')
-        print(self.qr_associations_total / self.qr_associations_count)
-
-        if len(self.global_freezes) > 0:
-            self.global_freezes_total += deep_getsizeof(self.global_freezes)
-            self.global_freezes_count += len(self.global_freezes)
-        print('Current average of self.global_freezes')
-        print(self.global_freezes_total / self.global_freezes_count)
-
-        if len(self.is_frozen) > 0:
-            self.is_frozen_total += deep_getsizeof(self.is_frozen)
-            self.is_frozen_count += len(self.is_frozen)
-        print('Current average of self.is_frozen')
-        print(self.is_frozen_total / self.is_frozen_count)
-
-        if len(self.tag_to_address) > 0:
-            self.tag_to_address_total += deep_getsizeof(self.tag_to_address)
-            self.tag_to_address_count += len(self.tag_to_address)
-        print('Current average of self.tag_to_address')
-        print(self.tag_to_address_total / self.tag_to_address_count)
-
-        if len(self.is_qualified) > 0:
-            self.is_qualified_total += deep_getsizeof(self.is_qualified)
-            self.is_qualified_count += len(self.is_qualified)
-        print('Current average of self.is_qualified')
-        print(self.is_qualified_total / self.is_qualified_count)
-
-        if len(self.asset_broadcast) > 0:
-            self.asset_broadcast_total += deep_getsizeof(self.asset_broadcast)
-            self.asset_broadcast_count += len(self.asset_broadcast)
-        print('Current average of self.asset_broadcast')
-        print(self.asset_broadcast_total / self.asset_broadcast_count)
-
         one_MB = 1000 * 1000
         utxo_cache_size = len(self.utxo_cache) * 205
         db_deletes_size = len(self.db_deletes) * 57
@@ -575,16 +480,43 @@ class BlockProcessor:
                         + (self.height - self.db.fs_height) * 42)
 
         # TODO Fix/add these approximations
-        # These are worst case (32 byte asset name) approximations
+        # These are average case approximations
         asset_cache_size = len(self.asset_cache) * 235  # Added 30 bytes for the max name length
-        asset_deletes_size = len(self.asset_deletes) * 57
-        asset_data_new_size = len(self.asset_data_new) * 232
-        asset_data_reissue_size = len(self.asset_data_reissued) * 232
+        asset_data_new_size = len(self.asset_data_new) * 160
+        asset_data_reissue_size = len(self.asset_data_reissued) * 180
+        asset_broadcast_size = len(self.asset_broadcast) * 170
+
+        # These have a 1v1 correspondance, so average case is acceptable
+        asset_tag_history = len(self.tag_to_address) * 120
+        asset_history_freezes = len(self.global_freezes) * 230
+        asset_current_freezes = len(self.is_frozen) * 130
+
+        # The rest are variable length and will grow as the chain grows;
+        # on-spot size checks are needed
+        if self.restricted_to_qualifier_len != len(self.restricted_to_qualifier):
+            self.restricted_to_qualifier_size = deep_getsizeof(self.restricted_to_qualifier)
+            self.restricted_to_qualifier_len = len(self.restricted_to_qualifier)
+
+        if self.qr_associations_len != len(self.qr_associations):
+            self.qr_associations_size = deep_getsizeof(self.qr_associations)
+            self.qr_associations_len = len(self.qr_associations)
+
+        if self.tag_to_address_len != len(self.tag_to_address):
+            self.tag_to_address_size = deep_getsizeof(self.tag_to_address)
+            self.tag_to_address_len = len(self.tag_to_address)
+
+        if self.is_qualified_len != len(self.is_qualified):
+            self.is_qualified_size = deep_getsizeof(self.is_qualified)
+            self.is_qualified_len = len(self.is_qualified)
 
         utxo_MB = (db_deletes_size + utxo_cache_size) // one_MB
         hist_MB = (hist_cache_size + tx_hash_size) // one_MB
         asset_MB = (asset_data_new_size + asset_data_reissue_size +
-                    asset_deletes_size + asset_cache_size) // one_MB
+                    asset_cache_size + asset_broadcast_size +
+                    asset_tag_history + asset_history_freezes +
+                    asset_current_freezes + self.restricted_to_qualifier_size +
+                    self.qr_associations_size + self.tag_to_address_size +
+                    self.is_qualified_size) // one_MB
 
         self.logger.info('our height: {:,d} daemon: {:,d} '
                          'UTXOs {:,d}MB hist {:,d}MB assets {:,d}MB'
@@ -891,18 +823,6 @@ class BlockProcessor:
                                     bytes([len(old_h160_hist)]) + b''.join(old_h160_hist)
                                 )
 
-                                # We can remove the following after we ensure everything works
-                                def try_read_data(data: bytes):
-                                    parser = DataParser(data)
-                                    for _ in range(parser.read_int()):
-                                        parser.read_var_bytes()
-                                        parser.read_bytes(4)
-                                        parser.read_bytes(5)
-                                        parser.read_boolean()
-
-                                try_read_data(self.is_qualified[b'Q' + asset_name])
-                                try_read_data(self.is_qualified[b't' + h160])
-
                             elif match_script_against_template(ops, ASSET_NULL_VERIFIER_TEMPLATE) > -1:
                                 qualifiers_b = ops[2][2]
                                 qualifiers_deserializer = DataParser(qualifiers_b)
@@ -950,15 +870,6 @@ class BlockProcessor:
                                     asset_name,
                                     idx + tx_numb + flag
                                 )
-
-                                # We can remove the following after we ensure everything works
-                                def try_read_data(data: bytes):
-                                    parser = DataParser(data)
-                                    parser.read_bytes(4)
-                                    parser.read_bytes(5)
-                                    parser.read_boolean()
-
-                                try_read_data(self.is_frozen[asset_name])
 
                             else:
                                 raise Exception('Bad null asset script ops')
@@ -1292,26 +1203,6 @@ class BlockProcessor:
                     undo_append(bytes([len(qual_undos)]) + b''.join(qual_undos))
 
                     tag_current(b'c' + qual, bytes([len(new_qual_info)]) + b''.join(new_qual_info))
-
-                    # We can remove the following after we ensure everything works
-                    def try_read(data: bytes):
-                        parser = DataParser(data)
-                        for _ in range(parser.read_int()):
-                            parser.read_var_bytes_as_ascii()
-                            parser.read_bytes(4)
-                            parser.read_bytes(4)
-                            parser.read_bytes(5)
-                            parser.read_boolean()
-
-                    try_read(self.qr_associations[b'r' + res])
-
-                    for qual in itertools.chain(quals, qual_removals):
-                        try_read(self.qr_associations[b'c' + qual])
-
-                    for qual in quals:
-                        assert qual not in qual_removals
-                    for qual in qual_removals:
-                        assert qual not in quals
 
             append_hashXs(hashXs)
             update_touched(hashXs)
