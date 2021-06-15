@@ -504,105 +504,105 @@ class BlockProcessor:
         # requesting size from Python (see deep_getsizeof).
 
         # Testing lengths
-        self.undo_info_total += deep_getsizeof(self.undo_infos)
-        self.undo_info_count += len(self.undo_infos)
-
+        if len(self.undo_infos) > 0:
+            self.undo_info_total += deep_getsizeof(self.undo_infos)
+            self.undo_info_count += len(self.undo_infos)
         print('Current average of self.undo_infos')
         print(self.undo_info_total / self.undo_info_count)
 
-        self.asset_cache_total += deep_getsizeof(self.asset_cache)
-        self.asset_cache_count += len(self.asset_cache)
-
+        if len(self.asset_cache) > 0:
+            self.asset_cache_total += deep_getsizeof(self.asset_cache)
+            self.asset_cache_count += len(self.asset_cache)
         print('Current average of self.asset_cache')
         print(self.asset_cache_total / self.asset_cache_count)
 
-        self.asset_undo_infos_total += deep_getsizeof(self.asset_undo_infos)
-        self.asset_undo_infos_count += len(self.asset_undo_infos)
-
+        if len(self.asset_undo_infos) > 0:
+            self.asset_undo_infos_total += deep_getsizeof(self.asset_undo_infos)
+            self.asset_undo_infos_count += len(self.asset_undo_infos)
         print('Current average of self.asset_undo_infos')
         print(self.asset_undo_infos_total / self.asset_undo_infos_count)
 
-        self.asset_data_new_total += deep_getsizeof(self.asset_data_new)
-        self.asset_data_new_count += len(self.asset_data_new)
-
+        if len(self.asset_data_new) > 0:
+            self.asset_data_new_total += deep_getsizeof(self.asset_data_new)
+            self.asset_data_new_count += len(self.asset_data_new)
         print('Current average of self.asset_data_new')
         print(self.asset_data_new_total / self.asset_data_new_count)
 
-        self.asset_data_reissued_total += deep_getsizeof(self.asset_data_reissued)
-        self.asset_data_reissued_count += len(self.asset_data_reissued)
-
+        if len(self.asset_data_reissued) > 0:
+            self.asset_data_reissued_total += deep_getsizeof(self.asset_data_reissued)
+            self.asset_data_reissued_count += len(self.asset_data_reissued)
         print('Current average of self.asset_data_reissued')
         print(self.asset_data_reissued_total / self.asset_data_reissued_count)
 
-        self.asset_data_undo_infos_total += deep_getsizeof(self.asset_data_undo_infos)
-        self.asset_data_undo_infos_count += len(self.asset_data_undo_infos)
-
+        if len(self.asset_data_undo_infos) > 0:
+            self.asset_data_undo_infos_total += deep_getsizeof(self.asset_data_undo_infos)
+            self.asset_data_undo_infos_count += len(self.asset_data_undo_infos)
         print('Current average of self.asset_data_undo_infos')
         print(self.asset_data_undo_infos_total / self.asset_data_undo_infos_count)
 
-        self.restricted_to_qualifier_total += deep_getsizeof(self.restricted_to_qualifier)
-        self.restricted_to_qualifier_count += len(self.restricted_to_qualifier)
-
+        if len(self.restricted_to_qualifier) > 0:
+            self.restricted_to_qualifier_total += deep_getsizeof(self.restricted_to_qualifier)
+            self.restricted_to_qualifier_count += len(self.restricted_to_qualifier)
         print('Current average of self.restricted_to_qualifier')
         print(self.restricted_to_qualifier_total / self.restricted_to_qualifier_count)
 
-        self.qr_associations_total += deep_getsizeof(self.qr_associations)
-        self.qr_associations_count += len(self.qr_associations)
-
+        if len(self.qr_associations) > 0:
+            self.qr_associations_total += deep_getsizeof(self.qr_associations)
+            self.qr_associations_count += len(self.qr_associations)
         print('Current average of self.qr_associations')
         print(self.qr_associations_total / self.qr_associations_count)
 
-        self.restricted_to_qualifier_undos_total += deep_getsizeof(self.restricted_to_qualifier_undos)
-        self.restricted_to_qualifier_undos_count += len(self.restricted_to_qualifier_undos)
-
+        if len(self.restricted_to_qualifier_undos) > 0:
+            self.restricted_to_qualifier_undos_total += deep_getsizeof(self.restricted_to_qualifier_undos)
+            self.restricted_to_qualifier_undos_count += len(self.restricted_to_qualifier_undos)
         print('Current average of self.restricted_to_qualifier_undos')
         print(self.restricted_to_qualifier_undos_total / self.restricted_to_qualifier_undos_count)
 
-        self.global_freezes_total += deep_getsizeof(self.global_freezes)
-        self.global_freezes_count += len(self.global_freezes)
-
+        if len(self.global_freezes) > 0:
+            self.global_freezes_total += deep_getsizeof(self.global_freezes)
+            self.global_freezes_count += len(self.global_freezes)
         print('Current average of self.global_freezes')
         print(self.global_freezes_total / self.global_freezes_count)
 
-        self.is_frozen_total += deep_getsizeof(self.is_frozen)
-        self.is_frozen_count += len(self.is_frozen)
-
+        if len(self.is_frozen) > 0:
+            self.is_frozen_total += deep_getsizeof(self.is_frozen)
+            self.is_frozen_count += len(self.is_frozen)
         print('Current average of self.is_frozen')
         print(self.is_frozen_total / self.is_frozen_count)
 
-        self.global_freezes_undos_total += deep_getsizeof(self.global_freezes_undos)
-        self.global_freezes_undos_count += len(self.global_freezes_undos)
-
+        if len(self.global_freezes_undos) > 0:
+            self.global_freezes_undos_total += deep_getsizeof(self.global_freezes_undos)
+            self.global_freezes_undos_count += len(self.global_freezes_undos)
         print('Current average of self.global_freezes_undos')
         print(self.global_freezes_undos_total / self.global_freezes_undos_count)
 
-        self.tag_to_address_total += deep_getsizeof(self.tag_to_address)
-        self.tag_to_address_count += len(self.tag_to_address)
-
+        if len(self.tag_to_address) > 0:
+            self.tag_to_address_total += deep_getsizeof(self.tag_to_address)
+            self.tag_to_address_count += len(self.tag_to_address)
         print('Current average of self.tag_to_address')
         print(self.tag_to_address_total / self.tag_to_address_count)
 
-        self.is_qualified_total += deep_getsizeof(self.is_qualified)
-        self.is_qualified_count += len(self.is_qualified)
-
+        if len(self.is_qualified) > 0:
+            self.is_qualified_total += deep_getsizeof(self.is_qualified)
+            self.is_qualified_count += len(self.is_qualified)
         print('Current average of self.is_qualified')
         print(self.is_qualified_total / self.is_qualified_count)
 
-        self.tag_to_address_undos_total += deep_getsizeof(self.tag_to_address_undos)
-        self.tag_to_address_undos_count += len(self.tag_to_address_undos)
-
+        if len(self.tag_to_address_undos) > 0:
+            self.tag_to_address_undos_total += deep_getsizeof(self.tag_to_address_undos)
+            self.tag_to_address_undos_count += len(self.tag_to_address_undos)
         print('Current average of self.tag_to_address_undos')
         print(self.tag_to_address_undos_total / self.tag_to_address_undos_count)
 
-        self.asset_broadcast_total += deep_getsizeof(self.asset_broadcast)
-        self.asset_broadcast_count += len(self.asset_broadcast)
-
+        if len(self.asset_broadcast) > 0:
+            self.asset_broadcast_total += deep_getsizeof(self.asset_broadcast)
+            self.asset_broadcast_count += len(self.asset_broadcast)
         print('Current average of self.asset_broadcast')
         print(self.asset_broadcast_total / self.asset_broadcast_count)
 
-        self.asset_broadcast_undos_total += deep_getsizeof(self.asset_broadcast_undos)
-        self.asset_broadcast_undos_count += len(self.asset_broadcast_undos)
-
+        if len(self.asset_broadcast_undos) > 0:
+            self.asset_broadcast_undos_total += deep_getsizeof(self.asset_broadcast_undos)
+            self.asset_broadcast_undos_count += len(self.asset_broadcast_undos)
         print('Current average of self.asset_broadcast_undos')
         print(self.asset_broadcast_undos_total / self.asset_broadcast_undos_count)
 
