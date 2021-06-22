@@ -405,7 +405,7 @@ class DataParser:
     def __init__(self, data: bytes):
         self.data = data
         self.cursor = 0
-        self.length = len(data)
+        self.length = len(data) if data else 0
 
     def _assert_space(self, length: int):
         if self.cursor + length > self.length:
