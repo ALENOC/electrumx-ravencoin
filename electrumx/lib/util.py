@@ -459,4 +459,7 @@ class DataParser:
         return length, data.decode('ascii')
 
     def is_finished(self):
-        return not self.data or self.cursor == self.length
+        if self.data is None:
+            return True
+        else:
+            return self.cursor == self.length
