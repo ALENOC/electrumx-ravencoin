@@ -1173,7 +1173,7 @@ class DB(object):
         return [i for i in await run_in_thread(lookup_utxos, hashX_pairs) if i]
 
     # For external use
-    async def get_associations_for_qualifier(self, asset: bytes, history: bool = False):
+    async def get_associations_for_qualifier_current(self, asset: bytes):
         def get_current_info():
             ret = {}
             data = self.asset_db.get(b'c' + asset)
@@ -1196,7 +1196,9 @@ class DB(object):
                     'qual_tx_pos': qual_idx,
                 }
             return ret
+        return await run_in_thread(get_current_info)
 
+    async def get_associations_for_qualifier_history(self, asset: bytes):
         def get_asset_history():
             ret = {}
             prefix = b'2' + bytes([len(asset)]) + asset
@@ -1228,19 +1230,10 @@ class DB(object):
                     }
 
             return ret
-
-        def calc_ret():
-            ret = {
-                'current': get_current_info(),
-            }
-            if history:
-                ret['history'] = get_asset_history()
-            return ret
-
-        return await run_in_thread(calc_ret)
+        return await run_in_thread(get_asset_history)
 
     # For external use
-    async def get_associations_for_restricted(self, asset: bytes, history: bool = False):
+    async def get_associations_for_restricted_current(self, asset: bytes):
         def get_current_info():
             ret = {}
             data = self.asset_db.get(b'r' + asset)
@@ -1263,7 +1256,9 @@ class DB(object):
                     'qual_tx_pos': qual_idx,
                 }
             return ret
+        return await run_in_thread(get_current_info)
 
+    async def get_associations_for_restricted_history(self, asset: bytes):
         def get_asset_history():
             ret = {}
             prefix = b'1' + bytes([len(asset)]) + asset
@@ -1300,16 +1295,7 @@ class DB(object):
                     }
 
             return ret
-
-        def calc_ret():
-            ret = {
-                'current': get_current_info(),
-            }
-            if history:
-                ret['history'] = get_asset_history()
-            return ret
-
-        return await run_in_thread(calc_ret)
+        return await run_in_thread(get_asset_history)
 
     # For external use
     async def is_qualified(self, asset: bytes, hex: bytes):
@@ -1336,7 +1322,7 @@ class DB(object):
         return await run_in_thread(run)
 
     # For external use
-    async def get_h160s_associated_with_asset(self, asset: bytes, history: bool = False):
+    async def get_h160s_associated_with_asset_current(self, asset: bytes):
         def get_current_info():
             ret = {}
             data = self.asset_db.get(b'Q' + asset)
@@ -1357,7 +1343,9 @@ class DB(object):
                     'tx_pos': tx_pos,
                 }
             return ret
+        return await run_in_thread(get_current_info)
 
+    async def get_h160s_associated_with_asset_history(self, asset: bytes):
         def get_h160_history():
             ret = {}
             prefix = b'a' + bytes([len(asset)]) + asset
@@ -1384,18 +1372,10 @@ class DB(object):
                     }
             return ret
 
-        def calc_ret():
-            ret = {
-                'current': get_current_info(),
-            }
-            if history:
-                ret['history'] = get_h160_history()
-            return ret
-
-        return await run_in_thread(calc_ret)
+        return await run_in_thread(get_h160_history)
 
     # For external use
-    async def get_tags_associated_with_h160(self, h160: bytes, history: bool = False):
+    async def get_tags_associated_with_h160_current(self, h160: bytes):
         def get_current_info():
             ret = {}
             data = self.asset_db.get(b't' + h160)
@@ -1416,6 +1396,9 @@ class DB(object):
                     'tx_pos': tx_pos,
                 }
             return ret
+        return await run_in_thread(get_current_info)
+
+    async def get_tags_associated_with_h160_current(self, h160: bytes):
 
         def get_h160_history():
             ret = {}
@@ -1443,18 +1426,10 @@ class DB(object):
                     }
             return ret
 
-        def calc_ret():
-            ret = {
-                'current': get_current_info(),
-            }
-            if history:
-                ret['history'] = get_h160_history()
-            return ret
-
-        return await run_in_thread(calc_ret)
+        return await run_in_thread(get_h160_history)
 
     # For external use
-    async def get_frozen_status_of_restricted(self, asset: bytes, get_history: bool = False):
+    async def get_frozen_status_of_restricted_current(self, asset: bytes):
         def get_current_info():
             data = self.asset_db.get(b'l' + asset)
             if not data:
@@ -1472,6 +1447,9 @@ class DB(object):
                 'tx_pos': tx_pos,
             }
 
+        return await run_in_thread(get_current_info)
+
+    async def get_frozen_status_of_restricted_history(self, asset: bytes):
         def get_frozen_history():
             ret = {}
             prefix = b'f' + bytes([len(asset)]) + asset
@@ -1495,15 +1473,8 @@ class DB(object):
                     }
             return ret
 
-        def calc_ret():
-            ret = {
-                'current': get_current_info(),
-            }
-            if get_history:
-                ret['history'] = get_frozen_history()
-            return ret
+        return await run_in_thread(get_frozen_history)
 
-        return await run_in_thread(calc_ret)
 
     async def lookup_messages(self, asset_name: bytes):
         def read_messages():

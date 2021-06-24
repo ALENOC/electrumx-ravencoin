@@ -916,6 +916,13 @@ class SessionBase(RPCSession):
         return await coro
 
 
+def check_asset_len(name):
+    if len(name) > 32:
+        raise RPCError(
+            BAD_REQUEST, f'asset name greater than 32 characters'
+        ) from None
+
+
 class ElectrumX(SessionBase):
     '''A TCP server that handles incoming Electrum connections.'''
 
@@ -1485,102 +1492,133 @@ class ElectrumX(SessionBase):
             return hash_to_hex_str(tx_hash)
 
     async def asset_get_meta(self, name):
-        if len(name) > 32:
-            raise RPCError(
-                BAD_REQUEST, f'asset name greater than 32 characters'
-            ) from None
         self.bump_cost(1.0)
         return await self.db.lookup_asset_meta(name.encode('ascii'))
 
     async def get_messages(self, name):
-        if len(name) > 32:
-            raise RPCError(
-                BAD_REQUEST, f'asset name greater than 32 characters'
-            ) from None
+        check_asset_len(name)
         ret = await self.db.lookup_messages(name.encode('ascii'))
         self.bump_cost(1.0 + len(ret) / 50)
         return ret
 
     async def is_qualified(self, h160: str, asset: str):
-        if len(asset) > 32:
-            raise RPCError(
-                BAD_REQUEST, f'asset name greater than 32 characters'
-            ) from None
+        check_asset_len(asset)
         self.bump_cost(1.0)
         return await self.db.is_qualified(asset.encode('ascii'), bytes.fromhex(h160))
 
-    async def get_restricted_associations(self, asset: str, history: bool):
-        if len(asset) > 32:
-            raise RPCError(
-                BAD_REQUEST, f'asset name greater than 32 characters'
-            ) from None
+    async def get_restricted_associations_current(self, asset: str):
+        check_asset_len(asset)
 
-        ret = await self.db.get_associations_for_restricted(asset.encode('ascii'), history)
+        ret = await self.db.get_associations_for_restricted_current(asset.encode('ascii'))
 
         if not ret:
             self.bump_cost(1.0)
             return ret
-        cost = 1.0 + len(ret['current']) / 50
-        if history:
-            cost += len(ret['history']) / 50
+        cost = 1.0 + len(ret) / 50
         self.bump_cost(cost)
         return ret
 
-    async def get_qualifier_associations(self, asset: str, history: bool):
-        if len(asset) > 32:
-            raise RPCError(
-                BAD_REQUEST, f'asset name greater than 32 characters'
-            ) from None
+    async def get_restricted_associations_history(self, asset: str):
+        check_asset_len(asset)
 
-        ret = await self.db.get_associations_for_qualifier(asset.encode('ascii'), history)
+        ret = await self.db.get_associations_for_restricted_history(asset.encode('ascii'))
 
         if not ret:
             self.bump_cost(1.0)
             return ret
-        cost = 1.0 + len(ret['current']) / 50
-        if history:
-            cost += len(ret['history']) / 50
+        cost = 1.0 + len(ret) / 50
         self.bump_cost(cost)
         return ret
 
-    async def get_tags_for_h160(self, h160: str, history: bool):
-        ret = await self.db.get_tags_associated_with_h160(bytes.fromhex(h160), history)
+    async def get_qualifier_associations_current(self, asset: str):
+        check_asset_len(asset)
+
+        ret = await self.db.get_associations_for_qualifier_current(asset.encode('ascii'))
+
         if not ret:
             self.bump_cost(1.0)
             return ret
-        cost = 1.0 + len(ret['current']) / 50
-        if history:
-            cost += len(ret['history']) / 50
+        cost = 1.0 + len(ret) / 50
         self.bump_cost(cost)
         return ret
 
-    async def get_h160_for_asset(self, asset: str, history: bool):
-        if len(asset) > 32:
-            raise RPCError(
-                BAD_REQUEST, f'asset name greater than 32 characters'
-            ) from None
-        ret = await self.db.get_h160s_associated_with_asset(asset.encode('ascii'), history)
+    async def get_qualifier_associations_history(self, asset: str):
+        check_asset_len(asset)
+
+        ret = await self.db.get_associations_for_qualifier_history(asset.encode('ascii'))
+
         if not ret:
             self.bump_cost(1.0)
             return ret
-        cost = 1.0 + len(ret['current']) / 50
-        if history:
-            cost += len(ret['history']) / 50
+        cost = 1.0 + len(ret) / 50
         self.bump_cost(cost)
         return ret
 
-    async def frozen_status(self, asset: str, history: bool):
-        if len(asset) > 32:
-            raise RPCError(
-                BAD_REQUEST, f'asset name greater than 32 characters'
-            ) from None
-        ret = await self.db.get_frozen_status_of_restricted(asset.encode('ascii'), history)
+    async def get_tags_for_h160_current(self, h160: str):
+        ret = await self.db.get_tags_associated_with_h160_current(bytes.fromhex(h160))
+
         if not ret:
             self.bump_cost(1.0)
             return ret
-        cost = 1.0 + len(ret['current']) / 50
-        if history:
-            cost += len(ret['history']) / 50
+        cost = 1.0 + len(ret) / 50
+        self.bump_cost(cost)
+        return ret
+
+    async def get_tags_for_h160_history(self, h160: str):
+        ret = await self.db.get_tags_associated_with_h160_history(bytes.fromhex(h160))
+
+        if not ret:
+            self.bump_cost(1.0)
+            return ret
+        cost = 1.0 + len(ret) / 50
+        self.bump_cost(cost)
+        return ret
+
+    async def get_h160_for_asset_current(self, asset: str):
+        check_asset_len(asset)
+
+        ret = await self.db.get_h160s_associated_with_asset_current(asset.encode('ascii'))
+
+        if not ret:
+            self.bump_cost(1.0)
+            return ret
+        cost = 1.0 + len(ret) / 50
+        self.bump_cost(cost)
+        return ret
+
+    async def get_h160_for_asset_history(self, asset: str):
+        check_asset_len(asset)
+
+        ret = await self.db.get_h160s_associated_with_asset_history(asset.encode('ascii'))
+
+        if not ret:
+            self.bump_cost(1.0)
+            return ret
+        cost = 1.0 + len(ret) / 50
+        self.bump_cost(cost)
+        return ret
+
+    async def frozen_status_current(self, asset: str):
+        check_asset_len(asset)
+
+        ret = await self.db.get_frozen_status_of_restricted_current(asset.encode('ascii'))
+
+        if not ret:
+            self.bump_cost(1.0)
+            return ret
+        cost = 1.0 + len(ret) / 50
+        self.bump_cost(cost)
+        return ret
+
+    async def frozen_status_history(self, asset: str):
+        check_asset_len(asset)
+
+        ret = await self.db.get_frozen_status_of_restricted_history(asset.encode('ascii'))
+
+        if not ret:
+            self.bump_cost(1.0)
+            return ret
+        cost = 1.0 + len(ret) / 50
         self.bump_cost(cost)
         return ret
 
@@ -1628,11 +1666,16 @@ class ElectrumX(SessionBase):
 
         if ptuple >= (1, 9):
             handlers['blockchain.asset.is_qualified'] = self.is_qualified
-            handlers['blockchain.asset.get_restricted_associations'] = self.get_restricted_associations
-            handlers['blockchain.asset.get_qualifier_associations'] = self.get_qualifier_associations
-            handlers['blockchain.asset.get_tags_for_h160'] = self.get_tags_for_h160
-            handlers['blockchain.asset.get_h160_for_asset'] = self.get_h160_for_asset
-            handlers['blockchain.asset.frozen_status'] = self.frozen_status
+            handlers['blockchain.asset.get_restricted_associations_current'] = self.get_restricted_associations_current
+            handlers['blockchain.asset.get_restricted_associations_history'] = self.get_restricted_associations_history
+            handlers['blockchain.asset.get_qualifier_associations_current'] = self.get_qualifier_associations_current
+            handlers['blockchain.asset.get_qualifier_associations_history'] = self.get_qualifier_associations_history
+            handlers['blockchain.asset.get_tags_for_h160_current'] = self.get_tags_for_h160_current
+            handlers['blockchain.asset.get_tags_for_h160_history'] = self.get_tags_for_h160_history
+            handlers['blockchain.asset.get_h160_for_asset_current'] = self.get_h160_for_asset_current
+            handlers['blockchain.asset.get_h160_for_asset_history'] = self.get_h160_for_asset_history
+            handlers['blockchain.asset.frozen_status_current'] = self.frozen_status_current
+            handlers['blockchain.asset.frozen_status_history'] = self.frozen_status_history
             handlers['blockchain.asset.get_messages'] = self.get_messages
 
         self.request_handlers = handlers
