@@ -913,7 +913,7 @@ class BlockProcessor:
                         put_asset(tx_hash + to_le_uint32(idx),
                                   hashX + tx_numb + to_le_uint64(100_000_000) +
                                   asset_name_len + asset_name)
-                        put_asset_data_new(asset_name, b'\0\0\0' + to_le_uint32(idx) + tx_numb + b'\0')
+                        put_asset_data_new(asset_name, to_le_uint64(100_000_000) + b'\0\0\0' + to_le_uint32(idx) + tx_numb + b'\0')
                         asset_meta_undo_info_append(  # Set previous meta to null in case of roll back
                             asset_name_len + asset_name + b'\0')
                     else:  # Not an owner asset; has a sat amount
@@ -929,7 +929,7 @@ class BlockProcessor:
                             asset_data += to_le_uint32(idx) + tx_numb + b'\0'
 
                             # Put DB functions at the end to prevent them from pushing before any errors
-                            put_asset_data_new(asset_name, asset_data)  # Add meta for this asset
+                            put_asset_data_new(asset_name, sats + asset_data)  # Add meta for this asset
                             asset_meta_undo_info_append(  # Set previous meta to null in case of roll back
                                 asset_name_len + asset_name + b'\0')
                             put_asset(tx_hash + to_le_uint32(idx),
@@ -949,8 +949,13 @@ class BlockProcessor:
 
                             asset_data = b''
 
+                            old_sats = int.from_bytes(old_data[:8], 'little')
+                            new_sats = int.from_bytes(sats, 'little')
+
+                            total_sats = old_sats + new_sats
+
                             if divisions == b'\xff':  # Unchanged division amount
-                                asset_data += old_data[0].to_bytes(1, 'big')
+                                asset_data += old_data[8].to_bytes(1, 'big')
                             else:
                                 asset_data += divisions
 
@@ -977,9 +982,10 @@ class BlockProcessor:
                                 asset_data += b'\0'
 
                             # Put DB functions at the end to prevent them from pushing before any errors
-                            if asset_name[-1] != b'!'[0]:  # Not an ownership asset; send updated meta to clients
-                                self.asset_touched.update(asset_name)
-                            put_asset_data_reissued(asset_name, asset_data)
+
+                            self.asset_touched.update(asset_name)
+
+                            put_asset_data_reissued(asset_name, total_sats.to_bytes(8, 'little', signed=False) + asset_data)
                             asset_meta_undo_info_append(
                                 asset_name_len + asset_name +
                                 bytes([len(old_data)]) + old_data)
@@ -993,19 +999,22 @@ class BlockProcessor:
                                       asset_name_len + asset_name)
 
                             if not asset_deserializer.is_finished():
-                                if second_loop:
-                                    if asset_deserializer.cursor + 34 <= asset_deserializer.length:
+                                if hashX in hashXs:  # This hashX was also in the inputs; we are sending to ourself; this is a broadcast
+                                    if second_loop:
+                                        if asset_deserializer.cursor + 34 <= asset_deserializer.length:
+                                            data = asset_deserializer.read_bytes(34)
+                                            # This is a message broadcast
+                                            put_asset_broadcast(
+                                                asset_name_len + asset_name + to_le_uint32(idx) + tx_numb, data)
+                                            asset_broadcast_undo_info.append(
+                                                asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
+                                    else:
                                         data = asset_deserializer.read_bytes(34)
                                         # This is a message broadcast
-                                        put_asset_broadcast(asset_name_len + asset_name + to_le_uint32(idx) + tx_numb, data)
+                                        put_asset_broadcast(asset_name_len + asset_name + to_le_uint32(idx) + tx_numb,
+                                                            data)
                                         asset_broadcast_undo_info.append(
                                             asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
-                                else:
-                                    data = asset_deserializer.read_bytes(34)
-                                    # This is a message broadcast
-                                    put_asset_broadcast(asset_name_len + asset_name + to_le_uint32(idx) + tx_numb, data)
-                                    asset_broadcast_undo_info.append(
-                                        asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
                         else:
                             raise Exception('Unknown asset type: {}'.format(script_type))
 

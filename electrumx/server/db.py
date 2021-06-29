@@ -1475,7 +1475,6 @@ class DB(object):
 
         return await run_in_thread(get_frozen_history)
 
-
     async def lookup_messages(self, asset_name: bytes):
         def read_messages():
             prefix = b'b' + bytes([len(asset_name)]) + asset_name
@@ -1498,10 +1497,12 @@ class DB(object):
             if not b:
                 return {}
             data_parser = util.DataParser(b)
+            sats_in_circulation = data_parser.read_bytes(8)
             div_amt = data_parser.read_int()
             reissuable = data_parser.read_int()
             has_ipfs = data_parser.read_int()
             to_ret = {
+                'sats_in_circulation': int.from_bytes(sats_in_circulation, 'little', signed=False),
                 'divisions': div_amt,
                 'reissuable': reissuable,
                 'has_ipfs': has_ipfs
