@@ -1495,6 +1495,12 @@ class ElectrumX(SessionBase):
         self.bump_cost(1.0)
         return await self.db.lookup_asset_meta(name.encode('ascii'))
 
+    async def get_assets_with_prefix(self, prefix):
+        check_asset_len(prefix)
+        ret = await self.db.get_assets_with_prefix(prefix.encode('ascii'))
+        self.bump_cost(1.0 + len(ret) / 100)
+        return ret
+
     async def get_messages(self, name):
         check_asset_len(name)
         ret = await self.db.lookup_messages(name.encode('ascii'))
@@ -1676,7 +1682,8 @@ class ElectrumX(SessionBase):
             handlers['blockchain.asset.get_h160_for_asset_history'] = self.get_h160_for_asset_history
             handlers['blockchain.asset.frozen_status_current'] = self.frozen_status_current
             handlers['blockchain.asset.frozen_status_history'] = self.frozen_status_history
-            handlers['blockchain.asset.get_messages'] = self.get_messages
+            handlers['blockchain.asset.broadcasts'] = self.get_messages
+            handlers['blockchain.asset.get_assets_with_prefix'] = self.get_assets_with_prefix
 
         self.request_handlers = handlers
 

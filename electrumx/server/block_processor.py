@@ -999,7 +999,7 @@ class BlockProcessor:
                                       asset_name_len + asset_name)
 
                             if not asset_deserializer.is_finished():
-                                if hashX in hashXs:  # This hashX was also in the inputs; we are sending to ourself; this is a broadcast
+                                if b'~' in asset_name and hashX in hashXs:  # This hashX was also in the inputs; we are sending to ourself; this is a broadcast
                                     if second_loop:
                                         if asset_deserializer.cursor + 34 <= asset_deserializer.length:
                                             data = asset_deserializer.read_bytes(34)
