@@ -1641,6 +1641,10 @@ class ElectrumX(SessionBase):
             'bandwith_cost_per_byte': self.bw_cost_per_byte,
             'sleep': self.cost_sleep,
             'concurrent_requests': self._incoming_concurrency.max_concurrent,
+            'send_size': self.send_size,
+            'send_count': self.send_count,
+            'receive_size': self.recv_size,
+            'receive_count': self.recv_count
         }
 
     def set_request_handlers(self, ptuple):
