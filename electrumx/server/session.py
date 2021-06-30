@@ -1632,6 +1632,16 @@ class ElectrumX(SessionBase):
         self.bump_cost(1.0)
         return []
 
+    async def get_session_stats(self):
+        return {
+            'our_cost': self.cost,
+            'hard_limit': self.cost_hard_limit,
+            'soft_limit': self.cost_soft_limit,
+            'cost_decay_per_sec': self.cost_decay_per_sec,
+            'bandwith_cost_per_byte': self.bw_cost_per_byte,
+            'sleep': self.cost_sleep
+        }
+
     def set_request_handlers(self, ptuple):
         self.protocol_tuple = ptuple
 
@@ -1659,6 +1669,10 @@ class ElectrumX(SessionBase):
             'server.ping': self.ping,
             'server.version': self.server_version,
         }
+
+        # TESTING
+        handlers['server.our_stats'] = self.get_session_stats
+        # END TESTING
 
         if ptuple >= (1, 4, 2):
             handlers['blockchain.scripthash.unsubscribe'] = self.scripthash_unsubscribe
