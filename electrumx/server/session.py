@@ -1639,7 +1639,8 @@ class ElectrumX(SessionBase):
             'soft_limit': self.cost_soft_limit,
             'cost_decay_per_sec': self.cost_decay_per_sec,
             'bandwith_cost_per_byte': self.bw_cost_per_byte,
-            'sleep': self.cost_sleep
+            'sleep': self.cost_sleep,
+            'concurrent_requests': self._incoming_concurrency.max_concurrent,
         }
 
     def set_request_handlers(self, ptuple):
