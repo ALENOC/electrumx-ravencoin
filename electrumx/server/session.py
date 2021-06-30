@@ -1007,13 +1007,11 @@ class ElectrumX(SessionBase):
         '''Notify the client about changes to touched addresses (from mempool
         updates or new blocks) and height.
         '''
-        print('\nNOTIFYING {}\n'.format(assets))
         if height_changed and self.subscribe_headers:
             args = (await self.subscribe_headers_result(), )
             await self.send_notification('blockchain.headers.subscribe', args)
 
         touched_assets = assets.intersection(self.asset_subs)
-        print('\nTOUCHED {}\nFROM{}\n'.format(touched_assets, self.asset_subs))
         if touched_assets:
             method = 'blockchain.asset.subscribe'
             for asset in touched_assets:
@@ -1173,8 +1171,7 @@ class ElectrumX(SessionBase):
                 BAD_REQUEST, f'asset name greater than 31 characters'
             ) from None
         result = await self.asset_status(asset)
-        print('\nUPDATING ASSET SUBS WITH {}\n'.format(asset))
-        self.asset_subs.update(asset)
+        self.asset_subs.add(asset)
         return result
 
     async def asset_unsubscribe(self, asset):
@@ -1182,7 +1179,6 @@ class ElectrumX(SessionBase):
             raise RPCError(
                 BAD_REQUEST, f'asset name greater than 31 characters'
             ) from None
-        print('\nASSET UNSUBSCRIBE {} (WE DONT WANT THIS!)\n'.format(asset))
         return self.asset_subs.discard(asset) is not None
 
     async def get_balance(self, hashX):
