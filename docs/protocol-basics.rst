@@ -171,25 +171,27 @@ Asset Status
 
 To calculate the `status` of an asset:
 
-1. Convert the number of divisions into a string (e.g. 1 -> "1")
+1. Convert the number of satoshis in circulation into a string (e.g. 100,000,000 -> "100000000")
 
-2. Convert the reissuability of an asset into a string. The boolean
+2. Convert the number of divisions into a string (e.g. 1 -> "1")
+
+3. Convert the reissuability of an asset into a string. The boolean
 types match as follows: true -> "True", false -> "False" (The default
 python implementation)
 
-3. Convert the boolean value of whether an asset has associated ipfs
+4. Convert the boolean value of whether an asset has associated ipfs
 data into string form.
 
-4. Concatenate these strings (e.g. "0FalseTrue")
+5. Concatenate these strings (e.g. "1000000001FalseTrue")
 
-5. If an asset has an associated ipfs hash, append this as-is.
-(e.g. "0FalseTrueQmeGgd16sWq6TNfXy8xzwQWRhv1vZUjP1LBxVnfaHaoV25")
+6. If an asset has an associated ipfs hash, append this as-is.
+(e.g. "1000000001FalseTrueQmeGgd16sWq6TNfXy8xzwQWRhv1vZUjP1LBxVnfaHaoV25")
 otherwise, do nothing.
-(e.g. "0FalseFalse")
+(e.g. "1000000001FalseFalse")
 
-6. Convert this string into a byte array of respective ascii values.
+7. Convert this string into a byte array of respective ascii values.
 
-7. The `status` of the asset is the :func:`sha256` hash of this byte array
+8. The `status` of the asset is the :func:`sha256` hash of this byte array
 expressed as a hexadecimal string, or :const:`null` if the
 asset does not exist.
 

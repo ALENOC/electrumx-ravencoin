@@ -110,6 +110,7 @@ Return metadata associated with a certain asset.
 **Signature**
 
   .. function:: blockchain.asset.get_meta(asset)
+  .. versionchanged:: 1.9
   .. versionadded:: 1.8
 
   *asset*
@@ -119,6 +120,11 @@ Return metadata associated with a certain asset.
 **Result**
 
   Each result is a dictionary with the following keys:
+
+  * *sats_in_circulation*
+
+    A number from 1-21,000,000,000*100,000,000.
+    The number of this asset currently in circulation. (The total number of this asset created.)
 
   * *divisions*
 
@@ -142,15 +148,36 @@ Return metadata associated with a certain asset.
     Only if *has_ipfs* is 1.
     The base58 encoded IPFS hash associated with this asset.
 
+  * *source*
+
+    The source of this metadata on-chain.
+
+  * *source_prev*
+
+    The previous source of this metadata on-chain. (Only if this asset has been reissued with an divisions value of 0xFF.)
+
 **Result Example**
 
 ::
 
   {
+    "sats_in_circulation": 100000000,
     "divisions": 0,
     "has_ipfs": 1,
     "ipfs": "QmeGgd16sWq6TNfXy8xzwQWRhv1vZUjP1LBxVnfaHaoV25",
-    "reissuable": 0
+    "reissuable": 0,
+    "source":
+        {
+        "tx_hash": "9f2c45a12db0144909b5db269415f7319179105982ac70ed80d76ea79d923ebf",
+        "tx_pos": 0,
+        "height": 203500
+        },
+    "source_prev":
+        {
+        "tx_hash": "2c9f45a12db0144909b5db269415f7319179105982ac70ed80d76ea79d92bf3e",
+        "tx_pos": 1,
+        "height": 104501
+        }
   }
 
 .. _subscribed:
