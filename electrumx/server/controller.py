@@ -54,7 +54,7 @@ class Notifications(object):
             del tmp[old]
         for old in [h for h in tbp if h <= height]:
             touched.update(tbp.pop(old))
-        assets = tassets.pop(height)
+        assets = set()
         for old in [h for h in tassets if h <= height]:
             assets.update(tassets.pop(old))
         await self.notify(height, touched, assets)
