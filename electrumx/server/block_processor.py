@@ -984,7 +984,6 @@ class BlockProcessor:
                             # Put DB functions at the end to prevent them from pushing before any errors
 
                             self.asset_touched.add(asset_name.decode('ascii'))
-                            print('\nTOUCHING {}\n'.format(asset_name.decode('ascii')))
 
                             put_asset_data_reissued(asset_name, total_sats.to_bytes(8, 'little', signed=False) + asset_data)
                             asset_meta_undo_info_append(
