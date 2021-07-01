@@ -1011,7 +1011,9 @@ class ElectrumX(SessionBase):
             args = (await self.subscribe_headers_result(), )
             await self.send_notification('blockchain.headers.subscribe', args)
 
+        print('\nNOTIFIED OF {}\n'.format(assets))
         touched_assets = assets.intersection(self.asset_subs)
+        print('\nGOT {} FROM {}\n'.format(touched_assets, self.asset_subs))
         if touched_assets:
             method = 'blockchain.asset.subscribe'
             for asset in touched_assets:
@@ -1072,14 +1074,14 @@ class ElectrumX(SessionBase):
     async def asset_status(self, asset):
         asset_data = await self.session_mgr.db.lookup_asset_meta(asset.encode('ascii'))
         self.bump_cost(0.1 + len(asset_data) * 0.00002)
-
+        ptuple = self.protocol_tuple
         if asset_data:
-            sats = asset_data['sats_in_circulation']
+            sats = str(asset_data['sats_in_circulation']) if ptuple >= (1, 9) else ''
             div_amt = asset_data['divisions']
             reissuable = False if asset_data['reissuable'] == 0 else True
             has_ipfs = False if asset_data['has_ipfs'] == 0 else True
 
-            h = ''.join([str(sats), str(div_amt), str(reissuable), str(has_ipfs)])
+            h = ''.join([sats, str(div_amt), str(reissuable), str(has_ipfs)])
             if has_ipfs:
                 h += asset_data['ipfs']
 
