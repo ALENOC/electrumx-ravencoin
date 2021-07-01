@@ -57,6 +57,7 @@ class Notifications(object):
         assets = set()
         for old in [h for h in tassets if h <= height]:
             assets.update(tassets.pop(old))
+        print('\nNOTIFYING OF {}\n'.format(assets))
         await self.notify(height, touched, assets)
 
     async def notify(self, height, touched, assets):
@@ -75,6 +76,7 @@ class Notifications(object):
     async def on_block(self, touched, height, reissued):
         self._touched_bp[height] = touched
         self._reissued_assets[height] = reissued
+        print('\nUPDATED {} WITH {}\n'.format(height, reissued))
         self._highest_block = height
         await self._maybe_notify()
 
