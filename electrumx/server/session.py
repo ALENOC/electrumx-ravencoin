@@ -1074,11 +1074,12 @@ class ElectrumX(SessionBase):
         self.bump_cost(0.1 + len(asset_data) * 0.00002)
 
         if asset_data:
+            sats = asset_data['sats_in_circulation']
             div_amt = asset_data['divisions']
             reissuable = False if asset_data['reissuable'] == 0 else True
             has_ipfs = False if asset_data['has_ipfs'] == 0 else True
 
-            h = ''.join([str(div_amt), str(reissuable), str(has_ipfs)])
+            h = ''.join([str(sats), str(div_amt), str(reissuable), str(has_ipfs)])
             if has_ipfs:
                 h += asset_data['ipfs']
 
