@@ -39,7 +39,8 @@ class Notifications(object):
 
     async def _maybe_notify(self):
         tmp, tbp, tassets = self._touched_mp, self._touched_bp, self._reissued_assets
-        common = set(tmp).intersection(tbp).intersection(tassets)
+        print('\nREISSUED: {}\n'.format(tassets))
+        common = set(tmp).intersection(tbp)
         if common:
             height = max(common)
         elif tmp and max(tmp) == self._highest_block:
@@ -48,15 +49,13 @@ class Notifications(object):
             # Either we are processing a block and waiting for it to
             # come in, or we have not yet had a mempool update for the
             # new block height
-            print('\nRETURNING EARLY\n')
             return
-        print('\nCOMMON: {}\n'.format(common))
         touched = tmp.pop(height)
         for old in [h for h in tmp if h <= height]:
             del tmp[old]
         for old in [h for h in tbp if h <= height]:
             touched.update(tbp.pop(old))
-        assets = set()
+        assets = tassets.pop(height)
         for old in [h for h in tassets if h <= height]:
             assets.update(tassets.pop(old))
         print('\nNOTIFYING OF {}\n'.format(assets))
