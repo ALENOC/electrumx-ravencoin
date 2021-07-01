@@ -39,7 +39,6 @@ class Notifications(object):
 
     async def _maybe_notify(self):
         tmp, tbp, tassets = self._touched_mp, self._touched_bp, self._reissued_assets
-        print('\nREISSUED: {}\n'.format(tassets))
         common = set(tmp).intersection(tbp)
         if common:
             height = max(common)
@@ -58,7 +57,6 @@ class Notifications(object):
         assets = tassets.pop(height)
         for old in [h for h in tassets if h <= height]:
             assets.update(tassets.pop(old))
-        print('\nNOTIFYING OF {}\n'.format(assets))
         await self.notify(height, touched, assets)
 
     async def notify(self, height, touched, assets):
@@ -71,13 +69,11 @@ class Notifications(object):
 
     async def on_mempool(self, touched, height):
         self._touched_mp[height] = touched
-        self._reissued_assets[height] = set()
         await self._maybe_notify()
 
     async def on_block(self, touched, height, reissued):
         self._touched_bp[height] = touched
         self._reissued_assets[height] = reissued
-        print('\nUPDATED {} WITH {}\n'.format(height, reissued))
         self._highest_block = height
         await self._maybe_notify()
 

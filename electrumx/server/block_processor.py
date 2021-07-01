@@ -559,7 +559,6 @@ class BlockProcessor:
                 await self.flush(flush_arg)
 
         if self._caught_up_event.is_set():
-            print('\nON BLOCK {}\n'.format(self.asset_touched))
             await self.notifications.on_block(self.touched, self.height, self.asset_touched)
 
         self.touched = set()
