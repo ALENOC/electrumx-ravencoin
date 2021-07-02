@@ -39,7 +39,6 @@ class Notifications(object):
 
     async def _maybe_notify(self):
         tmp, tbp, tassets = self._touched_mp, self._touched_bp, self._reissued_assets
-        print('\nREISSUED ASSETS: {}\n'.format(tassets))
         common = set(tmp).intersection(tbp)
         if common:
             height = max(common)
@@ -58,7 +57,6 @@ class Notifications(object):
         assets = set()
         for old in [h for h in tassets if h <= height]:
             assets.update(tassets.pop(old))
-        print('\nNOTIFYING: {}\n'.format(assets))
         await self.notify(height, touched, assets)
 
     async def notify(self, height, touched, assets):

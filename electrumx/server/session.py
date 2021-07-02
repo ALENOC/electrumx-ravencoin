@@ -1015,7 +1015,7 @@ class ElectrumX(SessionBase):
         if touched_assets:
             method = 'blockchain.asset.subscribe'
             for asset in touched_assets:
-                status = self.asset_status(asset)
+                status = await self.asset_status(asset)
                 await self.send_notification(method, (asset, status))
             es = '' if len(touched_assets) == 1 else 's'
             self.logger.info(f'notified of {len(touched_assets):,d} reissued asset{es}')
