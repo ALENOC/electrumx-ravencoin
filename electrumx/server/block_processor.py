@@ -935,6 +935,7 @@ class BlockProcessor:
                             put_asset(tx_hash + to_le_uint32(idx),
                                       hashX + tx_numb + sats +
                                       asset_name_len + asset_name)
+                            self.asset_touched.add(asset_name.decode('ascii'))
                         elif script_type == b'r':  # An asset re-issuance
                             divisions = asset_deserializer.read_byte()
                             reissuable = asset_deserializer.read_byte()
