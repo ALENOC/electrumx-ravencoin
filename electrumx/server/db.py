@@ -1493,7 +1493,7 @@ class DB(object):
 
     async def get_assets_with_prefix(self, prefix: bytes):
         def find_assets():
-            return [asset.encode('ascii') for asset, _ in self.asset_info_db.iterator(prefix=prefix)]
+            return [asset.decode('ascii') for asset, _ in self.asset_info_db.iterator(prefix=prefix)]
         return await run_in_thread(find_assets)
 
     async def lookup_asset_meta(self, asset_name):
