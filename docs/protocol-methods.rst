@@ -150,7 +150,7 @@ Return the history of qualifier associations with a given restricted asset.
 
 **Signature**
 
-  .. function:: get_restricted_associations_history(asset)
+  .. function:: blockchain.asset.get_restricted_associations_history(asset)
   .. versionadded:: 1.9
 
   *asset*
@@ -204,6 +204,289 @@ Return the history of qualifier associations with a given restricted asset.
         ],
         "res_tx_pos": 4
       }
+    }
+  }
+
+blockchain.asset.get_qualifier_associations_current
+=======================================
+
+Return the current restricted associations of a given qualifying asset.
+
+**Signature**
+
+  .. function:: blockchain.asset.get_qualifier_associations_current(asset)
+  .. versionadded:: 1.9
+
+  *asset*
+
+    The qualifying asset to check
+
+**Result**
+
+  A dictionary of dictionaries. Each key is a qualifying asset. Each value
+  is a dictionary containing: associated; whether or not this qualified
+  asset is currently associated with this restricted asset, height; the height
+  of this association (or disassociation), txid; the transaction in which this
+  association is declared, res_tx_pos; the location in the transaction where
+  the restricted asset is declared, qual_tx_pos; the location in the transaction
+  where this qualifier was associated (or replaced).
+
+**Result Example**
+
+::
+
+  {
+    "$COIN": {
+        "associated": true,
+        "height": 732457,
+        "qual_tx_pos": 0,
+        "res_tx_pos": 4,
+        "txid": "b3136ee457115bf5edbd45149820d226ece79b2406055f0e11c39885b8394f0d"
+    }
+  }
+
+blockchain.asset.get_qualifier_associations_history
+=======================================
+
+Return the history of qualifier associations with a given restricted asset.
+
+**Signature**
+
+  .. function:: blockchain.asset.get_qualifier_associations_history(asset)
+  .. versionadded:: 1.9
+
+  *asset*
+
+    The qualified asset to check
+
+**Result**
+
+  A 3-tiered dictionary. Each first layer key is a block height, each second layer
+  key is a txid of whose values are: associations; a list of qualifiers that are being
+  associated with this restricted asset in this transaction, removes; a list of qualifiers
+  that are being replaced, res_tx_pos; the location in the transaction where
+  the restricted asset is declared, qual_tx_pos; the location in the transaction
+  where this qualifier was associated (or replaced).
+
+**Result Example**
+
+::
+
+  {
+    "732457": {
+        "b3136ee457115bf5edbd45149820d226ece79b2406055f0e11c39885b8394f0d": {
+            "asset": "$COIN",
+            "associated": true,
+            "qual_tx_pos": 0,
+            "res_tx_pos": 4
+        }
+    }
+  }
+
+blockchain.asset.get_tags_for_h160_current
+=======================================
+
+Returns the current qualifications of a public key's hash160.
+
+**Signature**
+
+  .. function:: blockchain.asset.get_tags_for_h160_current(h160)
+  .. versionadded:: 1.9
+
+  *h160*
+
+    The public key's hash160 as a hex string.
+
+  *Result*
+
+    A dictionary. Each key is an asset name. Each value is a dictionary with
+    the values: flag; a boolean flag value, height; the height of this tag's
+    source, txid; the transaction id of this tag's source, tx_pos; the transaction
+    position of this tag's source. If the asset is a qualifier, a flag of True
+    means that this public key is qualified. If the asset is a restricted asset,
+    this public key is black-listed.
+
+  **Result Example**
+
+::
+
+  {
+    "#VERIFIER_ASSET": {
+      "flag": true,
+      "height": 732451,
+      "txid": "9fbed4700f72860ac06c566fe25bd8bc21df80301a4a94b69e25df51561e9153",
+      "tx_pos": 2
+    }
+  }
+
+blockchain.asset.get_tags_for_h160_history
+=======================================
+
+Returns a history of qualifications given a public key's hash160.
+
+**Signature**
+
+  .. function:: blockchain.asset.get_tags_for_h160_history(h160)
+  .. versionadded:: 1.9
+
+  *h160*
+
+    The public key's hash160 as a hex string.
+
+  *Result*
+
+    A 3-tiered dictionary. Each first layer key is a block height, each second layer
+    key is a txid of whose values are: flag; a boolean flag value, tx_pos; the transaction
+    position of this tag's source, tag; the name of the asset. If the asset is a qualifier,
+    a flag of True means that this public key is qualified. If the asset is a restricted asset,
+    this public key is black-listed.
+
+**Result Example**
+
+::
+
+  {
+    "732451": {
+        "9fbed4700f72860ac06c566fe25bd8bc21df80301a4a94b69e25df51561e9153": {
+            "flag": true,
+            "tag": "#VERIFIER_ASSET",
+            "tx_pos": 2
+        }
+    }
+  }
+
+blockchain.asset.get_h160_for_asset_current
+=======================================
+
+Returns the current qualification tags of hash160s given an asset.
+
+**Signature**
+
+  .. function:: blockchain.asset.get_h160_for_asset_current(asset)
+  .. versionadded:: 1.9
+
+  *asset*
+
+    A restricted or qualifying asset.
+
+  *Result*
+
+    A dictionary. Each key is a public key's hash160. Each value is a dictionary with
+    the values: flag; a boolean flag value, height; the height of this tag's
+    source, txid; the transaction id of this tag's source, tx_pos; the transaction
+    position of this tag's source. If the asset is a qualifier, a flag of True
+    means that this public key is qualified. If the asset is a restricted asset,
+    this public key is black-listed.
+
+  **Result Example**
+
+::
+
+  {
+    "82850d39419a91660f7e370ca3f5d17a6009307b": {
+        "flag": true,
+        "height": 732451,
+        "tx_pos": 2,
+        "txid": "9fbed4700f72860ac06c566fe25bd8bc21df80301a4a94b69e25df51561e9153"
+    }
+  }
+
+blockchain.asset.get_h160_for_asset_history
+=======================================
+
+Returns a history of qualifications given an asset.
+
+**Signature**
+
+  .. function:: blockchain.asset.get_h160_for_asset_history(asset)
+  .. versionadded:: 1.9
+
+  *asset*
+
+    A restricted or qualifying asset.
+
+  *Result*
+
+    A 3-tiered dictionary. Each first layer key is a block height, each second layer
+    key is a txid of whose values are: flag; a boolean flag value, tx_pos; the transaction
+    position of this tag's source, pubkey; the public key's hash160. If the asset is a qualifier,
+    a flag of True means that this public key is qualified. If the asset is a restricted asset,
+    this public key is black-listed.
+
+**Result Example**
+
+::
+
+  {
+    "732451": {
+        "9fbed4700f72860ac06c566fe25bd8bc21df80301a4a94b69e25df51561e9153": {
+            "flag": true,
+            "pubkey": "82850d39419a91660f7e370ca3f5d17a6009307b",
+            "tx_pos": 2
+        }
+    }
+  }
+
+blockchain.asset.frozen_status_current
+=======================================
+
+Returns the frozen status of a given restricted asset.
+
+**Signature**
+
+  .. function:: blockchain.asset.frozen_status_current(asset)
+  .. versionadded:: 1.9
+
+  *asset*
+
+    The restricted asset to check.
+
+**Result**
+
+  A dictionary containing the current frozen status, and its location
+  on-chain.
+
+**Result Example**
+
+::
+
+  {
+    "frozen": true,
+    "height": 762221,
+    "tx_pos": 1,
+    "txid": "dc883ce8c730c2f90097e86b41383192a8ba6a97ce44d0e3c0ba7665f9aad019"
+  }
+
+blockchain.asset.frozen_status_history
+=======================================
+
+Returns a history of freezes given a restricted asset.
+
+**Signature**
+
+  .. function:: blockchain.asset.frozen_status_current(asset)
+  .. versionadded:: 1.9
+
+  *asset*
+
+    A restricted asset.
+
+  *Result*
+
+    A 3-tiered dictionary. Each first layer key is a block height, each second layer
+    key is a txid of whose values are: flag; a boolean flag value, tx_pos; the position
+    in-transaction.
+
+**Result Example**
+
+::
+
+  {
+    "762221": {
+        "dc883ce8c730c2f90097e86b41383192a8ba6a97ce44d0e3c0ba7665f9aad019": {
+            "frozen": true,
+            "tx_pos": 1
+        }
     }
   }
 

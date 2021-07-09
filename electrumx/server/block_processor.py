@@ -916,6 +916,7 @@ class BlockProcessor:
                         put_asset_data_new(asset_name, to_le_uint64(100_000_000) + b'\0\0\0' + to_le_uint32(idx) + tx_numb + b'\0')
                         asset_meta_undo_info_append(  # Set previous meta to null in case of roll back
                             asset_name_len + asset_name + b'\0')
+                        self.asset_touched.add(asset_name.decode('ascii'))
                     else:  # Not an owner asset; has a sat amount
                         sats = asset_deserializer.read_bytes(8)
                         if script_type == b'q':  # A new asset issuance

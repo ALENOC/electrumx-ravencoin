@@ -1398,7 +1398,7 @@ class DB(object):
             return ret
         return await run_in_thread(get_current_info)
 
-    async def get_tags_associated_with_h160_current(self, h160: bytes):
+    async def get_tags_associated_with_h160_history(self, h160: bytes):
 
         def get_h160_history():
             ret = {}
