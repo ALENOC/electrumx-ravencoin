@@ -54,7 +54,7 @@ class History(object):
             self.db = None
 
     def read_state(self):
-        state = self.db.get(b'state\0\0')
+        state = self.db.get(b'state\0\0\0\0')
         if state:
             state = ast.literal_eval(state.decode())
             if not isinstance(state, dict):
@@ -117,7 +117,7 @@ class History(object):
         }
         # History entries are not prefixed; the suffix \0\0 ensures we
         # look similar to other entries and aren't interfered with
-        batch.put(b'state\0\0', repr(state).encode())
+        batch.put(b'state\0\0\0\0', repr(state).encode())
 
     def add_unflushed(self, hashXs_by_tx, first_tx_num):
         unflushed = self.unflushed
