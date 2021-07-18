@@ -348,7 +348,7 @@ class History(object):
 
     def _upgrade_db_1(self):
 
-        if self.db_version <= 1:
+        if self.db_version >= 1:
             return
 
         self.logger.info(f'history DB version: {self.db_version}')
@@ -391,7 +391,7 @@ class History(object):
 
     def _upgrade_db_2(self):
 
-        if self.db_version <= 2:
+        if self.db_version >= 2:
             return
 
         self.logger.info(f'history DB version: {self.db_version}')
