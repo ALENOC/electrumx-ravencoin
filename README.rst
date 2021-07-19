@@ -12,7 +12,7 @@ For a future network with bigger blocks.
 Documentation
 =============
 
-Requires `sudo apt-get install python3 python3-pip libleveldb-dev cmake`
+Requires `<sudo apt-get install python3 python3-pip libleveldb-dev cmake>`
 
 If you would like a guide on how to set up an Ravencoin Electrumx server
 for personal use or to add to the wider network, please read
