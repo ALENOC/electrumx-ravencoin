@@ -77,8 +77,6 @@ It is assumed that you have basic knowledge of editing files on Linux (vi, vim, 
 
 **sudo apt install python3-pip**
 
-`		`**sudo apt install virtualenv**
-
 **sudo apt install gcc** 
 
 **sudo apt install build-essential** 
