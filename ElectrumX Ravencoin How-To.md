@@ -121,7 +121,7 @@ COIN = Ravencoin
 
 SERVICES = ssl://:50002
 
-REPORT\_SERVICES = ssl://(your ip/domain here):50002 
+REPORT\_SERVICES = ssl://(your ip/domain here):50002 (Only if you wish to broadcast your server to the wider network)
 
 SSL\_CERTFILE = /home/electrumx/ssl\_cert/server.crt 
 
