@@ -21,6 +21,8 @@ HyperPeek#9099's document `Setting Up an Ravencoin Electrumx Server <https://git
 See `readthedocs <https://electrumx-ravencoin.readthedocs.io/>`_.
 
 
-**kralverde#0550** on discord  https://github.com/kralverde
+**kralverde#0550** on `discord`_  https://github.com/kralverde
 
 **Neil Booth**  kyuupichan@gmail.com  https://github.com/kyuupichan
+
+.. _discord: https://discord.gg/VuubYncHz4
