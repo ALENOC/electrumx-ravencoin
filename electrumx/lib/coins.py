@@ -239,7 +239,7 @@ class Ravencoin(Coin):
         'electrum1.rvn.rocks s50002',
         'electrum2.rvn.rocks s50002',
         'electrum3.rvn.rocks s50002',
-        '128.199.15.190 s50002',
+        'electrum.ravencoin.foundation s50002',
     ]
 
     @classmethod
@@ -301,5 +301,5 @@ class RavencoinTestnet(Ravencoin):
     REORG_LIMIT = 100
     PEERS = [
         "testnet.rvn.rocks s50002",
-        "128.199.15.190 s50012"
+        "electrum.ravencoin.foundation s50012"
     ]
