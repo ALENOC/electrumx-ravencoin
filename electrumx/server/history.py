@@ -17,13 +17,13 @@ from collections import defaultdict
 import electrumx.lib.util as util
 from electrumx.lib.hash import hash_to_hex_str, HASHX_LEN
 from electrumx.lib.util import (
-    pack_be_uint16, pack_be_uint32, pack_le_uint64, unpack_be_uint32_from, unpack_le_uint64,
+    pack_be_uint32, pack_le_uint64, unpack_be_uint32_from, unpack_le_uint64,
 )
 
 
 class History(object):
 
-    DB_VERSIONS = [0, 1, 2]
+    DB_VERSIONS = [0]
 
     def __init__(self):
         self.logger = util.class_logger(__name__, self.__class__.__name__)
@@ -343,92 +343,4 @@ class History(object):
     #
 
     def upgrade_db(self):
-        self._upgrade_db_1()
-        self._upgrade_db_2()
-
-    def _upgrade_db_1(self):
-
-        if self.db_version >= 1:
-            return
-
-        self.logger.info(f'history DB version: {self.db_version}')
-        self.logger.info('Upgrading your history DB; this can take some time...')
-
-        def upgrade_cursor(cursor):
-            count = 0
-            prefix = pack_be_uint16(cursor)
-            key_len = HASHX_LEN + 2
-            chunks = util.chunks
-            with self.db.write_batch() as batch:
-                batch_put = batch.put
-                for key, hist in self.db.iterator(prefix=prefix):
-                    # Ignore non-history entries
-                    if len(key) != key_len:
-                        continue
-                    count += 1
-                    hist = b''.join(item + b'\0' for item in chunks(hist, 4))
-                    batch_put(key, hist)
-                self.upgrade_cursor = cursor
-                self.write_state(batch)
-            return count
-
-        last = time.monotonic()
-        count = 0
-
-        for cursor in range(self.upgrade_cursor + 1, 65536):
-            count += upgrade_cursor(cursor)
-            now = time.monotonic()
-            if now > last + 10:
-                last = now
-                self.logger.info(f'DB 3 of 3: {count:,d} entries updated, '
-                                 f'{cursor * 100 / 65536:.1f}% complete')
-
-        self.db_version = 1
-        self.upgrade_cursor = -1
-        with self.db.write_batch() as batch:
-            self.write_state(batch)
-        self.logger.info('DB 3 of 3 upgraded successfully')
-
-    def _upgrade_db_2(self):
-
-        if self.db_version >= 2:
-            return
-
-        self.logger.info(f'history DB version: {self.db_version}')
-        self.logger.info('Upgrading your history DB; this can take some time...')
-
-        def upgrade_cursor(cursor):
-            count = 0
-            prefix = pack_be_uint16(cursor)
-            key_len = HASHX_LEN + 2
-            chunks = util.chunks
-            with self.db.write_batch() as batch:
-                batch_put = batch.put
-                for key, hist in self.db.iterator(prefix=prefix):
-                    # Ignore non-history entries
-                    if len(key) != key_len:
-                        continue
-                    count += 1
-                    hist = b''.join(item + b'\0' for item in chunks(hist, 4))
-                    # Append two bytes to the beginning to make be_uint32
-                    batch_put(b'\0\0' + key, hist)
-                self.upgrade_cursor = cursor
-                self.write_state(batch)
-            return count
-
-        last = time.monotonic()
-        count = 0
-
-        for cursor in range(self.upgrade_cursor + 1, 65536):
-            count += upgrade_cursor(cursor)
-            now = time.monotonic()
-            if now > last + 10:
-                last = now
-                self.logger.info(f'DB 3 of 3: {count:,d} entries updated, '
-                                 f'{cursor * 100 / 65536:.1f}% complete')
-
-        self.db_version = 2
-        self.upgrade_cursor = -1
-        with self.db.write_batch() as batch:
-            self.write_state(batch)
-        self.logger.info('DB 3 of 3 upgraded successfully')
+        pass
