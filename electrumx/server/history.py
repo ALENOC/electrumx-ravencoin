@@ -14,8 +14,9 @@ import bisect
 import time
 from collections import defaultdict
 
-import electrumx.lib.util as util
+from electrumx.lib import util
 from electrumx.lib.hash import hash_to_hex_str, HASHX_LEN
+
 from electrumx.lib.util import (
     pack_be_uint32, pack_le_uint64, unpack_be_uint32_from, unpack_le_uint64,
 )
