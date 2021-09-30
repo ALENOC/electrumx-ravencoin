@@ -142,19 +142,3 @@ Stopping the server with: **systemctl stop electrumx**
 The electrum server tends to eat up memory and CPU during the initial syncing. This is not a problem once the server has been synced.
 
 Once the electrumx database is fully synced (takes about 3-4h) the server will start servicing connections on port 50002, so you can try and connect your electrum-rvn wallet. Be aware that there can be significant data going out of the server, so make sure it is on an unlimited or large-enough data-plan or you regularly check the data usage.
-
-In case the server hangs with a message like “electrumx\_server[490]: struct.error: 'H' format requires 0 <= number <= 65535” or if you are running low on disk space, you can try to stop the server and compact the electrumx server’s history using the commands:
-
-
-**systemctl stop electrumx** 
-**export COIN=Ravencoin**
-
-**export DB\_DIRECTORY=/home/electrumx/electrumx\_db**
-
-**./electrumx/electrumx\_compact\_history**
-
-**systemctl start electrumx**
-
-
-After about 10-15 minutes the database should be compacted and fixed and you can restart the server.
-
