@@ -131,7 +131,7 @@ BANDWIDTH\_UNIT\_COST = 1000
 
 CACHE\_MB = {Defaults to 1200 MB in memory. You may decrease this if this number is too much}
 
-- See [HERE](https://electrumx-ravencoin.readthedocs.io/en/latest/environment.html) for a full list of environment variables. You should at least briefly look over this to see if you need to change anything for your server and what to change/add to the above step.
+- See [HERE](https://electrumx-ravencoin.readthedocs.io/en/latest/environment.html) for a full list of environment variables. You should at least briefly look over this to see if you need to change anything for your server and what to change/add to the above step (take a look at what the soft and hard limits do, you should probably change them for lower load).
 
 - Now double-check that the rvn node is running and up-to-date with the blocks:**./raven/bin/raven-cli getinfo** if that looks ok you can start the electrumx server: **systemctl start electrumx** 
 
