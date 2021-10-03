@@ -111,13 +111,13 @@ It is assumed that you have basic knowledge of editing files on Linux (vi, vim, 
 
 DB\_DIRECTORY = /home/electrumx/electrumx\_db 
 
-DAEMON\_URL = http://<rpcuser>:<rpcpwd>@localhost (user/pwd from rpc in raven.conf)
+DAEMON\_URL = http://\<rpcuser\>:\<rpcpwd\>@localhost (user/pwd from rpc in raven.conf)
 
 COIN = Ravencoin 
 
 SERVICES = ssl://:50002
 
-REPORT\_SERVICES = ssl://(your ip/domain here):50002 (Only if you wish to broadcast your server to the wider network)
+REPORT\_SERVICES = ssl://{your ip/domain here}:50002 (Only if you wish to broadcast your server to the wider network)
 
 SSL\_CERTFILE = /home/electrumx/ssl\_cert/server.crt 
 
