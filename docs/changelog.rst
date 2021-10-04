@@ -2,6 +2,11 @@
  ChangeLog
 ===========
 
+Version 1.19.2 RVN (4 OCT 2021)
+============================
+
+* Added Restricted Asset and Channel Asset support
+
 Version 1.18.1 RVN (14 May 2021)
 ============================
 

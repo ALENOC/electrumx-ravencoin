@@ -1531,13 +1531,17 @@ class ElectrumX(SessionBase):
             raise RPCError(BAD_REQUEST, '"asset" must be a string')
         if onlytotal not in (True, False):
             raise RPCError(BAD_REQUEST, '"onlytotal" must be a boolean')
-        if not isinstance(count, int) or count > 1000:
-            raise RPCError(BAD_REQUEST, '"count" must be an integer with a maximum value of 1000')
-        if not isinstance(start, int):
-            raise RPCError(BAD_REQUEST, '"start" must be an integer')
+        if not isinstance(count, int) or count > 1000 or count < 1:
+            raise RPCError(BAD_REQUEST, '"count" must be an integer with a maximum value of 1000 and a minimum value of 1')
+        if not isinstance(start, int) or start < 0:
+            raise RPCError(BAD_REQUEST, '"start" must be an integer and 0 or greater')
 
         ret = await self.daemon_request('listaddressesbyasset', asset, onlytotal, count, start)
-        c = len(ret)
+        if onlytotal:
+            ret = {'unique_addresses': ret}
+            c = 1
+        else:
+            c = len(ret)
         self.bump_cost(c * 1.5)
         return ret
 
