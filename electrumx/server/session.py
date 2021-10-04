@@ -1526,6 +1526,21 @@ class ElectrumX(SessionBase):
         self.bump_cost(1.0)
         return await self.daemon_request('getrawtransaction', tx_hash, verbose)
 
+    async def list_addresses_by_asset(self, asset: str, onlytotal=False, count=50000, start=0):
+        if not isinstance(asset, str):
+            raise RPCError(BAD_REQUEST, '"asset" must be a string')
+        if onlytotal not in (True, False):
+            raise RPCError(BAD_REQUEST, '"onlytotal" must be a boolean')
+        if not isinstance(count, int) or count > 1000:
+            raise RPCError(BAD_REQUEST, '"count" must be an integer with a maximum value of 1000')
+        if not isinstance(start, int):
+            raise RPCError(BAD_REQUEST, '"start" must be an integer')
+
+        ret = await self.daemon_request('listaddressesbyasset', asset, onlytotal, count, start)
+        c = len(ret)
+        self.bump_cost(c * 1.5)
+        return ret
+
     async def transaction_merkle(self, tx_hash, height):
         '''Return the merkle branch to a confirmed transaction given its hash
         and height.
@@ -1806,6 +1821,7 @@ class ElectrumX(SessionBase):
             handlers['blockchain.asset.frozen_status_history'] = self.frozen_status_history
             handlers['blockchain.asset.broadcasts'] = self.get_messages
             handlers['blockchain.asset.get_assets_with_prefix'] = self.get_assets_with_prefix
+            handlers['blockchain.asset.list_addresses_by_asset'] = self.list_addresses_by_asset
 
         self.request_handlers = handlers
 
