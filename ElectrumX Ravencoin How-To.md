@@ -111,13 +111,13 @@ It is assumed that you have basic knowledge of editing files on Linux (vi, vim, 
 
 DB\_DIRECTORY = /home/electrumx/electrumx\_db 
 
-DAEMON\_URL = http://<rpcuser>:<rpcpwd>@localhost (user/pwd from rpc in raven.conf)
+DAEMON\_URL = http://\<rpcuser\>:\<rpcpwd\>@localhost (user/pwd from rpc in raven.conf)
 
 COIN = Ravencoin 
 
 SERVICES = ssl://:50002
 
-REPORT\_SERVICES = ssl://(your ip/domain here):50002 (Only if you wish to broadcast your server to the wider network)
+REPORT\_SERVICES = ssl://{your ip/domain here}:50002 (Only if you wish to broadcast your server to the wider network)
 
 SSL\_CERTFILE = /home/electrumx/ssl\_cert/server.crt 
 
@@ -131,7 +131,7 @@ BANDWIDTH\_UNIT\_COST = 1000
 
 CACHE\_MB = {Defaults to 1200 MB in memory. You may decrease this if this number is too much}
 
-- See [HERE](https://electrumx-ravencoin.readthedocs.io/en/latest/environment.html) for a full list of environment variables. You should at least briefly look over this to see if you need to change anything for your server and what to change/add to the above step.
+- See [HERE](https://electrumx-ravencoin.readthedocs.io/en/latest/environment.html) for a full list of environment variables. You should at least briefly look over this to see if you need to change anything for your server and what to change/add to the above step (take a look at what the soft and hard limits do, you should probably change them for lower load).
 
 - Now double-check that the rvn node is running and up-to-date with the blocks:**./raven/bin/raven-cli getinfo** if that looks ok you can start the electrumx server: **systemctl start electrumx** 
 
@@ -142,19 +142,3 @@ Stopping the server with: **systemctl stop electrumx**
 The electrum server tends to eat up memory and CPU during the initial syncing. This is not a problem once the server has been synced.
 
 Once the electrumx database is fully synced (takes about 3-4h) the server will start servicing connections on port 50002, so you can try and connect your electrum-rvn wallet. Be aware that there can be significant data going out of the server, so make sure it is on an unlimited or large-enough data-plan or you regularly check the data usage.
-
-In case the server hangs with a message like “electrumx\_server[490]: struct.error: 'H' format requires 0 <= number <= 65535” or if you are running low on disk space, you can try to stop the server and compact the electrumx server’s history using the commands:
-
-
-**systemctl stop electrumx** 
-**export COIN=Ravencoin**
-
-**export DB\_DIRECTORY=/home/electrumx/electrumx\_db**
-
-**./electrumx/electrumx\_compact\_history**
-
-**systemctl start electrumx**
-
-
-After about 10-15 minutes the database should be compacted and fixed and you can restart the server.
-
