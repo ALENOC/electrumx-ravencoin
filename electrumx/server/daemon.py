@@ -237,6 +237,10 @@ class Daemon(object):
         return await self._send_single('getrawtransaction',
                                        (hex_hash, int(verbose)))
 
+    async def listaddressesbyasset(self, asset, onlytotal=False, count=1000, start=0):
+        return await self._send_single('listaddressesbyasset',
+                                       (asset, onlytotal, count, start))
+
     async def getrawtransactions(self, hex_hashes, replace_errs=True):
         '''Return the serialized raw transactions with the given hashes.
 

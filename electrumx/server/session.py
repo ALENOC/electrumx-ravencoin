@@ -1526,7 +1526,7 @@ class ElectrumX(SessionBase):
         self.bump_cost(1.0)
         return await self.daemon_request('getrawtransaction', tx_hash, verbose)
 
-    async def list_addresses_by_asset(self, asset: str, onlytotal=False, count=50000, start=0):
+    async def list_addresses_by_asset(self, asset: str, onlytotal=False, count=1000, start=0):
         if not isinstance(asset, str):
             raise RPCError(BAD_REQUEST, '"asset" must be a string')
         if onlytotal not in (True, False):
