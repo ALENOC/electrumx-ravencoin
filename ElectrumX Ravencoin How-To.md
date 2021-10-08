@@ -36,6 +36,8 @@ While pretty much any Linux distribution should work, this guide uses Ubuntu 20.
 
 **txindex=1** 
 
+**assetindex=1**
+
 **maxconnections=64** 
 
 - Note the txindex=1 above, which is required for the electrumx server. If you already run a node without this setting, add it and perform a restart of ravend with the option –reindex. This will take significant time.  
