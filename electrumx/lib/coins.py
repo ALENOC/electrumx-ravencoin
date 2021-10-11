@@ -76,6 +76,23 @@ class Coin:
     PEER_DEFAULT_PORTS = {'t': '50001', 's': '50002'}
     PEERS = []
 
+    ESTIMATEFEE_MODES = (None, 'CONSERVATIVE', 'ECONOMICAL')
+
+    @classmethod
+    def bucket_estimatefee_block_target(cls, n: int) -> int:
+        # values based on https://github.com/bitcoin/bitcoin/blob/af05bd9e1e362c3148e3b434b7fac96a9a5155a1/src/policy/fees.h#L131  # noqa
+        if n <= 1:
+            return 1
+        if n <= 12:
+            return n
+        if n == 25:  # so common that we make an exception for it
+            return n
+        if n <= 48:
+            return n // 2 * 2
+        if n <= 1008:
+            return n // 24 * 24
+        return 1008
+
     @classmethod
     def static_header_offset(cls, height):
         '''Given a header height return its offset in the headers file.

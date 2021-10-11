@@ -6,7 +6,7 @@
 # and warranty status of this software.
 
 '''Classes for local RPC server and remote client TCP/SSL servers.'''
-
+import asyncio
 import codecs
 import itertools
 import json
@@ -139,6 +139,7 @@ class SessionManager:
         self._merkle_cache = pylru.lrucache(1000)
         self._merkle_lookups = 0
         self._merkle_hits = 0
+        self.estimatefee_cache = pylru.lrucache(1000)
         self.notified_height = None
         self.hsub_results = None
         self._sslc = None
@@ -1440,17 +1441,48 @@ class ElectrumX(SessionBase):
         '''The minimum fee a low-priority tx must pay in order to be accepted
         to the daemon's memory pool.'''
         self.bump_cost(1.0)
-        return 0.01
+        return await self.daemon_request('relayfee')
 
-    async def estimatefee(self, _number):
+    async def estimatefee(self, number, mode=None):
         '''The estimated transaction fee per kilobyte to be paid for a
         transaction to be included within a certain number of blocks.
-
         number: the number of blocks
         mode: CONSERVATIVE or ECONOMICAL estimation mode
         '''
-        self.bump_cost(2.0)
-        return 0.01
+        number = non_negative_integer(number)
+        # use whitelist for mode, otherwise it would be easy to force a cache miss:
+        if mode not in self.coin.ESTIMATEFEE_MODES:
+            raise RPCError(BAD_REQUEST, f'unknown estimatefee mode: {mode}')
+        self.bump_cost(0.1)
+
+        number = self.coin.bucket_estimatefee_block_target(number)
+        cache = self.session_mgr.estimatefee_cache
+
+        cache_item = cache.get((number, mode))
+        if cache_item is not None:
+            blockhash, feerate, lock = cache_item
+            if blockhash and blockhash == self.session_mgr.bp.tip:
+                return feerate
+        else:
+            # create lock now, store it, and only then await on it
+            lock = asyncio.Lock()
+            cache[(number, mode)] = (None, None, lock)
+        async with lock:
+            cache_item = cache.get((number, mode))
+            if cache_item is not None:
+                blockhash, feerate, lock = cache_item
+                if blockhash == self.session_mgr.bp.tip:
+                    return feerate
+            self.bump_cost(2.0)  # cache miss incurs extra cost
+            blockhash = self.session_mgr.bp.tip
+            if mode:
+                feerate = await self.daemon_request('estimatesmartfee', number, mode)
+            else:
+                feerate = await self.daemon_request('estimatesmartfee', number)
+            assert feerate is not None
+            assert blockhash is not None
+            cache[(number, mode)] = (blockhash, feerate, lock)
+            return feerate
 
     async def ping(self):
         '''Serves as a connection keep-alive mechanism and for the client to
