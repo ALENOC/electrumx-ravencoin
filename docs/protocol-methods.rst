@@ -939,7 +939,6 @@ be confirmed within a certain number of blocks.
 **Signature**
 
   .. function:: blockchain.estimatefee(number)
-  .. deprecated:: 1.4.2
 
   *number*
 
@@ -1021,7 +1020,6 @@ be accepted to the daemon's memory pool.
 **Signature**
 
   .. function:: blockchain.relayfee()
-  .. deprecated:: 1.4.2
 
 **Result**
 
