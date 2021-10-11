@@ -231,6 +231,9 @@ class Daemon(object):
         '''Return the result of the 'getnetworkinfo' RPC call.'''
         return await self._send_single('getnetworkinfo')
 
+    async def estimatesmartfee(self, conf_target, estimate_mode='CONSERVATIVE'):
+        return await self._send_single('estimatesmartfee', (conf_target, estimate_mode))
+
     async def getrawtransaction(self, hex_hash, verbose=False):
         '''Return the serialized raw transaction with the given hash.'''
         # Cast to int because some coin daemons are old and require it
