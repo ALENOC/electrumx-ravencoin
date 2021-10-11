@@ -1440,8 +1440,12 @@ class ElectrumX(SessionBase):
     async def relayfee(self):
         '''The minimum fee a low-priority tx must pay in order to be accepted
         to the daemon's memory pool.'''
-        self.bump_cost(1.0)
-        return await self.daemon_request('relayfee')
+        self.bump_cost(2.0)
+        res = await self.daemon_request('getnetworkinfo')
+        res = res['relayfee']
+        assert res
+        return res
+
 
     async def estimatefee(self, number, mode=None):
         '''The estimated transaction fee per kilobyte to be paid for a
