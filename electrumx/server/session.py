@@ -1446,7 +1446,6 @@ class ElectrumX(SessionBase):
         assert res
         return res
 
-
     async def estimatefee(self, number, mode=None):
         '''The estimated transaction fee per kilobyte to be paid for a
         transaction to be included within a certain number of blocks.
