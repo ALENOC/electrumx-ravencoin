@@ -605,6 +605,7 @@ class SessionManager:
             self.logger.info(f'initial concurrent {self.env.initial_concurrent:,d}')
 
             self.logger.info(f'max response size {self.env.max_send:,d} bytes')
+            self.logger.info(f'max receive size {self.env.max_recv:,d} bytes')
             if self.env.drop_client is not None:
                 self.logger.info('drop clients matching: {}'
                                  .format(self.env.drop_client.pattern))
@@ -1482,7 +1483,11 @@ class ElectrumX(SessionBase):
                 feerate = await self.daemon_request('estimatesmartfee', number, mode)
             else:
                 feerate = await self.daemon_request('estimatesmartfee', number)
-            feerate = feerate['feerate']
+            try:
+                feerate = feerate['feerate']
+            except KeyError:
+                # If there is no estimated fee avaliable, use the minimum value
+                feerate = await self.relayfee()
             assert feerate is not None
             assert blockhash is not None
             cache[(number, mode)] = (blockhash, feerate, lock)
