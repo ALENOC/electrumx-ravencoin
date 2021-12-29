@@ -1067,6 +1067,8 @@ class BlockProcessor:
                 #Remove
                 quals = [qual for qual in self.current_qualifiers if qual]
 
+                print(quals)
+
                 tag_historical = self.restricted_to_qualifier.__setitem__
                 tag_current = self.qr_associations.__setitem__
 
