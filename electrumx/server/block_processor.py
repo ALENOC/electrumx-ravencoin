@@ -651,13 +651,7 @@ class BlockProcessor:
             for txin in tx.inputs:
                 if txin.is_generation():  # Don't spend block rewards
                     continue
-                try:
-                    cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
-                except Exception as e:
-                    b = bytearray(tx_hash)
-                    b.reverse()
-                    print(tx_hash, b.hex())
-                    raise e
+                cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
                 asset_cache_value = spend_asset(txin.prev_hash, txin.prev_idx)
                 undo_info_append(cache_value)
                 asset_undo_info_append(asset_cache_value)
