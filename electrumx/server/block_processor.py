@@ -306,7 +306,7 @@ class BlockProcessor:
 
         self.current_restricted_asset = None  # type: Optional[bytes]
         self.restricted_idx = b''
-        self.current_qualifiers = []  # type: List[bytes]
+        self.current_qualifiers = None  # type: Optional[bytes]
         self.qualifiers_idx = b''
 
         # Asset broadcasts
@@ -646,12 +646,18 @@ class BlockProcessor:
             tx_numb = to_le_uint64(tx_num)[:5]
             is_asset = False
             self.current_restricted_asset = None
-            self.current_qualifiers = []
+            self.current_qualifiers = None
             # Spend the inputs
             for txin in tx.inputs:
                 if txin.is_generation():  # Don't spend block rewards
                     continue
-                cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
+                try:
+                    cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
+                except Exception as e:
+                    b = bytearray(tx_hash)
+                    b.reverse()
+                    print(tx_hash, b.hex())
+                    raise e
                 asset_cache_value = spend_asset(txin.prev_hash, txin.prev_idx)
                 undo_info_append(cache_value)
                 asset_undo_info_append(asset_cache_value)
@@ -824,22 +830,7 @@ class BlockProcessor:
                                 )
 
                             elif match_script_against_template(ops, ASSET_NULL_VERIFIER_TEMPLATE) > -1:
-                                qualifiers_b = ops[2][2]
-                                qualifiers_deserializer = DataParser(qualifiers_b)
-                                asset_name = qualifiers_deserializer.read_var_bytes_as_ascii()
-                                for asset in asset_name.split('&'):
-                                    if asset[0] != '#':
-                                        if 'A' <= asset[0] <= 'Z' or '0' <= asset[0] <= '9':
-                                            # This is a valid asset name
-                                            asset = '#' + asset
-                                        elif asset == 'true':
-                                            # No associated qualifiers
-                                            # Dummy data
-                                            asset = ''
-                                        else:
-                                            raise Exception('Bad qualifier')
-
-                                    self.current_qualifiers.append(asset.encode('ascii'))
+                                self.current_qualifiers = ops[2][2]
                                 self.qualifiers_idx = idx
                             elif match_script_against_template(ops, ASSET_GLOBAL_RESTRICTION_TEMPLATE) > -1:
                                 asset_portion = ops[3][2]
@@ -1072,6 +1063,8 @@ class BlockProcessor:
 
             if self.current_restricted_asset and self.current_qualifiers:
                 res = self.current_restricted_asset  # type: bytes
+
+                #Remove
                 quals = [qual for qual in self.current_qualifiers if qual]
 
                 tag_historical = self.restricted_to_qualifier.__setitem__

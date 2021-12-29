@@ -473,6 +473,7 @@ class DB(object):
             batch_put(b'l' + key, value)
         flush_data.asset_restricted_freezes_current.clear()
 
+        # Change this
         for key, value in flush_data.asset_restricted2qual.items():
             #b'1' res
             #b'2' qual
