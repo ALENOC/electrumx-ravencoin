@@ -830,7 +830,22 @@ class BlockProcessor:
                                 )
 
                             elif match_script_against_template(ops, ASSET_NULL_VERIFIER_TEMPLATE) > -1:
-                                self.current_qualifiers = ops[2][2]
+                                qualifiers_b = ops[2][2]
+                                qualifiers_deserializer = DataParser(qualifiers_b)
+                                asset_name = qualifiers_deserializer.read_var_bytes_as_ascii()
+                                for asset in asset_name.split('&'):
+                                    if asset[0] != '#':
+                                        if 'A' <= asset[0] <= 'Z' or '0' <= asset[0] <= '9':
+                                            # This is a valid asset name
+                                            asset = '#' + asset
+                                        elif asset == 'true':
+                                            # No associated qualifiers
+                                            # Dummy data
+                                            asset = ''
+                                        else:
+                                            raise Exception('Bad qualifier')
+
+                                    self.current_qualifiers.append(asset.encode('ascii'))
                                 self.qualifiers_idx = idx
                             elif match_script_against_template(ops, ASSET_GLOBAL_RESTRICTION_TEMPLATE) > -1:
                                 asset_portion = ops[3][2]
@@ -1066,8 +1081,6 @@ class BlockProcessor:
 
                 #Remove
                 quals = [qual for qual in self.current_qualifiers if qual]
-
-                print(quals)
 
                 tag_historical = self.restricted_to_qualifier.__setitem__
                 tag_current = self.qr_associations.__setitem__
