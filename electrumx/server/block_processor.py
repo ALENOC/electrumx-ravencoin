@@ -669,6 +669,13 @@ class BlockProcessor:
                 # Bitcoin PUSHOPs
                 # Standard VARINTs
 
+                if len(txout.pk_script) == 0:
+                    hashX = script_hashX(txout.pk_script)
+                    append_hashX(hashX)
+                    put_utxo(tx_hash + to_le_uint32(idx),
+                         hashX + tx_numb + to_le_uint64(txout.value))
+                    continue
+
                 # deserialize the script pubkey
                 ops = Script.get_ops(txout.pk_script)
 
