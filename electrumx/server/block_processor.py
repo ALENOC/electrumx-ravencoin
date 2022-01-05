@@ -9,37 +9,33 @@
 '''Block prefetcher and chain processor.'''
 
 import asyncio
+import os
+import re
 import hashlib
 import itertools
 import logging
 import os
 import time
 import traceback
+from datetime import datetime
 from asyncio import sleep
+from struct import error as struct_error
 from typing import Callable, Dict, Sequence, Optional, List
 
-from aiorpcx import TaskGroup, CancelledError
+from aiorpcx import CancelledError, run_in_thread, spawn
 
 import electrumx
 from electrumx.lib.addresses import public_key_to_address
 from electrumx.lib.hash import hash_to_hex_str, HASHX_LEN
 from electrumx.lib.script import is_unspendable_legacy, \
     is_unspendable_genesis, OpCodes, Script, ScriptError
+from electrumx.lib.tx import Deserializer
 from electrumx.lib.util import (
-    class_logger, pack_le_uint32, pack_le_uint64, unpack_le_uint64, base_encode, DataParser, deep_getsizeof
+    class_logger, pack_le_uint32, pack_le_uint64, unpack_le_uint64, base_encode, DataParser, 
+    deep_getsizeof, open_file, unpack_le_uint32
 )
-from electrumx.server.daemon import DaemonError
 from electrumx.server.db import FlushData
 
-# We can safely assume that TX's to these addresses will never come out
-# Therefore we don't need to store them in the database
-BURN_ADDRESSES = [
-    'RXissueAssetXXXXXXXXXXXXXXXXXhhZGt'
-    'RXReissueAssetXXXXXXXXXXXXXXVEFAWu',
-    'RXissueSubAssetXXXXXXXXXXXXXWcwhwL',
-    'RXissueUniqueAssetXXXXXXXXXXWEAe58',
-    'RXBurnXXXXXXXXXXXXXXXXXXXXXXWUo9FV',
-]
 
 
 class OPPushDataGeneric:
@@ -89,124 +85,241 @@ def match_script_against_template(script, template) -> int:
             return -1
     return ctr
 
+logger = class_logger(__name__, 'BlockProcessor')
 
-class Prefetcher:
-    '''Prefetches blocks (in the forward direction only).'''
 
-    def __init__(self, daemon, coin, blocks_event):
-        self.logger = class_logger(__name__, self.__class__.__name__)
-        self.daemon = daemon
+class OnDiskBlock:
+
+    path = 'meta/blocks'
+    del_regex = re.compile('([0-9a-f]{64}\\.tmp)$')
+    legacy_del_regex = re.compile('block[0-9]{1,7}$')
+    block_regex = re.compile('([0-9]{1,8})-([0-9a-f]{64})$')
+    chunk_size = 25_000_000
+    # On-disk blocks. hex_hash->(height, size) pair
+    blocks = {}
+    # Map from hex hash to prefetch task
+    tasks = {}
+    # If set it logs the next time a block is processed
+    daemon_height = None
+    chain_size = 0
+
+    def __init__(self, coin, hex_hash, height, size):
+        self.hex_hash = hex_hash
         self.coin = coin
-        self.blocks_event = blocks_event
-        self.blocks = []
-        self.caught_up = False
-        # Access to fetched_height should be protected by the semaphore
-        self.fetched_height = None
-        self.semaphore = asyncio.Semaphore()
-        self.refill_event = asyncio.Event()
-        # The prefetched block cache size.  The min cache size has
-        # little effect on sync time.
-        self.cache_size = 0
-        self.min_cache_size = 10 * 1024 * 1024
-        # This makes the first fetch be 10 blocks
-        self.ave_size = self.min_cache_size // 10
-        self.polling_delay = 5
+        self.height = height
+        self.size = size
+        self.block_file = None
+        self.header = None
 
-    async def main_loop(self, bp_height):
-        '''Loop forever polling for more blocks.'''
-        await self.reset_height(bp_height)
+    @classmethod
+    def filename(cls, hex_hash, height):
+        return os.path.join(cls.path, f'{height:d}-{hex_hash}')
+
+    def __enter__(self):
+        self.block_file = open_file(self.filename(self.hex_hash, self.height))
+        self.header = self._read(self.coin.static_header_len(self.height))
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.block_file.close()
+
+    def _read(self, size):
+        result = self.block_file.read(size)
+        if not result:
+            raise RuntimeError(f'truncated block file for block {self.hex_hash} '
+                               f'height {self.height:,d}')
+        return result
+
+    def _read_at_pos(self, pos, size):
+        self.block_file.seek(pos, os.SEEK_SET)
+        result = self.block_file.read(size)
+        if len(result) != size:
+            raise RuntimeError(f'truncated block file for block {self.hex_hash} '
+                               f'height {self.height:,d}')
+        return result
+
+    def date_str(self):
+        timestamp, = unpack_le_uint32(self.header[68:72])
+        return datetime.utcfromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+
+    def iter_txs(self):
+        # Asynchronous generator of (tx, tx_hash) pairs
+        raw = self._read(self.chunk_size)
+        deserializer = Deserializer(raw)
+        tx_count = deserializer._read_varint()
+
+        if self.daemon_height:
+            logger.info(f'height {self.height:,d} of {self.daemon_height:,d} {self.hex_hash} '
+                        f'{self.date_str()} {self.size / 1_000_000_000:.3f}GB {tx_count:,d} txs '
+                        f'chain {self.chain_size // 1_000_000_000:,d}GB')
+            OnDiskBlock.daemon_height = None
+
+        count = 0
         while True:
+            read = deserializer.read_tx_and_hash
             try:
-                # Sleep a while if there is nothing to prefetch
-                await self.refill_event.wait()
-                if not await self._prefetch_blocks():
-                    await sleep(self.polling_delay)
-            except DaemonError as e:
-                self.logger.info(f'ignoring daemon error: {e}')
-            except CancelledError as e:
-                self.logger.info(f'cancelled; prefetcher stopping {e}')
-                raise
-            except Exception:  # pylint:disable=W0703
-                self.logger.exception('ignoring unexpected exception')
+                while True:
+                    cursor = deserializer.cursor
+                    yield read()
+                    count += 1
+            except (AssertionError, IndexError, struct_error):
+                pass
 
-    def get_prefetched_blocks(self):
-        '''Called by block processor when it is processing queued blocks.'''
-        blocks = self.blocks
-        self.blocks = []
-        self.cache_size = 0
-        self.refill_event.set()
-        return blocks
+            if tx_count == count:
+                return
+            raw = raw[cursor:] + self._read(self.chunk_size)
+            deserializer = Deserializer(raw)
 
-    async def reset_height(self, height):
-        '''Reset to prefetch blocks from the block processor's height.
+    def _chunk_offsets(self):
+        '''Iterate the transactions forwards to find their boundaries.'''
+        base_offset = self.block_file.tell()
+        assert base_offset == 80
+        raw = self._read(self.chunk_size)
+        deserializer = Deserializer(raw)
+        tx_count = deserializer._read_varint()
+        logger.info(f'backing up block {self.hex_hash} height {self.height:,d} '
+                    f'tx_count {tx_count:,d}')
+        offsets = [base_offset + deserializer.cursor]
 
-        Used in blockchain reorganisations.  This coroutine can be
-        called asynchronously to the _prefetch_blocks coroutine so we
-        must synchronize with a semaphore.
-        '''
-        async with self.semaphore:
-            self.blocks.clear()
-            self.cache_size = 0
-            self.fetched_height = height
-            self.refill_event.set()
+        while True:
+            read = deserializer.read_tx
+            count = 0
+            try:
+                while True:
+                    cursor = deserializer.cursor
+                    read()
+                    count += 1
+            except (AssertionError, IndexError, struct_error):
+                pass
 
-        daemon_height = await self.daemon.height()
-        behind = daemon_height - height
-        if behind > 0:
-            self.logger.info('catching up to daemon height {:,d} '
-                             '({:,d} blocks behind)'
-                             .format(daemon_height, behind))
-        else:
-            self.logger.info('caught up to daemon height {:,d}'
-                             .format(daemon_height))
+            if count:
+                offsets.append(base_offset + cursor)
+                base_offset += cursor
+            tx_count -= count
+            if tx_count == 0:
+                return offsets
+            raw = raw[cursor:] + self._read(self.chunk_size)
+            deserializer = Deserializer(raw)
 
-    async def _prefetch_blocks(self):
-        '''Prefetch some blocks and put them on the queue.
+    def iter_txs_reversed(self):
+        # Iterate the block transactions in reverse order.  We need to iterate the
+        # transactions forwards first to find their boundaries.
+        offsets = self._chunk_offsets()
+        for n in reversed(range(len(offsets) - 1)):
+            start = offsets[n]
+            size = offsets[n + 1] - start
+            deserializer = Deserializer(self._read_at_pos(start, size))
+            pairs = []
+            while deserializer.cursor < size:
+                pairs.append(deserializer.read_tx_and_hash())
+            for item in reversed(pairs):
+                yield item
 
-        Repeats until the queue is full or caught up.
-        '''
-        daemon = self.daemon
-        daemon_height = await daemon.height()
-        async with self.semaphore:
-            while self.cache_size < self.min_cache_size:
-                first = self.fetched_height + 1
-                # Try and catch up all blocks but limit to room in cache.
-                cache_room = max(self.min_cache_size // self.ave_size, 1)
-                count = min(daemon_height - self.fetched_height, cache_room)
-                # Don't make too large a request
-                count = min(self.coin.max_fetch_blocks(first), max(count, 0))
-                if not count:
-                    self.caught_up = True
-                    return False
+    @classmethod
+    async def delete_stale(cls, items, log):
+        def delete(paths):
+            count = total_size = 0
+            for path, size in paths.items():
+                try:
+                    os.remove(path)
+                    count += 1
+                    total_size += size
+                except FileNotFoundError as e:
+                    logger.error(f'could not delete stale block file {path}: {e}')
+            return count, total_size
 
-                hex_hashes = await daemon.block_hex_hashes(first, count)
-                if self.caught_up:
-                    self.logger.info('new block height {:,d} hash {}'
-                                     .format(first + count - 1, hex_hashes[-1]))
-                blocks = await daemon.raw_blocks(hex_hashes)
+        if not items:
+            return
+        paths = {}
+        for item in items:
+            if isinstance(item, os.DirEntry):
+                paths[item.path] = item.stat().st_size
+            else:
+                height, size = cls.blocks.pop(item)
+                paths[cls.filename(item, height)] = size
 
-                assert count == len(blocks)
+        count, total_size = await run_in_thread(delete, paths)
+        if log:
+            logger.info(f'deleted {count:,d} stale block files, total size {total_size:,d} bytes')
 
-                # Special handling for genesis block
-                if first == 0:
-                    blocks[0] = self.coin.genesis_block(blocks[0])
-                    self.logger.info('verified genesis block with hash {}'
-                                     .format(hex_hashes[0]))
+    @classmethod
+    async def delete_blocks(cls, min_height, log):
+        blocks_to_delete = [hex_hash for hex_hash, (height, size) in cls.blocks.items()
+                            if height < min_height]
+        await cls.delete_stale(blocks_to_delete, log)
 
-                # Update our recent average block size estimate
-                size = sum(len(block) for block in blocks)
-                if count >= 10:
-                    self.ave_size = size // count
-                else:
-                    self.ave_size = (size + (10 - count) * self.ave_size) // 10
+    @classmethod
+    async def scan_files(cls):
+        # Remove stale block files
+        def scan():
+            to_delete = []
+            with os.scandir(cls.path) as it:
+                for dentry in it:
+                    if dentry.is_file():
+                        match = cls.block_regex.match(dentry.name)
+                        if match:
+                            to_delete.append(dentry)
+            return to_delete
 
-                self.blocks.extend(blocks)
-                self.cache_size += size
-                self.fetched_height += count
-                self.blocks_event.set()
+        def find_legacy_blocks():
+            with os.scandir('meta') as it:
+                return [dentry for dentry in it
+                        if dentry.is_file() and cls.legacy_del_regex.match(dentry.name)]
 
-        self.refill_event.clear()
-        return True
+        try:
+            # This only succeeds the first time with the new code
+            os.mkdir(cls.path)
+            logger.info(f'created block directory {cls.path}')
+            await cls.delete_stale(await run_in_thread(find_legacy_blocks), True)
+        except FileExistsError:
+            pass
+
+        logger.info(f'scanning block directory {cls.path}...')
+        to_delete = await run_in_thread(scan)
+        await cls.delete_stale(to_delete, True)
+
+    @classmethod
+    async def prefetch_many(cls, daemon, pairs, kind):
+        async def prefetch_one(hex_hash, height):
+            '''Read a block in chunks to a temporary file.  Rename the file only when done so
+            as not to have incomplete blocks considered complete.
+            '''
+            try:
+                filename = cls.filename(hex_hash, height)
+                size = await daemon.get_block(hex_hash, filename)
+                cls.blocks[hex_hash] = (height, size)
+                if kind == 'new':
+                    logger.info(f'fetched new block height {height:,d} hash {hex_hash}')
+                elif kind == 'reorg':
+                    logger.info(f'fetched reorged block height {height:,d} hash {hex_hash}')
+            except Exception as e:
+                logger.error(f'error prefetching {hex_hash}: {e}')
+            finally:
+                cls.tasks.pop(hex_hash)
+
+        # Pairs is a (height, hex_hash) iterable
+        for height, hex_hash in pairs:
+            if hex_hash not in cls.tasks and hex_hash not in cls.blocks:
+                cls.tasks[hex_hash] = await spawn(prefetch_one, hex_hash, height)
+
+    @classmethod
+    async def streamed_block(cls, coin, hex_hash):
+        # Waits for a block to come in.
+        task = cls.tasks.get(hex_hash)
+        if task:
+            await task
+        item = cls.blocks.get(hex_hash)
+        if not item:
+            logger.error(f'block {hex_hash} missing')            
+            return None
+        height, size = item
+        return cls(coin, hex_hash, height, size)
+
+    @classmethod
+    async def stop_prefetching(cls):
+        for task in cls.tasks.values():
+            task.cancel()
+        logger.info('prefetcher stopped')
 
 
 class ChainError(Exception):
@@ -214,11 +327,12 @@ class ChainError(Exception):
 
 
 class BlockProcessor:
-    '''Process blocks and update the DB state to match.
-
-    Employ a prefetcher to prefetch blocks in batches for processing.
-    Coordinate backing up in case of chain reorganisations.
+    '''Process blocks and update the DB state to match.  Prefetch blocks so they are
+    immediately available when the processor is ready for a new block.  Coordinate backing
+    up in case of chain reorganisations.
     '''
+
+    polling_delay = 5
 
     def __init__(self, env, db, daemon, notifications):
         self.env = env
@@ -228,30 +342,20 @@ class BlockProcessor:
 
         self.bad_vouts_path = os.path.join(self.env.db_dir, 'invalid_chain_vouts')
 
-        # Set when there is block processing to do, e.g. when new blocks come in, or a
-        # reorg is needed.
-        self.blocks_event = asyncio.Event()
-
-        # If the lock is successfully acquired, in-memory chain state
-        # is consistent with self.height
-        self.state_lock = asyncio.Lock()
-
-        # Signalled after backing up during a reorg
-        self.backed_up_event = asyncio.Event()
-
         self.coin = env.coin
-        self.prefetcher = Prefetcher(daemon, env.coin, self.blocks_event)
-        self.logger = class_logger(__name__, self.__class__.__name__)
-
+        
         # Meta
-        self.next_cache_check = 0
+        self.caught_up = False
+        self.ok = False
         self.touched = set()
+        # A count >= 0 is a user-forced reorg; < 0 is a natural reorg
         self.reorg_count = None
         self.height = -1
         self.tip = None
         self.tx_count = 0
+        self.chain_size = 0
         self.asset_count = 0
-        self._caught_up_event = None
+        self.force_flush_arg = None
 
         # Caches of unflushed items.
         self.headers = []
@@ -316,6 +420,22 @@ class BlockProcessor:
 
         self.reset_size_cache()
 
+        self.backed_up_event = asyncio.Event()
+
+        # When the lock is acquired, in-memory chain state is consistent with self.height.
+        # This is a requirement for safe flushing.
+        self.state_lock = asyncio.Lock()
+
+    async def run_with_lock(self, coro):
+        # Shielded so that cancellations from shutdown don't lose work.  Cancellation will
+        # cause fetch_and_process_blocks to block on the lock in flush(), the task completes,
+        # and then the data is flushed.  We also don't want user-signalled reorgs to happen
+        # in the middle of processing blocks; they need to wait.
+        async def run_locked():
+            async with self.state_lock:
+                return await coro
+        return await asyncio.shield(run_locked())
+
     def reset_size_cache(self):
         self.restricted_to_qualifier_size = 0
         self.restricted_to_qualifier_len = 0
@@ -329,60 +449,55 @@ class BlockProcessor:
         self.is_qualified_size = 0
         self.is_qualified_len = 0
 
-    async def run_with_lock(self, coro):
-        # Shielded so that cancellations from shutdown don't lose work.  Cancellation will
-        # cause fetch_and_process_blocks to block on the lock in flush(), the task completes,
-        # and then the data is flushed.  We also don't want user-signalled reorgs to happen
-        # in the middle of processing blocks; they need to wait.
-        async def run_locked():
-            async with self.state_lock:
-                return await coro
+    async def next_block_hashes(self, count=30):
+        daemon_height = await self.daemon.height()
 
-        return await asyncio.shield(run_locked())
+        # Fetch remaining block hashes to a limit
+        first = self.height + 1
+        n = min(daemon_height - first + 1, count * 2)
+        if n:
+            hex_hashes = await self.daemon.block_hex_hashes(first, n)
+            kind = 'new' if self.caught_up else 'sync'
+            await OnDiskBlock.prefetch_many(self.daemon, enumerate(hex_hashes, start=first), kind)
+        else:
+            hex_hashes = []
 
-    def schedule_reorg(self, count):
-        '''A count >= 0 is a user-forced reorg; < 0 is a natural reorg.'''
-        self.reorg_count = count
-        self.blocks_event.set()
+        # Remove stale blocks
+        await OnDiskBlock.delete_blocks(first - 5, False)
+
+        return hex_hashes[:count], daemon_height
 
     async def _reorg_chain(self, count):
         '''Handle a chain reorganisation.
 
-        Count is the number of blocks to simulate a reorg, or None for
-        a real reorg.'''
+        Count is the number of blocks to simulate a reorg, or None for a real reorg.
+        This is passed in as self.reorg_count may change asynchronously.
+        '''
         if count < 0:
-            self.logger.info('chain reorg detected')
+            logger.info('chain reorg detected')
         else:
-            self.logger.info(f'faking a reorg of {count:,d} blocks')
+            logger.info(f'faking a reorg of {count:,d} blocks')
         await self.flush(True)
 
-        async def get_raw_block(hex_hash, height):
-            try:
-                block = self.db.read_raw_block(height)
-                self.logger.info(f'read block {hex_hash} at height {height:,d} from disk')
-            except FileNotFoundError:
-                block = await self.daemon.raw_blocks([hex_hash])[0]
-                self.logger.info(f'obtained block {hex_hash} at height {height:,d} from daemon')
-            return block
+        start, hex_hashes = await self._reorg_hashes(count)
+        pairs = reversed(list(enumerate(hex_hashes, start=start)))
+        await OnDiskBlock.prefetch_many(self.daemon, pairs, 'reorg')
 
-        _start, height, hashes = await self._reorg_hashes(count)
-        hex_hashes = [hash_to_hex_str(block_hash) for block_hash in hashes]
         for hex_hash in reversed(hex_hashes):
-            raw_block = await get_raw_block(hex_hash, height)
-            await self._backup_block(raw_block)
-            # self.touched can include other addresses which is harmless, but remove None.
-            self.touched.discard(None)
-            self.db.flush_backup(self.flush_data(), self.touched)
-            height -= 1
-
-        self.logger.info('backed up to height {:,d}'.format(self.height))
-
-        await self.prefetcher.reset_height(self.height)
+            if hex_hash != hash_to_hex_str(self.tip):
+                logger.error(f'block {hex_hash} is not tip; cannot back up')
+                return
+            block = await OnDiskBlock.streamed_block(self.coin, hex_hash)
+            if not block:
+                break
+            await self.run_with_lock(run_in_thread(self.backup_block, block))       
+        
+        logger.info(f'backed up to height {self.height:,d}')
         self.backed_up_event.set()
         self.backed_up_event.clear()
 
     async def _reorg_hashes(self, count):
-        '''Return a pair (start, last, hashes) of blocks to back up during a
+        '''Return a pair (start, hashes) of blocks to back up during a
         reorg.
 
         The hashes are returned in order of increasing height.  Start
@@ -390,11 +505,16 @@ class BlockProcessor:
         '''
         start, count = await self._calc_reorg_range(count)
         last = start + count - 1
-        s = '' if count == 1 else 's'
-        self.logger.info(f'chain was reorganised replacing {count:,d} '
-                         f'block{s} at heights {start:,d}-{last:,d}')
+        
+        if count == 1:
+            logger.info(f'chain was reorganised replacing 1 block at height {start:,d}')
+        else:
+            logger.info(f'chain was reorganised replacing {count:,d} blocks at heights '
+                        f'{start:,d}-{last:,d}')
 
-        return start, last, await self.db.fs_block_hashes(start, count)
+        hashes = await self.db.fs_block_hashes(start, count)
+        hex_hashes = [hash_to_hex_str(block_hash) for block_hash in hashes]
+        return start, hex_hashes
 
     async def _calc_reorg_range(self, count):
         '''Calculate the reorg range'''
@@ -428,21 +548,10 @@ class BlockProcessor:
 
         return start, count
 
-    def estimate_txs_remaining(self):
-        # Try to estimate how many txs there are to go
-        daemon_height = self.daemon.cached_height()
-        coin = self.coin
-        tail_count = daemon_height - max(self.height, coin.TX_COUNT_HEIGHT)
-        # Damp the initial enthusiasm
-        realism = max(2.0 - 0.9 * self.height / coin.TX_COUNT_HEIGHT, 1.0)
-        return (tail_count * coin.TX_PER_BLOCK +
-                max(coin.TX_COUNT - self.tx_count, 0)) * realism
-
     # - Flushing
     def flush_data(self):
-        '''The data for a flush.  The lock must be taken.'''
-        assert self.state_lock.locked()
-        return FlushData(self.height, self.tx_count, self.headers,
+        '''The data for a flush.'''        
+        return FlushData(self.height, self.tx_count, self.headers, self.chain_size,
                          self.tx_hashes, self.undo_infos, self.utxo_cache,
                          self.db_deletes, self.tip,
                          self.asset_cache, self.asset_deletes,
@@ -458,145 +567,135 @@ class BlockProcessor:
                          self.asset_broadcast, self.asset_broadcast_undos, self.asset_broadcast_dels)
 
     async def flush(self, flush_utxos):
+        self.force_flush_arg = None
         if flush_utxos:
             self.reset_size_cache()
-        self.db.flush_dbs(self.flush_data(), flush_utxos, self.estimate_txs_remaining)
-        self.next_cache_check = time.monotonic() + 30
+        # Estimate size remaining
+        daemon_height = self.daemon.cached_height()
+        tail_size = ((daemon_height - max(self.height, self.coin.CHAIN_SIZE_HEIGHT))
+                     * self.coin.AVG_BLOCK_SIZE)
+        size_remaining = max(self.coin.CHAIN_SIZE - self.chain_size, 0) + tail_size
+        logger.info(f'SIZES: {tail_size} {size_remaining}')
+        await run_in_thread(self.db.flush_dbs, self.flush_data(), flush_utxos, size_remaining)
 
-    def check_cache_size(self):
-        '''Flush a cache if it gets too big.'''
+    async def check_cache_size_loop(self):
+        '''Signal to flush caches if they get too big.'''
         # Good average estimates based on traversal of subobjects and
         # requesting size from Python (see deep_getsizeof).
 
-        # Undo info is only appended after sync; ignore here
-        # Deletes are only during rollbacks; ignore here
-
         one_MB = 1000 * 1000
-        utxo_cache_size = len(self.utxo_cache) * 205
-        db_deletes_size = len(self.db_deletes) * 57
-        hist_cache_size = self.db.history.unflushed_memsize()
-        # Roughly ntxs * 32 + nblocks * 42
-        tx_hash_size = ((self.tx_count - self.db.fs_tx_count) * 32
-                        + (self.height - self.db.fs_height) * 42)
-
-        # TODO Fix/add these approximations
-        # These are average case approximations
-        asset_cache_size = len(self.asset_cache) * 235  # Added 30 bytes for the max name length
-        asset_data_new_size = len(self.asset_data_new) * 160
-        asset_data_reissue_size = len(self.asset_data_reissued) * 180
-        asset_broadcast_size = len(self.asset_broadcast) * 170
-
-        # These have a 1v1 correspondance, so average case is acceptable
-        asset_tag_history = len(self.tag_to_address) * 120
-        asset_history_freezes = len(self.global_freezes) * 230
-        asset_current_freezes = len(self.is_frozen) * 130
-
-        # The rest are variable length and will grow as the chain grows;
-        # on-spot size checks are needed
-        if self.restricted_to_qualifier_len != len(self.restricted_to_qualifier):
-            self.restricted_to_qualifier_size = deep_getsizeof(self.restricted_to_qualifier)
-            self.restricted_to_qualifier_len = len(self.restricted_to_qualifier)
-
-        if self.qr_associations_len != len(self.qr_associations):
-            self.qr_associations_size = deep_getsizeof(self.qr_associations)
-            self.qr_associations_len = len(self.qr_associations)
-
-        if self.tag_to_address_len != len(self.tag_to_address):
-            self.tag_to_address_size = deep_getsizeof(self.tag_to_address)
-            self.tag_to_address_len = len(self.tag_to_address)
-
-        if self.is_qualified_len != len(self.is_qualified):
-            self.is_qualified_size = deep_getsizeof(self.is_qualified)
-            self.is_qualified_len = len(self.is_qualified)
-
-        utxo_MB = (db_deletes_size + utxo_cache_size) // one_MB
-        hist_MB = (hist_cache_size + tx_hash_size) // one_MB
-        asset_MB = (asset_data_new_size + asset_data_reissue_size +
-                    asset_cache_size + asset_broadcast_size +
-                    asset_tag_history + asset_history_freezes +
-                    asset_current_freezes + self.restricted_to_qualifier_size +
-                    self.qr_associations_size + self.tag_to_address_size +
-                    self.is_qualified_size) // one_MB
-
-        self.logger.info('our height: {:,d} daemon: {:,d} '
-                         'UTXOs {:,d}MB hist {:,d}MB assets {:,d}MB'
-                         .format(self.height, self.daemon.cached_height(),
-                                 utxo_MB, hist_MB, asset_MB))
-
-        # Flush history if it takes up over 20% of cache memory.
-        # Flush UTXOs once they take up 80% of cache memory.
         cache_MB = self.env.cache_MB
-        if asset_MB + utxo_MB + hist_MB >= cache_MB or hist_MB >= cache_MB // 5:
-            return (utxo_MB + asset_MB) >= cache_MB * 4 // 5
-        return None
 
-    async def _advance_blocks(self, raw_blocks):
-        '''Process the list of raw blocks passed.  Detects and handles reorgs.'''
-        start = time.monotonic()
-        first = self.height + 1
-        for n, raw_block in enumerate(raw_blocks):
-            block = self.coin.block(raw_block, first + n)
-            if self.coin.header_prevhash(block.header) != self.tip:
-                self.schedule_reorg(-1)
-                return
-            await self._advance_block(block)
-        end = time.monotonic()
+        while True:
+            utxo_cache_size = len(self.utxo_cache) * 205
+            db_deletes_size = len(self.db_deletes) * 57
+            hist_cache_size = self.db.history.unflushed_memsize()
+            # Roughly ntxs * 32 + nblocks * 42
+            tx_hash_size = ((self.tx_count - self.db.fs_tx_count) * 32
+                            + (self.height - self.db.fs_height) * 42)
 
-        if not self.db.first_sync:
-            s = '' if len(raw_blocks) == 1 else 's'
-            blocks_size = sum(len(block) for block in raw_blocks) / 1_000_000
-            self.logger.info(f'processed {len(raw_blocks):,d} block{s} size {blocks_size:.2f} MB '
-                             f'in {end - start:.1f}s')
+            # TODO Fix/add these approximations
+            # These are average case approximations
+            asset_cache_size = len(self.asset_cache) * 235  # Added 30 bytes for the max name length
+            asset_data_new_size = len(self.asset_data_new) * 160
+            asset_data_reissue_size = len(self.asset_data_reissued) * 180
+            asset_broadcast_size = len(self.asset_broadcast) * 170
 
-        # If caught up, flush everything as client queries are performed on the DB,
-        # otherwise check at regular intervals.
-        if self.height == self.daemon.cached_height():
-            await self.flush(True)
-            await self._on_caught_up()
-        elif end > self.next_cache_check:
-            flush_arg = self.check_cache_size()
-            if flush_arg is not None:
-                await self.flush(flush_arg)
+            # These have a 1v1 correspondance, so average case is acceptable
+            asset_tag_history = len(self.tag_to_address) * 120
+            asset_history_freezes = len(self.global_freezes) * 230
+            asset_current_freezes = len(self.is_frozen) * 130
 
-        if self._caught_up_event.is_set():
-            await self.notifications.on_block(self.touched, self.height, self.asset_touched)
+            # The rest are variable length and will grow as the chain grows;
+            # on-spot size checks are needed
+            if self.restricted_to_qualifier_len != len(self.restricted_to_qualifier):
+                self.restricted_to_qualifier_size = deep_getsizeof(self.restricted_to_qualifier)
+                self.restricted_to_qualifier_len = len(self.restricted_to_qualifier)
 
-        self.touched = set()
-        self.asset_touched = set()
+            if self.qr_associations_len != len(self.qr_associations):
+                self.qr_associations_size = deep_getsizeof(self.qr_associations)
+                self.qr_associations_len = len(self.qr_associations)
 
-    async def _advance_block(self, block):
+            if self.tag_to_address_len != len(self.tag_to_address):
+                self.tag_to_address_size = deep_getsizeof(self.tag_to_address)
+                self.tag_to_address_len = len(self.tag_to_address)
+
+            if self.is_qualified_len != len(self.is_qualified):
+                self.is_qualified_size = deep_getsizeof(self.is_qualified)
+                self.is_qualified_len = len(self.is_qualified)
+
+            utxo_MB = (db_deletes_size + utxo_cache_size) // one_MB
+            hist_MB = (hist_cache_size + tx_hash_size) // one_MB
+            asset_MB = (asset_data_new_size + asset_data_reissue_size +
+                        asset_cache_size + asset_broadcast_size +
+                        asset_tag_history + asset_history_freezes +
+                        asset_current_freezes + self.restricted_to_qualifier_size +
+                        self.qr_associations_size + self.tag_to_address_size +
+                        self.is_qualified_size) // one_MB
+
+            OnDiskBlock.daemon_height = await self.daemon.height()
+            OnDiskBlock.chain_size = self.chain_size
+            if hist_MB:
+                logger.info('our height: {:,d} daemon: {:,d} '
+                            'UTXOs {:,d}MB hist {:,d}MB assets {:,d}MB'
+                            .format(self.height, self.daemon.cached_height(),
+                                    utxo_MB, hist_MB, asset_MB))
+
+            # Flush history if it takes up over 20% of cache memory.
+            # Flush UTXOs once they take up 80% of cache memory.
+            if asset_MB + utxo_MB + hist_MB >= cache_MB or hist_MB >= cache_MB // 5:
+                self.force_flush_arg = (utxo_MB + asset_MB) >= cache_MB * 4 // 5
+            await sleep(30)
+
+    async def advance_blocks(self, hex_hashes):
+        '''Process the blocks passed.  Detects and handles reorgs.'''
+
+        async def advance_and_maybe_flush(block):
+            await run_in_thread(self.advance_block, block)
+            if self.force_flush_arg is not None:
+                await self.flush(self.force_flush_arg)
+
+        for hex_hash in hex_hashes:
+            # Stop if we must flush
+            if self.reorg_count is not None:
+                break
+            block = await OnDiskBlock.streamed_block(self.coin, hex_hash)
+            if not block:
+                break
+            await self.run_with_lock(advance_and_maybe_flush(block))
+            
+        # If we've not caught up we have no clients for the touched set
+        if not self.caught_up:
+            self.touched = set()
+            self.asset_touched = set()
+
+    def advance_block(self, block):
         '''Advance once block.  It is already verified they correctly connect onto our tip.'''
-        min_height = self.db.min_undo_height(self.daemon.cached_height())
-        height = self.height + 1
-
-        is_unspendable = (is_unspendable_genesis if height >= self.coin.GENESIS_ACTIVATION
+        is_unspendable = (is_unspendable_genesis if block.height >= self.coin.GENESIS_ACTIVATION
                           else is_unspendable_legacy)
 
-        (undo_info, asset_undo_info, asset_meta_undo_info,
-         t2a_undo_info, freezes_undo_info, r2q_undo_info,
-         asset_broadcast_undo_info) = self.advance_txs(block.transactions, is_unspendable)
+        #(undo_info, asset_undo_info, asset_meta_undo_info,
+        # t2a_undo_info, freezes_undo_info, r2q_undo_info,
+        # asset_broadcast_undo_info) = self.advance_txs(block.transactions, is_unspendable)
 
-        if height >= min_height:
-            self.undo_infos.append((undo_info, height))
-            self.asset_undo_infos.append((asset_undo_info, height))
-            self.asset_data_undo_infos.append((asset_meta_undo_info, height))
-            self.tag_to_address_undos.append((t2a_undo_info, height))
-            self.global_freezes_undos.append((freezes_undo_info, height))
-            self.restricted_to_qualifier_undos.append((r2q_undo_info, height))
-            self.asset_broadcast_undos.append((asset_broadcast_undo_info, height))
-            self.db.write_raw_block(block.raw, height)
+        #if height >= min_height:
+        #    self.undo_infos.append((undo_info, height))
+        #    self.asset_undo_infos.append((asset_undo_info, height))
+        #    self.asset_data_undo_infos.append((asset_meta_undo_info, height))
+        #    self.tag_to_address_undos.append((t2a_undo_info, height))
+        #    self.global_freezes_undos.append((freezes_undo_info, height))
+        #    self.restricted_to_qualifier_undos.append((r2q_undo_info, height))
+        #    self.asset_broadcast_undos.append((asset_broadcast_undo_info, height))
+        #    self.db.write_raw_block(block.raw, height)
 
-        self.height = height
-        self.headers.append(block.header)
-        self.tip = self.coin.header_hash(block.header)
+        #self.height = height
+        #self.headers.append(block.header)
+        #self.tip = self.coin.header_hash(block.header)
 
-        await sleep(0)
-
-    # TODO: Clean up this mess
-    def advance_txs(self, txs, is_unspendable):
-        self.tx_hashes.append(b''.join(tx_hash for tx, tx_hash in txs))
+        #await sleep(0)
 
         # Use local vars for speed in the loops
+        tx_hashes = []
         undo_info = []
         asset_undo_info = []
         asset_meta_undo_info = []
@@ -637,604 +736,613 @@ class BlockProcessor:
         update_touched = self.touched.update
         hashXs_by_tx = []
         append_hashXs = hashXs_by_tx.append
+        append_tx_hash = tx_hashes.append
         to_le_uint32 = pack_le_uint32
         to_le_uint64 = pack_le_uint64
 
-        for tx, tx_hash in txs:
-            hashXs = []
-            append_hashX = hashXs.append
-            tx_numb = to_le_uint64(tx_num)[:5]
-            is_asset = False
-            self.current_restricted_asset = None
-            self.current_qualifiers = None
-            # Spend the inputs
-            for txin in tx.inputs:
-                if txin.is_generation():  # Don't spend block rewards
-                    continue
-                cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
-                asset_cache_value = spend_asset(txin.prev_hash, txin.prev_idx)
-                undo_info_append(cache_value)
-                asset_undo_info_append(asset_cache_value)
-                append_hashX(cache_value[:-13])
+        self.ok = False
+        with block as block:
+            if self.coin.header_prevhash(block.header) != self.tip:
+                self.reorg_count = -1
+                return
+        
+            for tx, tx_hash in block.iter_txs():
+                hashXs = []
+                append_hashX = hashXs.append
+                tx_numb = to_le_uint64(tx_num)[:5]
+                is_asset = False
+                self.current_restricted_asset = None
+                self.current_qualifiers = None
+                # Spend the inputs
+                for txin in tx.inputs:
+                    if txin.is_generation():  # Don't spend block rewards
+                        continue
+                    cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
+                    asset_cache_value = spend_asset(txin.prev_hash, txin.prev_idx)
+                    undo_info_append(cache_value)
+                    asset_undo_info_append(asset_cache_value)
+                    append_hashX(cache_value[:-13])
 
-            # Add the new UTXOs
-            for idx, txout in enumerate(tx.outputs):
-                # Ignore unspendable outputs
-                if is_unspendable(txout.pk_script):
-                    continue
+                # Add the new UTXOs
+                for idx, txout in enumerate(tx.outputs):
+                    # Ignore unspendable outputs
+                    if is_unspendable(txout.pk_script):
+                        continue
 
-                # Many scripts are malformed. This is very problematic...
-                # We cannot assume scripts are valid just because they are from a node
-                # We need to check for:
-                # Bitcoin PUSHOPs
-                # Standard VARINTs
+                    # Many scripts are malformed. This is very problematic...
+                    # We cannot assume scripts are valid just because they are from a node
+                    # We need to check for:
+                    # Bitcoin PUSHOPs
+                    # Standard VARINTs
 
-                if len(txout.pk_script) == 0:
-                    hashX = script_hashX(txout.pk_script)
-                    append_hashX(hashX)
-                    put_utxo(tx_hash + to_le_uint32(idx),
-                         hashX + tx_numb + to_le_uint64(txout.value))
-                    continue
+                    if len(txout.pk_script) == 0:
+                        hashX = script_hashX(txout.pk_script)
+                        append_hashX(hashX)
+                        put_utxo(tx_hash + to_le_uint32(idx),
+                            hashX + tx_numb + to_le_uint64(txout.value))
+                        continue
 
-                # deserialize the script pubkey
-                ops = Script.get_ops(txout.pk_script)
+                    # deserialize the script pubkey
+                    ops = Script.get_ops(txout.pk_script)
 
-                if ops[0][0] == -1:
-                    # Quick check for invalid script.
-                    # Hash as-is for possible spends and continue.
-                    hashX = script_hashX(txout.pk_script)
-                    append_hashX(hashX)
-                    put_utxo(tx_hash + to_le_uint32(idx),
-                             hashX + tx_numb + to_le_uint64(txout.value))
-                    if self.env.write_bad_vouts_to_file:
-                        b = bytearray(tx_hash)
-                        b.reverse()
-                        file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
-                        with open(os.path.join(self.bad_vouts_path, str(self.height) + '_BADOPS_' + file_name),
-                                  'w') as f:
-                            f.write('TXID : {}\n'.format(b.hex()))
-                            f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
-                            f.write('OPS : {}\n'.format(str(ops)))
-                    continue
-
-                # This variable represents the op tuple where the OP_RVN_ASSET would be
-                op_ptr = match_script_against_template(ops, SCRIPTPUBKEY_TEMPLATE_P2PK)
-
-                if op_ptr > -1:
-                    # This is a P2PK script. Not used in favor of P2PKH. Convert to P2PKH for hashing DB Purposes.
-
-                    # Get the address bytes.
-                    addr_bytes = ops[0][2]
-                    addr = public_key_to_address(addr_bytes, self.coin.P2PKH_VERBYTE)
-                    hashX = self.coin.address_to_hashX(addr)
-                else:
-                    invalid_script = False
-                    for i in range(len(ops)):
-                        op = ops[i][0]  # The OpCode
-                        if op == OpCodes.OP_RVN_ASSET:
-                            op_ptr = i
-                            break
-                        if op == -1:
-                            invalid_script = True
-                            break
-
-                    if invalid_script:
-                        # This script could not be parsed properly before any OP_RVN_ASSETs.
+                    if ops[0][0] == -1:
+                        # Quick check for invalid script.
                         # Hash as-is for possible spends and continue.
                         hashX = script_hashX(txout.pk_script)
                         append_hashX(hashX)
                         put_utxo(tx_hash + to_le_uint32(idx),
-                                 hashX + tx_numb + to_le_uint64(txout.value))
+                                hashX + tx_numb + to_le_uint64(txout.value))
                         if self.env.write_bad_vouts_to_file:
                             b = bytearray(tx_hash)
                             b.reverse()
                             file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
                             with open(os.path.join(self.bad_vouts_path, str(self.height) + '_BADOPS_' + file_name),
-                                      'w') as f:
+                                    'w') as f:
                                 f.write('TXID : {}\n'.format(b.hex()))
                                 f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
                                 f.write('OPS : {}\n'.format(str(ops)))
                         continue
 
-                    if op_ptr > 0:
-                        # This script has OP_RVN_ASSET. Use everything before this for the script hash.
-                        # Get the raw script bytes ending ptr from the previous opcode.
-                        script_hash_end = ops[op_ptr - 1][1]
-                        hashX = script_hashX(txout.pk_script[:script_hash_end])
-                    elif op_ptr == 0:
-                        # This is an asset tag
-                        # These are verifiably unspendable
+                    # This variable represents the op tuple where the OP_RVN_ASSET would be
+                    op_ptr = match_script_against_template(ops, SCRIPTPUBKEY_TEMPLATE_P2PK)
 
-                        # continue is called after this block
+                    if op_ptr > -1:
+                        # This is a P2PK script. Not used in favor of P2PKH. Convert to P2PKH for hashing DB Purposes.
 
-                        idx = to_le_uint32(idx)
+                        # Get the address bytes.
+                        addr_bytes = ops[0][2]
+                        addr = public_key_to_address(addr_bytes, self.coin.P2PKH_VERBYTE)
+                        hashX = self.coin.address_to_hashX(addr)
+                    else:
+                        invalid_script = False
+                        for i in range(len(ops)):
+                            op = ops[i][0]  # The OpCode
+                            if op == OpCodes.OP_RVN_ASSET:
+                                op_ptr = i
+                                break
+                            if op == -1:
+                                invalid_script = True
+                                break
 
-                        try:
-                            if match_script_against_template(ops, ASSET_NULL_TEMPLATE) > -1:
-                                h160 = ops[1][2]
-                                asset_portion = ops[2][2]
-                                asset_portion_deserializer = DataParser(asset_portion)
-                                name_byte_len, asset_name = asset_portion_deserializer.read_var_bytes_tuple_bytes()
-                                flag = asset_portion_deserializer.read_byte()
-
-                                current_key = name_byte_len + asset_name + bytes([len(h160)]) + h160
-
-                                # Add tag history
-                                put_qualified_history(current_key +
-                                                      idx + tx_numb,
-                                                      flag)
-
-                                def parse_current_qualifier_history(data: bytes):
-                                    ret = []
-                                    parser = DataParser(data)
-                                    for _ in range(parser.read_int()):
-                                        old_h160_len, old_h160 = parser.read_var_bytes_tuple_bytes()
-                                        data = parser.read_bytes(4 + 5 + 1)
-                                        if h160 != old_h160:
-                                            ret.append(
-                                                old_h160_len + old_h160 +
-                                                data
-                                            )
-                                    return ret
-
-                                def parse_current_160_history(data: bytes):
-                                    ret = []
-                                    parser = DataParser(data)
-                                    for _ in range(parser.read_int()):
-                                        old_qualifier_len, old_qualifier = parser.read_var_bytes_tuple_bytes()
-                                        data = parser.read_bytes(4 + 5 + 1)
-                                        if asset_name != old_qualifier:
-                                            ret.append(
-                                                old_qualifier_len + old_qualifier +
-                                                data
-                                            )
-                                    return ret
-
-                                # b't' h160 -> asset
-                                # b'Q' asset -> h160
-                                old_qual_hist = []
-                                old_h160_hist = []
-
-                                qual_cached = pop_qualified_current(b'Q' + asset_name)
-                                if qual_cached:
-                                    old_qual_hist = parse_current_qualifier_history(qual_cached)
-                                else:
-                                    qual_writed = self.db.asset_db.get(b'Q' + asset_name)
-                                    if qual_writed:
-                                        old_qual_hist = parse_current_qualifier_history(qual_writed)
-
-                                h160_cached = pop_qualified_current(b't' + h160)
-                                if h160_cached:
-                                    old_h160_hist = parse_current_160_history(h160_cached)
-                                else:
-                                    h160_writed = self.db.asset_db.get(b't' + h160)
-                                    if h160_writed:
-                                        old_h160_hist = parse_current_160_history(h160_writed)
-
-                                qualified_undo_info.append(
-                                    idx + tx_numb +
-                                    name_byte_len + asset_name + bytes([len(old_qual_hist)]) + b''.join(old_qual_hist) +
-                                    bytes([len(h160)]) + h160 + bytes([len(old_h160_hist)]) + b''.join(old_h160_hist)
-                                )
-
-                                old_qual_hist.append(bytes([len(h160)]) + h160 + idx + tx_numb + flag)
-                                old_h160_hist.append(name_byte_len + asset_name + idx + tx_numb + flag)
-
-                                put_qualified_current(
-                                    b'Q' + asset_name,
-                                    bytes([len(old_qual_hist)]) + b''.join(old_qual_hist)
-                                )
-
-                                put_qualified_current(
-                                    b't' + h160,
-                                    bytes([len(old_h160_hist)]) + b''.join(old_h160_hist)
-                                )
-
-                            elif match_script_against_template(ops, ASSET_NULL_VERIFIER_TEMPLATE) > -1:
-                                qualifiers_b = ops[2][2]
-                                qualifiers_deserializer = DataParser(qualifiers_b)
-                                asset_name = qualifiers_deserializer.read_var_bytes_as_ascii()
-                                for asset in asset_name.split('&'):
-                                    if asset[0] != '#':
-                                        if 'A' <= asset[0] <= 'Z' or '0' <= asset[0] <= '9':
-                                            # This is a valid asset name
-                                            asset = '#' + asset
-                                        elif asset == 'true':
-                                            # No associated qualifiers
-                                            # Dummy data
-                                            asset = ''
-                                        else:
-                                            raise Exception('Bad qualifier')
-
-                                    self.current_qualifiers.append(asset.encode('ascii'))
-                                self.qualifiers_idx = idx
-                            elif match_script_against_template(ops, ASSET_GLOBAL_RESTRICTION_TEMPLATE) > -1:
-                                asset_portion = ops[3][2]
-
-                                asset_portion_deserializer = DataParser(asset_portion)
-                                asset_name_len, asset_name = asset_portion_deserializer.read_var_bytes_tuple_bytes()
-                                flag = asset_portion_deserializer.read_byte()
-
-                                put_freeze_history(
-                                    asset_name_len + asset_name + idx + tx_numb, flag
-                                )
-
-                                old_frozen_info = b''
-                                cached_f = pop_freeze_current(asset_name)
-                                if cached_f:
-                                    old_frozen_info = cached_f
-                                else:
-                                    writed_f = self.db.asset_db.get(b'l' + asset_name)
-                                    if writed_f:
-                                        old_frozen_info = writed_f
-
-                                freeze_undo_info.append(
-                                    asset_name_len + asset_name + idx + tx_numb +
-                                    (b'\x01' if len(old_frozen_info) > 0 else b'\0') + old_frozen_info
-                                )
-
-                                put_freeze_current(
-                                    asset_name,
-                                    idx + tx_numb + flag
-                                )
-
-                            else:
-                                raise Exception('Bad null asset script ops')
-                        except Exception as e:
+                        if invalid_script:
+                            # This script could not be parsed properly before any OP_RVN_ASSETs.
+                            # Hash as-is for possible spends and continue.
+                            hashX = script_hashX(txout.pk_script)
+                            append_hashX(hashX)
+                            put_utxo(tx_hash + to_le_uint32(idx),
+                                    hashX + tx_numb + to_le_uint64(txout.value))
                             if self.env.write_bad_vouts_to_file:
                                 b = bytearray(tx_hash)
                                 b.reverse()
                                 file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
-                                with open(os.path.join(self.bad_vouts_path,
-                                                       str(self.height) + '_NULLASSET_' + file_name), 'w') as f:
+                                with open(os.path.join(self.bad_vouts_path, str(self.height) + '_BADOPS_' + file_name),
+                                        'w') as f:
                                     f.write('TXID : {}\n'.format(b.hex()))
                                     f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
-                                    f.write('OpCodes : {}\n'.format(str(ops)))
-                                    f.write('Exception : {}\n'.format(repr(e)))
-                                    f.write('Traceback : {}\n'.format(traceback.format_exc()))
-                            if isinstance(e, (DataParser.ParserException, KeyError)):
-                                raise e
-                        continue
-                    else:
-                        # There is no OP_RVN_ASSET. Hash as-is.
-                        hashX = script_hashX(txout.pk_script)
+                                    f.write('OPS : {}\n'.format(str(ops)))
+                            continue
 
-                # Add UTXO info to the database
-                append_hashX(hashX)
-                put_utxo(tx_hash + to_le_uint32(idx),
-                         hashX + tx_numb + to_le_uint64(txout.value))
+                        if op_ptr > 0:
+                            # This script has OP_RVN_ASSET. Use everything before this for the script hash.
+                            # Get the raw script bytes ending ptr from the previous opcode.
+                            script_hash_end = ops[op_ptr - 1][1]
+                            hashX = script_hashX(txout.pk_script[:script_hash_end])
+                        elif op_ptr == 0:
+                            # This is an asset tag
+                            # These are verifiably unspendable
 
-                # Now try and add asset info
-                def try_parse_asset(asset_deserializer: DataParser, second_loop=False):
-                    op = asset_deserializer.read_bytes(3)
-                    if op != b'rvn':
-                        raise Exception("Expected {}, was {}".format(b'rvn', op))
-                    script_type = asset_deserializer.read_byte()
-                    asset_name_len, asset_name = asset_deserializer.read_var_bytes_tuple_bytes()
-                    if asset_name[0] == b'$'[0]:
-                        self.current_restricted_asset = asset_name
-                        self.restricted_idx = to_le_uint32(idx)
-                    if script_type == b'o':
-                        # This is an ownership asset. It does not have any metadata.
-                        # Just assign it with a value of 1
-                        put_asset(tx_hash + to_le_uint32(idx),
-                                  hashX + tx_numb + to_le_uint64(100_000_000) +
-                                  asset_name_len + asset_name)
-                        put_asset_data_new(asset_name, to_le_uint64(100_000_000) + b'\0\0\0' + to_le_uint32(idx) + tx_numb + b'\0')
-                        asset_meta_undo_info_append(  # Set previous meta to null in case of roll back
-                            asset_name_len + asset_name + b'\0')
-                        self.asset_touched.add(asset_name.decode('ascii'))
-                    else:  # Not an owner asset; has a sat amount
-                        sats = asset_deserializer.read_bytes(8)
-                        if script_type == b'q':  # A new asset issuance
-                            asset_data = asset_deserializer.read_bytes(2)
-                            has_meta = asset_deserializer.read_byte()
-                            asset_data += has_meta
-                            if has_meta != b'\0':
-                                asset_data += asset_deserializer.read_bytes(34)
+                            # continue is called after this block
 
-                            # To tell the client where this data came from
-                            asset_data += to_le_uint32(idx) + tx_numb + b'\0'
+                            idx = to_le_uint32(idx)
 
-                            # Put DB functions at the end to prevent them from pushing before any errors
-                            put_asset_data_new(asset_name, sats + asset_data)  # Add meta for this asset
+                            try:
+                                if match_script_against_template(ops, ASSET_NULL_TEMPLATE) > -1:
+                                    h160 = ops[1][2]
+                                    asset_portion = ops[2][2]
+                                    asset_portion_deserializer = DataParser(asset_portion)
+                                    name_byte_len, asset_name = asset_portion_deserializer.read_var_bytes_tuple_bytes()
+                                    flag = asset_portion_deserializer.read_byte()
+
+                                    current_key = name_byte_len + asset_name + bytes([len(h160)]) + h160
+
+                                    # Add tag history
+                                    put_qualified_history(current_key +
+                                                        idx + tx_numb,
+                                                        flag)
+
+                                    def parse_current_qualifier_history(data: bytes):
+                                        ret = []
+                                        parser = DataParser(data)
+                                        for _ in range(parser.read_int()):
+                                            old_h160_len, old_h160 = parser.read_var_bytes_tuple_bytes()
+                                            data = parser.read_bytes(4 + 5 + 1)
+                                            if h160 != old_h160:
+                                                ret.append(
+                                                    old_h160_len + old_h160 +
+                                                    data
+                                                )
+                                        return ret
+
+                                    def parse_current_160_history(data: bytes):
+                                        ret = []
+                                        parser = DataParser(data)
+                                        for _ in range(parser.read_int()):
+                                            old_qualifier_len, old_qualifier = parser.read_var_bytes_tuple_bytes()
+                                            data = parser.read_bytes(4 + 5 + 1)
+                                            if asset_name != old_qualifier:
+                                                ret.append(
+                                                    old_qualifier_len + old_qualifier +
+                                                    data
+                                                )
+                                        return ret
+
+                                    # b't' h160 -> asset
+                                    # b'Q' asset -> h160
+                                    old_qual_hist = []
+                                    old_h160_hist = []
+
+                                    qual_cached = pop_qualified_current(b'Q' + asset_name)
+                                    if qual_cached:
+                                        old_qual_hist = parse_current_qualifier_history(qual_cached)
+                                    else:
+                                        qual_writed = self.db.asset_db.get(b'Q' + asset_name)
+                                        if qual_writed:
+                                            old_qual_hist = parse_current_qualifier_history(qual_writed)
+
+                                    h160_cached = pop_qualified_current(b't' + h160)
+                                    if h160_cached:
+                                        old_h160_hist = parse_current_160_history(h160_cached)
+                                    else:
+                                        h160_writed = self.db.asset_db.get(b't' + h160)
+                                        if h160_writed:
+                                            old_h160_hist = parse_current_160_history(h160_writed)
+
+                                    qualified_undo_info.append(
+                                        idx + tx_numb +
+                                        name_byte_len + asset_name + bytes([len(old_qual_hist)]) + b''.join(old_qual_hist) +
+                                        bytes([len(h160)]) + h160 + bytes([len(old_h160_hist)]) + b''.join(old_h160_hist)
+                                    )
+
+                                    old_qual_hist.append(bytes([len(h160)]) + h160 + idx + tx_numb + flag)
+                                    old_h160_hist.append(name_byte_len + asset_name + idx + tx_numb + flag)
+
+                                    put_qualified_current(
+                                        b'Q' + asset_name,
+                                        bytes([len(old_qual_hist)]) + b''.join(old_qual_hist)
+                                    )
+
+                                    put_qualified_current(
+                                        b't' + h160,
+                                        bytes([len(old_h160_hist)]) + b''.join(old_h160_hist)
+                                    )
+
+                                elif match_script_against_template(ops, ASSET_NULL_VERIFIER_TEMPLATE) > -1:
+                                    qualifiers_b = ops[2][2]
+                                    qualifiers_deserializer = DataParser(qualifiers_b)
+                                    asset_name = qualifiers_deserializer.read_var_bytes_as_ascii()
+                                    for asset in asset_name.split('&'):
+                                        if asset[0] != '#':
+                                            if 'A' <= asset[0] <= 'Z' or '0' <= asset[0] <= '9':
+                                                # This is a valid asset name
+                                                asset = '#' + asset
+                                            elif asset == 'true':
+                                                # No associated qualifiers
+                                                # Dummy data
+                                                asset = ''
+                                            else:
+                                                raise Exception('Bad qualifier')
+
+                                        self.current_qualifiers.append(asset.encode('ascii'))
+                                    self.qualifiers_idx = idx
+                                elif match_script_against_template(ops, ASSET_GLOBAL_RESTRICTION_TEMPLATE) > -1:
+                                    asset_portion = ops[3][2]
+
+                                    asset_portion_deserializer = DataParser(asset_portion)
+                                    asset_name_len, asset_name = asset_portion_deserializer.read_var_bytes_tuple_bytes()
+                                    flag = asset_portion_deserializer.read_byte()
+
+                                    put_freeze_history(
+                                        asset_name_len + asset_name + idx + tx_numb, flag
+                                    )
+
+                                    old_frozen_info = b''
+                                    cached_f = pop_freeze_current(asset_name)
+                                    if cached_f:
+                                        old_frozen_info = cached_f
+                                    else:
+                                        writed_f = self.db.asset_db.get(b'l' + asset_name)
+                                        if writed_f:
+                                            old_frozen_info = writed_f
+
+                                    freeze_undo_info.append(
+                                        asset_name_len + asset_name + idx + tx_numb +
+                                        (b'\x01' if len(old_frozen_info) > 0 else b'\0') + old_frozen_info
+                                    )
+
+                                    put_freeze_current(
+                                        asset_name,
+                                        idx + tx_numb + flag
+                                    )
+
+                                else:
+                                    raise Exception('Bad null asset script ops')
+                            except Exception as e:
+                                if self.env.write_bad_vouts_to_file:
+                                    b = bytearray(tx_hash)
+                                    b.reverse()
+                                    file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
+                                    with open(os.path.join(self.bad_vouts_path,
+                                                        str(self.height) + '_NULLASSET_' + file_name), 'w') as f:
+                                        f.write('TXID : {}\n'.format(b.hex()))
+                                        f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
+                                        f.write('OpCodes : {}\n'.format(str(ops)))
+                                        f.write('Exception : {}\n'.format(repr(e)))
+                                        f.write('Traceback : {}\n'.format(traceback.format_exc()))
+                                if isinstance(e, (DataParser.ParserException, KeyError)):
+                                    raise e
+                            continue
+                        else:
+                            # There is no OP_RVN_ASSET. Hash as-is.
+                            hashX = script_hashX(txout.pk_script)
+
+                    # Add UTXO info to the database
+                    append_hashX(hashX)
+                    put_utxo(tx_hash + to_le_uint32(idx),
+                            hashX + tx_numb + to_le_uint64(txout.value))
+
+                    # Now try and add asset info
+                    def try_parse_asset(asset_deserializer: DataParser, second_loop=False):
+                        op = asset_deserializer.read_bytes(3)
+                        if op != b'rvn':
+                            raise Exception("Expected {}, was {}".format(b'rvn', op))
+                        script_type = asset_deserializer.read_byte()
+                        asset_name_len, asset_name = asset_deserializer.read_var_bytes_tuple_bytes()
+                        if asset_name[0] == b'$'[0]:
+                            self.current_restricted_asset = asset_name
+                            self.restricted_idx = to_le_uint32(idx)
+                        if script_type == b'o':
+                            # This is an ownership asset. It does not have any metadata.
+                            # Just assign it with a value of 1
+                            put_asset(tx_hash + to_le_uint32(idx),
+                                    hashX + tx_numb + to_le_uint64(100_000_000) +
+                                    asset_name_len + asset_name)
+                            put_asset_data_new(asset_name, to_le_uint64(100_000_000) + b'\0\0\0' + to_le_uint32(idx) + tx_numb + b'\0')
                             asset_meta_undo_info_append(  # Set previous meta to null in case of roll back
                                 asset_name_len + asset_name + b'\0')
-                            put_asset(tx_hash + to_le_uint32(idx),
-                                      hashX + tx_numb + sats +
-                                      asset_name_len + asset_name)
                             self.asset_touched.add(asset_name.decode('ascii'))
-                        elif script_type == b'r':  # An asset re-issuance
-                            divisions = asset_deserializer.read_byte()
-                            reissuable = asset_deserializer.read_byte()
-
-                            # Quicker check, but it's far more likely to be in the db
-                            old_data = self.asset_data_new.pop(asset_name, None)
-                            if old_data is None:
-                                old_data = self.asset_data_reissued.pop(asset_name, None)
-                            if old_data is None:
-                                old_data = self.db.asset_info_db.get(asset_name)
-                            assert old_data is not None  # If reissuing, we should have it
-
-                            asset_data = b''
-
-                            old_sats = int.from_bytes(old_data[:8], 'little')
-                            new_sats = int.from_bytes(sats, 'little')
-
-                            total_sats = old_sats + new_sats
-
-                            if divisions == b'\xff':  # Unchanged division amount
-                                asset_data += old_data[8].to_bytes(1, 'big')
-                            else:
-                                asset_data += divisions
-
-                            asset_data += reissuable
-                            if asset_deserializer.is_finished():
-                                # No more data
-                                asset_data += b'\0'
-                            else:
-                                if second_loop:
-                                    if asset_deserializer.cursor + 34 <= asset_deserializer.length:
-                                        asset_data += b'\x01'
-                                        asset_data += asset_deserializer.read_bytes(34)
-                                    else:
-                                        asset_data += b'\0'
-                                else:
-                                    asset_data += b'\x01'
+                        else:  # Not an owner asset; has a sat amount
+                            sats = asset_deserializer.read_bytes(8)
+                            if script_type == b'q':  # A new asset issuance
+                                asset_data = asset_deserializer.read_bytes(2)
+                                has_meta = asset_deserializer.read_byte()
+                                asset_data += has_meta
+                                if has_meta != b'\0':
                                     asset_data += asset_deserializer.read_bytes(34)
 
-                            asset_data += to_le_uint32(idx) + tx_numb
-                            if divisions == b'\xff':
-                                # We need to tell the client the original tx for reissues
-                                asset_data += b'\x01' + old_data[-(4 + 5) - 1:-1] + b'\0'
-                            else:
-                                asset_data += b'\0'
+                                # To tell the client where this data came from
+                                asset_data += to_le_uint32(idx) + tx_numb + b'\0'
 
-                            # Put DB functions at the end to prevent them from pushing before any errors
+                                # Put DB functions at the end to prevent them from pushing before any errors
+                                put_asset_data_new(asset_name, sats + asset_data)  # Add meta for this asset
+                                asset_meta_undo_info_append(  # Set previous meta to null in case of roll back
+                                    asset_name_len + asset_name + b'\0')
+                                put_asset(tx_hash + to_le_uint32(idx),
+                                        hashX + tx_numb + sats +
+                                        asset_name_len + asset_name)
+                                self.asset_touched.add(asset_name.decode('ascii'))
+                            elif script_type == b'r':  # An asset re-issuance
+                                divisions = asset_deserializer.read_byte()
+                                reissuable = asset_deserializer.read_byte()
 
-                            self.asset_touched.add(asset_name.decode('ascii'))
+                                # Quicker check, but it's far more likely to be in the db
+                                old_data = self.asset_data_new.pop(asset_name, None)
+                                if old_data is None:
+                                    old_data = self.asset_data_reissued.pop(asset_name, None)
+                                if old_data is None:
+                                    old_data = self.db.asset_info_db.get(asset_name)
+                                assert old_data is not None  # If reissuing, we should have it
 
-                            put_asset_data_reissued(asset_name, total_sats.to_bytes(8, 'little', signed=False) + asset_data)
-                            asset_meta_undo_info_append(
-                                asset_name_len + asset_name +
-                                bytes([len(old_data)]) + old_data)
-                            put_asset(tx_hash + to_le_uint32(idx),
-                                      hashX + tx_numb + sats +
-                                      asset_name_len + asset_name)
-                        elif script_type == b't':
-                            # Put DB functions at the end to prevent them from pushing before any errors
-                            put_asset(tx_hash + to_le_uint32(idx),
-                                      hashX + tx_numb + sats +
-                                      asset_name_len + asset_name)
+                                asset_data = b''
 
-                            if not asset_deserializer.is_finished():
-                                if b'~' in asset_name and hashX in hashXs:  # This hashX was also in the inputs; we are sending to ourself; this is a broadcast
+                                old_sats = int.from_bytes(old_data[:8], 'little')
+                                new_sats = int.from_bytes(sats, 'little')
+
+                                total_sats = old_sats + new_sats
+
+                                if divisions == b'\xff':  # Unchanged division amount
+                                    asset_data += old_data[8].to_bytes(1, 'big')
+                                else:
+                                    asset_data += divisions
+
+                                asset_data += reissuable
+                                if asset_deserializer.is_finished():
+                                    # No more data
+                                    asset_data += b'\0'
+                                else:
                                     if second_loop:
                                         if asset_deserializer.cursor + 34 <= asset_deserializer.length:
+                                            asset_data += b'\x01'
+                                            asset_data += asset_deserializer.read_bytes(34)
+                                        else:
+                                            asset_data += b'\0'
+                                    else:
+                                        asset_data += b'\x01'
+                                        asset_data += asset_deserializer.read_bytes(34)
+
+                                asset_data += to_le_uint32(idx) + tx_numb
+                                if divisions == b'\xff':
+                                    # We need to tell the client the original tx for reissues
+                                    asset_data += b'\x01' + old_data[-(4 + 5) - 1:-1] + b'\0'
+                                else:
+                                    asset_data += b'\0'
+
+                                # Put DB functions at the end to prevent them from pushing before any errors
+
+                                self.asset_touched.add(asset_name.decode('ascii'))
+
+                                put_asset_data_reissued(asset_name, total_sats.to_bytes(8, 'little', signed=False) + asset_data)
+                                asset_meta_undo_info_append(
+                                    asset_name_len + asset_name +
+                                    bytes([len(old_data)]) + old_data)
+                                put_asset(tx_hash + to_le_uint32(idx),
+                                        hashX + tx_numb + sats +
+                                        asset_name_len + asset_name)
+                            elif script_type == b't':
+                                # Put DB functions at the end to prevent them from pushing before any errors
+                                put_asset(tx_hash + to_le_uint32(idx),
+                                        hashX + tx_numb + sats +
+                                        asset_name_len + asset_name)
+
+                                if not asset_deserializer.is_finished():
+                                    if b'~' in asset_name and hashX in hashXs:  # This hashX was also in the inputs; we are sending to ourself; this is a broadcast
+                                        if second_loop:
+                                            if asset_deserializer.cursor + 34 <= asset_deserializer.length:
+                                                data = asset_deserializer.read_bytes(34)
+                                                # This is a message broadcast
+                                                put_asset_broadcast(
+                                                    asset_name_len + asset_name + to_le_uint32(idx) + tx_numb, data)
+                                                asset_broadcast_undo_info.append(
+                                                    asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
+                                        else:
                                             data = asset_deserializer.read_bytes(34)
                                             # This is a message broadcast
-                                            put_asset_broadcast(
-                                                asset_name_len + asset_name + to_le_uint32(idx) + tx_numb, data)
+                                            put_asset_broadcast(asset_name_len + asset_name + to_le_uint32(idx) + tx_numb,
+                                                                data)
                                             asset_broadcast_undo_info.append(
                                                 asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
-                                    else:
-                                        data = asset_deserializer.read_bytes(34)
-                                        # This is a message broadcast
-                                        put_asset_broadcast(asset_name_len + asset_name + to_le_uint32(idx) + tx_numb,
-                                                            data)
-                                        asset_broadcast_undo_info.append(
-                                            asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
-                        else:
-                            raise Exception('Unknown asset type: {}'.format(script_type))
+                            else:
+                                raise Exception('Unknown asset type: {}'.format(script_type))
 
-                # function for malformed asset
-                def try_parse_asset_iterative(script: bytes):
-                    while script[:3] != b'rvn' and len(script) > 0:
-                        script = script[1:]
-                    assert script[:3] == b'rvn'
-                    return try_parse_asset(DataParser(script), True)
+                    # function for malformed asset
+                    def try_parse_asset_iterative(script: bytes):
+                        while script[:3] != b'rvn' and len(script) > 0:
+                            script = script[1:]
+                        assert script[:3] == b'rvn'
+                        return try_parse_asset(DataParser(script), True)
 
-                # Me @ core devs
-                # https://www.youtube.com/watch?v=iZlpsneDGBQ
+                    # Me @ core devs
+                    # https://www.youtube.com/watch?v=iZlpsneDGBQ
 
-                if 0 < op_ptr < len(ops):
-                    assert ops[op_ptr][0] == OpCodes.OP_RVN_ASSET  # Sanity check
-                    try:
-                        next_op = ops[op_ptr + 1]
-                        if next_op[0] == -1:
-                            # This contains the raw data. Deserialize.
-                            asset_script_deserializer = DataParser(next_op[2])
-                            asset_script = asset_script_deserializer.read_var_bytes()
-                        elif len(ops) > op_ptr + 4 and \
-                                ops[op_ptr + 2][0] == b'r'[0] and \
-                                ops[op_ptr + 3][0] == b'v'[0] and \
-                                ops[op_ptr + 4][0] == b'n'[0]:
-                            asset_script_portion = txout.pk_script[ops[op_ptr][1]:]
-                            asset_script_deserializer = DataParser(asset_script_portion)
-                            asset_script = asset_script_deserializer.read_var_bytes()
-                        else:
-                            # Hurray! This i̶s̶ ̶a̶ COULD BE A properly formatted asset script
-                            asset_script = next_op[2]
-
-                        asset_deserializer = DataParser(asset_script)
-                        try_parse_asset(asset_deserializer)
-                        is_asset = True
-
-                    except:
+                    if 0 < op_ptr < len(ops):
+                        assert ops[op_ptr][0] == OpCodes.OP_RVN_ASSET  # Sanity check
                         try:
-                            try_parse_asset_iterative(txout.pk_script[ops[op_ptr][1]:])
+                            next_op = ops[op_ptr + 1]
+                            if next_op[0] == -1:
+                                # This contains the raw data. Deserialize.
+                                asset_script_deserializer = DataParser(next_op[2])
+                                asset_script = asset_script_deserializer.read_var_bytes()
+                            elif len(ops) > op_ptr + 4 and \
+                                    ops[op_ptr + 2][0] == b'r'[0] and \
+                                    ops[op_ptr + 3][0] == b'v'[0] and \
+                                    ops[op_ptr + 4][0] == b'n'[0]:
+                                asset_script_portion = txout.pk_script[ops[op_ptr][1]:]
+                                asset_script_deserializer = DataParser(asset_script_portion)
+                                asset_script = asset_script_deserializer.read_var_bytes()
+                            else:
+                                # Hurray! This i̶s̶ ̶a̶ COULD BE A properly formatted asset script
+                                asset_script = next_op[2]
+
+                            asset_deserializer = DataParser(asset_script)
+                            try_parse_asset(asset_deserializer)
                             is_asset = True
-                        except Exception as e:
-                            if self.env.write_bad_vouts_to_file:
-                                b = bytearray(tx_hash)
-                                b.reverse()
-                                file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
-                                with open(os.path.join(self.bad_vouts_path, str(self.height) + '_' + file_name),
-                                          'w') as f:
-                                    f.write('TXID : {}\n'.format(b.hex()))
-                                    f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
-                                    f.write('OpCodes : {}\n'.format(str(ops)))
-                                    f.write('Exception : {}\n'.format(repr(e)))
-                                    f.write('Traceback : {}\n'.format(traceback.format_exc()))
 
-            if self.current_restricted_asset and self.current_qualifiers:
-                res = self.current_restricted_asset  # type: bytes
+                        except:
+                            try:
+                                try_parse_asset_iterative(txout.pk_script[ops[op_ptr][1]:])
+                                is_asset = True
+                            except Exception as e:
+                                if self.env.write_bad_vouts_to_file:
+                                    b = bytearray(tx_hash)
+                                    b.reverse()
+                                    file_name = base_encode(hashlib.md5(tx_hash + txout.pk_script).digest(), 58)
+                                    with open(os.path.join(self.bad_vouts_path, str(self.height) + '_' + file_name),
+                                            'w') as f:
+                                        f.write('TXID : {}\n'.format(b.hex()))
+                                        f.write('SCRIPT : {}\n'.format(txout.pk_script.hex()))
+                                        f.write('OpCodes : {}\n'.format(str(ops)))
+                                        f.write('Exception : {}\n'.format(repr(e)))
+                                        f.write('Traceback : {}\n'.format(traceback.format_exc()))
 
-                #Remove
-                quals = [qual for qual in self.current_qualifiers if qual]
+                if self.current_restricted_asset and self.current_qualifiers:
+                    res = self.current_restricted_asset  # type: bytes
 
-                tag_historical = self.restricted_to_qualifier.__setitem__
-                tag_current = self.qr_associations.__setitem__
+                    #Remove
+                    quals = [qual for qual in self.current_qualifiers if qual]
 
-                def pop_current(x):
-                    return self.qr_associations.pop(x, None)
+                    tag_historical = self.restricted_to_qualifier.__setitem__
+                    tag_current = self.qr_associations.__setitem__
 
-                undo_append = association_undo_info.append
+                    def pop_current(x):
+                        return self.qr_associations.pop(x, None)
 
-                res_idx = self.restricted_idx
-                qual_idx = self.qualifiers_idx
+                    undo_append = association_undo_info.append
 
-                def get_current_association_data(data: bytes):
-                    parser = DataParser(data)
-                    ret = []
-                    for _ in range(parser.read_int()):
-                        ret.append((
-                            parser.read_var_bytes(),  # asset
-                            parser.read_bytes(4 + 4 + 5),  # res idx, qual idx, tx_num
-                            parser.read_boolean(),  # Associated or un-associated
-                        ))
-                    return ret
+                    res_idx = self.restricted_idx
+                    qual_idx = self.qualifiers_idx
 
-                old_res_info = []
-                cached_f = pop_current(b'r' + res)
-                if cached_f:
-                    old_res_info = get_current_association_data(cached_f)
-                else:
-                    writed_f = self.db.asset_db.get(b'r' + res)
-                    if writed_f:
-                        old_res_info = get_current_association_data(writed_f)
+                    def get_current_association_data(data: bytes):
+                        parser = DataParser(data)
+                        ret = []
+                        for _ in range(parser.read_int()):
+                            ret.append((
+                                parser.read_var_bytes(),  # asset
+                                parser.read_bytes(4 + 4 + 5),  # res idx, qual idx, tx_num
+                                parser.read_boolean(),  # Associated or un-associated
+                            ))
+                        return ret
 
-                qual_removals = set(tup[0] for tup in old_res_info) - set(quals)
-
-                tag_historical(
-                    bytes([len(res)]) + res + res_idx + qual_idx + tx_numb,
-                    (quals, qual_removals)
-                )
-
-                undo_append(bytes([len(res)]) + res + res_idx + qual_idx + tx_numb +
-                            bytes([len(quals) + len(qual_removals)]) +
-                            b''.join([bytes([len(q)]) + q for q in quals]) +
-                            b''.join([bytes([len(q)]) + q for q in qual_removals]))
-
-                new_checked = set()
-
-                def check_name(name: bytes) -> bool:
-                    nonlocal new_checked
-                    if name in quals:
-                        new_checked.add(name)
-                        return True
+                    old_res_info = []
+                    cached_f = pop_current(b'r' + res)
+                    if cached_f:
+                        old_res_info = get_current_association_data(cached_f)
                     else:
-                        return False
+                        writed_f = self.db.asset_db.get(b'r' + res)
+                        if writed_f:
+                            old_res_info = get_current_association_data(writed_f)
 
-                new_res_info = [
-                    ((tup[0], res_idx + qual_idx + tx_numb, True) if check_name(tup[0])
-                     else (tup[0], res_idx + qual_idx + tx_numb, False))
-                    for tup in old_res_info
-                ]
+                    qual_removals = set(tup[0] for tup in old_res_info) - set(quals)
 
-                for qual in set(quals) - new_checked:
-                    new_res_info.append((
-                        qual,
-                        res_idx + qual_idx + tx_numb,
-                        True
-                    ))
+                    tag_historical(
+                        bytes([len(res)]) + res + res_idx + qual_idx + tx_numb,
+                        (quals, qual_removals)
+                    )
 
-                new_res_info = [bytes([len(tup[0])]) +
-                                tup[0] + tup[1] + (b'\x01' if tup[2] else b'\0')
-                                for tup in new_res_info]
+                    undo_append(bytes([len(res)]) + res + res_idx + qual_idx + tx_numb +
+                                bytes([len(quals) + len(qual_removals)]) +
+                                b''.join([bytes([len(q)]) + q for q in quals]) +
+                                b''.join([bytes([len(q)]) + q for q in qual_removals]))
 
-                undo_append(bytes([len(old_res_info)]) + b''.join([bytes([len(tup[0])]) +
-                            tup[0] + tup[1] + (b'\x01' if tup[2] else b'\0')
-                            for tup in old_res_info]))
-
-                tag_current(b'r' + res, bytes([len(new_res_info)]) + b''.join(new_res_info))
-
-                qual_undos = []
-
-                for qual in quals:
-                    old_qual_info = []
-                    cached_q = pop_current(b'c' + qual)
-                    if cached_q:
-                        old_qual_info = get_current_association_data(cached_q)
-                    else:
-                        writed_q = self.db.asset_db.get(b'c' + qual)
-                        if writed_q:
-                            old_qual_info = get_current_association_data(writed_q)
-
-                    has_res = False
+                    new_checked = set()
 
                     def check_name(name: bytes) -> bool:
-                        nonlocal has_res
-                        b = name == res
-                        if not has_res:
-                            has_res = b
-                        return b
+                        nonlocal new_checked
+                        if name in quals:
+                            new_checked.add(name)
+                            return True
+                        else:
+                            return False
 
-                    new_qual_info = [
+                    new_res_info = [
                         ((tup[0], res_idx + qual_idx + tx_numb, True) if check_name(tup[0])
-                         else tup)
-                        for tup in old_qual_info
+                        else (tup[0], res_idx + qual_idx + tx_numb, False))
+                        for tup in old_res_info
                     ]
 
-                    if not has_res:
-                        new_qual_info.append((res, res_idx + qual_idx + tx_numb, True))
+                    for qual in set(quals) - new_checked:
+                        new_res_info.append((
+                            qual,
+                            res_idx + qual_idx + tx_numb,
+                            True
+                        ))
 
-                    new_qual_info = [bytes([len(tup[0])]) +
+                    new_res_info = [bytes([len(tup[0])]) +
                                     tup[0] + tup[1] + (b'\x01' if tup[2] else b'\0')
-                                    for tup in new_qual_info]
+                                    for tup in new_res_info]
 
-                    qual_undos.append(bytes([len(qual)]) + qual +
-                                      bytes([len(old_qual_info)]) + b''.join([bytes([len(tup[0])]) +
-                                      tup[0] + tup[1] + (b'\x01' if tup[2] else b'\0')
-                                      for tup in old_qual_info]))
+                    undo_append(bytes([len(old_res_info)]) + b''.join([bytes([len(tup[0])]) +
+                                tup[0] + tup[1] + (b'\x01' if tup[2] else b'\0')
+                                for tup in old_res_info]))
 
-                    tag_current(b'c' + qual, bytes([len(new_qual_info)]) + b''.join(new_qual_info))
+                    tag_current(b'r' + res, bytes([len(new_res_info)]) + b''.join(new_res_info))
 
-                for qual in qual_removals:
-                    old_qual_info = []
-                    cached_q = pop_current(b'c' + qual)
-                    if cached_q:
-                        old_qual_info = get_current_association_data(cached_q)
-                    else:
-                        writed_q = self.db.asset_db.get(b'c' + qual)
-                        if writed_q:
-                            old_qual_info = get_current_association_data(writed_q)
-                    new_qual_info = [
-                        ((tup[0], res_idx + qual_idx + tx_numb, False) if tup[0] == res
-                         else tup)
-                        for tup in old_qual_info
-                    ]
-                    new_qual_info = [bytes([len(tup[0])]) +
-                                     tup[0] + tup[1] + (b'\x01' if tup[2] else b'\0')
-                                     for tup in new_qual_info]
-                    qual_undos.append(bytes([len(qual)]) + qual +
-                                      bytes([len(old_qual_info)]) + b''.join([bytes([len(tup[0])]) +
-                                                                              tup[0] + tup[1] + (
-                                                                                  b'\x01' if tup[2] else b'\0')
-                                                                              for tup in old_qual_info]))
+                    qual_undos = []
 
-                    undo_append(bytes([len(qual_undos)]) + b''.join(qual_undos))
+                    for qual in quals:
+                        old_qual_info = []
+                        cached_q = pop_current(b'c' + qual)
+                        if cached_q:
+                            old_qual_info = get_current_association_data(cached_q)
+                        else:
+                            writed_q = self.db.asset_db.get(b'c' + qual)
+                            if writed_q:
+                                old_qual_info = get_current_association_data(writed_q)
 
-                    tag_current(b'c' + qual, bytes([len(new_qual_info)]) + b''.join(new_qual_info))
+                        has_res = False
 
-            append_hashXs(hashXs)
-            update_touched(hashXs)
-            tx_num += 1
-            if is_asset:
-                asset_num += 1
-            self.current_restricted_asset = None
-            self.current_qualifiers = []
+                        def check_name(name: bytes) -> bool:
+                            nonlocal has_res
+                            b = name == res
+                            if not has_res:
+                                has_res = b
+                            return b
 
+                        new_qual_info = [
+                            ((tup[0], res_idx + qual_idx + tx_numb, True) if check_name(tup[0])
+                            else tup)
+                            for tup in old_qual_info
+                        ]
+
+                        if not has_res:
+                            new_qual_info.append((res, res_idx + qual_idx + tx_numb, True))
+
+                        new_qual_info = [bytes([len(tup[0])]) +
+                                        tup[0] + tup[1] + (b'\x01' if tup[2] else b'\0')
+                                        for tup in new_qual_info]
+
+                        qual_undos.append(bytes([len(qual)]) + qual +
+                                        bytes([len(old_qual_info)]) + b''.join([bytes([len(tup[0])]) +
+                                        tup[0] + tup[1] + (b'\x01' if tup[2] else b'\0')
+                                        for tup in old_qual_info]))
+
+                        tag_current(b'c' + qual, bytes([len(new_qual_info)]) + b''.join(new_qual_info))
+
+                    for qual in qual_removals:
+                        old_qual_info = []
+                        cached_q = pop_current(b'c' + qual)
+                        if cached_q:
+                            old_qual_info = get_current_association_data(cached_q)
+                        else:
+                            writed_q = self.db.asset_db.get(b'c' + qual)
+                            if writed_q:
+                                old_qual_info = get_current_association_data(writed_q)
+                        new_qual_info = [
+                            ((tup[0], res_idx + qual_idx + tx_numb, False) if tup[0] == res
+                            else tup)
+                            for tup in old_qual_info
+                        ]
+                        new_qual_info = [bytes([len(tup[0])]) +
+                                        tup[0] + tup[1] + (b'\x01' if tup[2] else b'\0')
+                                        for tup in new_qual_info]
+                        qual_undos.append(bytes([len(qual)]) + qual +
+                                        bytes([len(old_qual_info)]) + b''.join([bytes([len(tup[0])]) +
+                                                                                tup[0] + tup[1] + (
+                                                                                    b'\x01' if tup[2] else b'\0')
+                                                                                for tup in old_qual_info]))
+
+                        undo_append(bytes([len(qual_undos)]) + b''.join(qual_undos))
+
+                        tag_current(b'c' + qual, bytes([len(new_qual_info)]) + b''.join(new_qual_info))
+
+                append_hashXs(hashXs)
+                update_touched(hashXs)
+                append_tx_hash(tx_hash)
+                tx_num += 1
+                if is_asset:
+                    asset_num += 1
+                self.current_restricted_asset = None
+                self.current_qualifiers = []
+
+        self.tx_hashes.append(b''.join(tx_hashes))
         self.db.history.add_unflushed(hashXs_by_tx, self.tx_count)
 
         self.asset_count = asset_num
@@ -1244,46 +1352,34 @@ class BlockProcessor:
         # Assets aren't always in tx's... remove None types
         asset_undo_info = [i for i in asset_undo_info if i]
 
-        return undo_info, asset_undo_info, asset_meta_undo_info, qualified_undo_info, freeze_undo_info, \
-               association_undo_info, asset_broadcast_undo_info
+        if block.height >= self.db.min_undo_height(self.daemon.cached_height()):
+            self.undo_infos.append((undo_info, block.height))
+            self.asset_undo_infos.append((asset_undo_info, block.height))
+            self.asset_data_undo_infos.append((asset_meta_undo_info, block.height))
+            self.tag_to_address_undos.append((qualified_undo_info, block.height))
+            self.global_freezes_undos.append((freeze_undo_info, block.height))
+            self.restricted_to_qualifier_undos.append((association_undo_info, block.height))
+            self.asset_broadcast_undos.append((asset_broadcast_undo_info, block.height))
 
-    async def _backup_block(self, raw_block):
-        '''Backup the raw block and flush.
+        self.height = block.height
+        self.headers.append(block.header)
+        self.tip = self.coin.header_hash(block.header)
+        self.chain_size += block.size
+        self.ok = True
 
-        The blocks should be in order of decreasing height, starting at.  self.height.  A
-        flush is performed once the blocks are backed up.
-        '''
+    def backup_block(self, block):
+        '''Backup the streamed block.'''
         self.db.assert_flushed(self.flush_data())
-        assert self.height > 0
+        assert block.height > 0
         genesis_activation = self.coin.GENESIS_ACTIVATION
-
-        coin = self.coin
-
-        # Check and update self.tip
-        block = coin.block(raw_block, self.height)
-        header_hash = coin.header_hash(block.header)
-        if header_hash != self.tip:
-            raise ChainError('backup block {} not tip {} at height {:,d}'
-                             .format(hash_to_hex_str(header_hash),
-                                     hash_to_hex_str(self.tip),
-                                     self.height))
-        self.tip = coin.header_prevhash(block.header)
+        
         is_unspendable = (is_unspendable_genesis if self.height >= genesis_activation
                           else is_unspendable_legacy)
-        self._backup_txs(block.transactions, is_unspendable)
-        self.height -= 1
-        self.db.tx_counts.pop()
-
-        await sleep(0)
-
-    def _backup_txs(self, txs, is_unspendable):
-        # Prevout values, in order down the block (coinbase first if present)
-        # undo_info is in reverse block order
-        undo_info = self.db.read_undo_info(self.height)
-        asset_undo_info = self.db.read_asset_undo_info(self.height)
+        
+        undo_info = self.db.read_undo_info(block.height)
+        asset_undo_info = self.db.read_asset_undo_info(block.height)
         if undo_info is None or asset_undo_info is None:
-            raise ChainError('no undo information found for height {:,d}'
-                             .format(self.height))
+            raise ChainError(f'no undo information found for height {block.height:,d}')
 
         data_parser = DataParser(self.db.read_asset_meta_undo_info(self.height))
         while not data_parser.is_finished():  # Stops when None or empty
@@ -1446,7 +1542,7 @@ class BlockProcessor:
         # Use local vars for speed in the loops
         put_utxo = self.utxo_cache.__setitem__
         spend_utxo = self.spend_utxo
-        touched = self.touched
+        touched_add = self.touched.add        
         undo_entry_len = 13 + HASHX_LEN
 
         # n is our pointer.
@@ -1477,46 +1573,57 @@ class BlockProcessor:
         put_asset = self.asset_cache.__setitem__
         spend_asset = self.spend_asset
 
-        for tx, tx_hash in reversed(txs):
-            for idx, txout in enumerate(tx.outputs):
-                # Spend the TX outputs.  Be careful with unspendable
-                # outputs - we didn't save those in the first place.
-                if is_unspendable(txout.pk_script):
-                    continue
+        count = 0
+        with block as block:
+            for tx, tx_hash in block.iter_txs_reversed():
+                for idx, txout in enumerate(tx.outputs):
+                    # Spend the TX outputs.  Be careful with unspendable
+                    # outputs - we didn't save those in the first place.
+                    if is_unspendable(txout.pk_script):
+                        continue
 
-                cache_value = spend_utxo(tx_hash, idx)
+                    cache_value = spend_utxo(tx_hash, idx)
 
-                # Since we add assets in the UTXO's normally, when backing up
-                # Remove them in the spend.
-                if spend_asset(tx_hash, idx):
-                    assets += 1
+                    # Since we add assets in the UTXO's normally, when backing up
+                    # Remove them in the spend.
+                    if spend_asset(tx_hash, idx):
+                        assets += 1
 
-                # All assets will be in the normal utxo cache
-                touched.add(cache_value[:-13])
+                    # All assets will be in the normal utxo cache
+                    touched_add(cache_value[:-13])
 
-            # Restore the inputs
-            for txin in reversed(tx.inputs):
-                prev_idx_bytes = pack_le_uint32(txin.prev_idx)
+                # Restore the inputs
+                for txin in reversed(tx.inputs):
+                    prev_idx_bytes = pack_le_uint32(txin.prev_idx)
 
-                if txin.is_generation():
-                    continue
-                n -= undo_entry_len
-                undo_item = undo_info[n:n + undo_entry_len]
-                put_utxo(txin.prev_hash + pack_le_uint32(txin.prev_idx), undo_item)
-                touched.add(undo_item[:-13])
+                    if txin.is_generation():
+                        continue
+                    n -= undo_entry_len
+                    undo_item = undo_info[n:n + undo_entry_len]
+                    put_utxo(txin.prev_hash + pack_le_uint32(txin.prev_idx), undo_item)
+                    touched_add(undo_item[:-13])
 
-                asset_undo_entry_len = find_asset_undo_len(asset_n)
-                new_asset_n = asset_n - asset_undo_entry_len
-                if new_asset_n >= 0 and asset_undo_entry_len > 0:
-                    undo_item = asset_undo_info[new_asset_n:new_asset_n + asset_undo_entry_len]
-                    if undo_item[:32] == txin.prev_hash and undo_item[32:36] == prev_idx_bytes:
-                        put_asset(txin.prev_hash + prev_idx_bytes, undo_item[36:])
-                        asset_n = new_asset_n
+                    asset_undo_entry_len = find_asset_undo_len(asset_n)
+                    new_asset_n = asset_n - asset_undo_entry_len
+                    if new_asset_n >= 0 and asset_undo_entry_len > 0:
+                        undo_item = asset_undo_info[new_asset_n:new_asset_n + asset_undo_entry_len]
+                        if undo_item[:32] == txin.prev_hash and undo_item[32:36] == prev_idx_bytes:
+                            put_asset(txin.prev_hash + prev_idx_bytes, undo_item[36:])
+                            asset_n = new_asset_n
+                count += 1
 
         assert n == 0
         assert asset_n == 0
-        self.tx_count -= len(txs)
+        self.tx_count -= count
         self.asset_count -= assets
+        self.chain_size += block.size
+        self.tip = self.coin.header_prevhash(block.header)
+        self.height -= 1
+        self.db.tx_counts.pop()
+
+        # self.touched can include other addresses which is harmless, but remove None.
+        self.touched.discard(None)
+        self.db.flush_backup(self.flush_data(), self.touched)
 
     '''An in-memory UTXO cache, representing all changes to UTXO state
     since the last DB flush.
@@ -1657,37 +1764,20 @@ class BlockProcessor:
         # raise ChainError('UTXO {} / {:,d} not found in "h" table'
         # .format(hash_to_hex_str(tx_hash), tx_idx))
 
-    async def _process_blocks(self):
-        '''Loop forever processing blocks as they arrive.'''
-
-        async def process_event():
-            '''Perform a pending reorg or process prefetched blocks.'''
-            if self.reorg_count is not None:
-                await self._reorg_chain(self.reorg_count)
-                self.reorg_count = None
-                # Prefetcher block cache cleared so nothing to process
-            else:
-                blocks = self.prefetcher.get_prefetched_blocks()
-                await self._advance_blocks(blocks)
-
-        # This must be done to set state before the main loop
-        if self.height == self.daemon.cached_height():
-            await self._on_caught_up()
-
-        while True:
-            await self.blocks_event.wait()
-            self.blocks_event.clear()
-            await self.run_with_lock(process_event())
-
-    async def _on_caught_up(self):
-        if not self._caught_up_event.is_set():
-            self._caught_up_event.set()
-            self.logger.info(f'caught up to height {self.height}')
-            # Flush everything but with first_sync->False state.
-            first_sync = self.db.first_sync
-            self.db.first_sync = False
-            if first_sync:
-                self.logger.info(f'{electrumx.version} synced to height {self.height:,d}')
+    async def on_caught_up(self):
+        is_first_sync = self.db.first_sync
+        self.db.first_sync = False
+        await self.flush(True)
+        if self.caught_up:
+            # Flush everything before notifying as client queries are performed on the DB
+            await self.notifications.on_block(self.touched, self.height)
+            self.touched = set()
+        else:
+            self.caught_up = True
+            if is_first_sync:
+                logger.info(f'{electrumx.version} synced to height {self.height:,d}')
+                self.db.first_sync = False
+            await self.flush(True)
             # Reopen for serving
             await self.db.open_for_serving()
 
@@ -1697,6 +1787,7 @@ class BlockProcessor:
         self.tip = self.db.db_tip
         self.tx_count = self.db.db_tx_count
         self.asset_count = self.db.db_asset_count
+        self.chain_size = self.db.db_chain_size
 
     # --- External API
 
@@ -1716,33 +1807,61 @@ class BlockProcessor:
         if self.env.write_bad_vouts_to_file and not os.path.isdir(self.bad_vouts_path):
             os.mkdir(self.bad_vouts_path)
 
-        self._caught_up_event = caught_up_event
         await self._first_open_dbs()
+        await OnDiskBlock.scan_files()
+        
         try:
-            async with TaskGroup() as group:
-                await group.spawn(self.prefetcher.main_loop(self.height))
-                await group.spawn(self._process_blocks())
+            show_summary = True
+            while True:
+                hex_hashes, daemon_height = await self.next_block_hashes()
+                if show_summary:
+                    show_summary = False
+                    behind = daemon_height - self.height
+                    if behind > 0:
+                        logger.info(f'catching up to daemon height {daemon_height:,d} '
+                                    f'({behind:,d} blocks behind)')
+                    else:
+                        logger.info(f'caught up to daemon height {daemon_height:,d}')
 
-                async for task in group:
-                    if not task.cancelled():
-                        task.result()
+                if hex_hashes:
+                    # Shielded so that cancellations from shutdown don't lose work
+                    await self.advance_blocks(hex_hashes)
+                else:
+                    await self.on_caught_up()
+                    caught_up_event.set()
+                    await sleep(self.polling_delay)
+
+                if self.reorg_count is not None:
+                    await self.reorg_chain(self.reorg_count)
+                    self.reorg_count = None
+                    show_summary = True
 
         # Don't flush for arbitrary exceptions as they might be a cause or consequence of
         # corrupted data
         except CancelledError:
-            self.logger.info('flushing to DB for a clean shutdown...')
-            await self.run_with_lock(self.flush(True))
-            self.logger.info('flushed cleanly')
+            await OnDiskBlock.stop_prefetching()
+            await self.run_with_lock(self.flush_if_safe())
+
         except Exception:
             logging.exception('Critical Block Processor Error:')
             raise
 
-    def force_chain_reorg(self, count):
-        '''Force a reorg of the given number of blocks.
 
-        Returns True if a reorg is queued, false if not caught up.
+    async def flush_if_safe(self):
+        if self.ok:
+            logger.info('flushing to DB for a clean shutdown...')
+            await self.flush(True)
+            logger.info('flushed cleanly')
+        else:
+            logger.warning('not flushing to DB as data in memory is incomplete')
+
+
+    def force_chain_reorg(self, count):
+        '''Force a reorg of the given number of blocks.  Returns True if a reorg is queued.
+        During initial sync we don't store undo information so cannot fake a reorg until
+        caught up.
         '''
-        if self._caught_up_event.is_set():
-            self.schedule_reorg(count)
+        if self.caught_up:
+            self.reorg_count = count
             return True
         return False

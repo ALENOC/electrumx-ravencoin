@@ -9,13 +9,13 @@
 '''Interface to the blockchain database.'''
 
 
-import array
 import ast
 import os
 import time
+import re
+from array import array
 from bisect import bisect_right
 from collections import namedtuple
-from glob import glob
 
 import attr
 from aiorpcx import run_in_thread, sleep
@@ -24,8 +24,8 @@ from electrumx.lib import util
 from electrumx.lib.hash import hash_to_hex_str, HASHX_LEN
 from electrumx.lib.merkle import Merkle, MerkleCache
 from electrumx.lib.util import (
-    formatted_time, pack_be_uint16, pack_be_uint32, pack_le_uint32,
-    unpack_le_uint32, unpack_be_uint32, unpack_le_uint64, base_encode
+    formatted_time, pack_be_uint32, pack_le_uint32,
+    unpack_le_uint32, unpack_be_uint32, unpack_le_uint64, base_encode,
 )
 from electrumx.server.history import History
 from electrumx.server.storage import db_class
@@ -39,6 +39,7 @@ class FlushData(object):
     height = attr.ib()
     tx_count = attr.ib()
     headers = attr.ib()
+    chain_size = attr.ib()
     block_tx_hashes = attr.ib()
     # The following are flushed to the UTXO DB if undo_infos is not None
     undo_infos = attr.ib()
@@ -77,14 +78,14 @@ class FlushData(object):
     asset_broadcasts_del = attr.ib()
 
 
-class DB(object):
+class DB:
     '''Simple wrapper of the backend database for querying.
 
     Performs no DB update, though the DB will be cleaned on opening if
     it was shutdown uncleanly.
     '''
 
-    DB_VERSIONS = [6, 7, 8]
+    DB_VERSIONS = [8]
 
     class DBError(Exception):
         '''Raised on general DB errors generally indicating corruption.'''
@@ -109,6 +110,7 @@ class DB(object):
         self.fs_asset_count = 0
         self.db_height = -1
         self.db_tx_count = 0
+        self.db_chain_size = 0
         self.db_asset_count = 0
         self.db_tip = None
         self.tx_counts = None
@@ -140,7 +142,7 @@ class DB(object):
         size = (self.db_height + 1) * 8
         tx_counts = self.tx_counts_file.read(0, size)
         assert len(tx_counts) == size
-        self.tx_counts = array.array('Q', tx_counts)
+        self.tx_counts = array('Q', tx_counts)
         if self.tx_counts:
             assert self.db_tx_count == self.tx_counts[-1]
         else:
@@ -260,7 +262,7 @@ class DB(object):
 
         self.history.assert_flushed()
 
-    def flush_dbs(self, flush_data, flush_utxos, estimate_txs_remaining):
+    def flush_dbs(self, flush_data, flush_utxos, size_remaining):
         '''Flush out cached state.  History is always flushed; UTXOs are
         flushed if flush_utxos.'''
         if flush_data.height == self.db_height:
@@ -271,6 +273,8 @@ class DB(object):
         prior_flush = self.last_flush
         tx_delta = flush_data.tx_count - self.last_flush_tx_count
         asset_delta = flush_data.asset_count - self.last_flush_asset_count
+        size_delta = flush_data.chain_size - self.db_chain_size
+        self.db_chain_size = flush_data.chain_size
 
         # Flush to file system
         self.flush_fs(flush_data)
@@ -301,16 +305,17 @@ class DB(object):
         self.logger.info(f'flush #{self.history.flush_count:,d} took '
                          f'{elapsed:.1f}s.  Height {flush_data.height:,d} '
                          f'txs: {flush_data.tx_count:,d} ({tx_delta:+,d}) '
-                         f'assets: {flush_data.asset_count:,d} ({asset_delta:+,d})')
+                         f'assets: {flush_data.asset_count:,d} ({asset_delta:+,d})'
+                         f'size: {flush_data.chain_size:,d} ({size_delta:+,d})')
 
         # Catch-up stats
         if self.utxo_db.for_sync:
             flush_interval = self.last_flush - prior_flush
-            tx_per_sec_gen = int(flush_data.tx_count / self.wall_time)
-            tx_per_sec_last = 1 + int(tx_delta / flush_interval)
-            eta = estimate_txs_remaining() / tx_per_sec_last
-            self.logger.info(f'tx/sec since genesis: {tx_per_sec_gen:,d}, '
-                             f'since last flush: {tx_per_sec_last:,d}')
+            size_per_sec_gen = flush_data.chain_size / self.wall_time
+            size_per_sec_last = size_delta / (flush_interval + 0.01)
+            eta = size_remaining / (size_per_sec_last + 0.01) * 1.1
+            self.logger.info(f'MB/sec since genesis: {size_per_sec_gen / 1_000_000:.2f}, '
+                             f'since last flush: {size_per_sec_last / 1_000_000:.2f}')
             self.logger.info(f'sync time: {formatted_time(self.wall_time)}  '
                              f'ETA: {formatted_time(eta)}')
 
@@ -594,6 +599,8 @@ class DB(object):
         start_time = time.time()
         tx_delta = flush_data.tx_count - self.last_flush_tx_count
         asset_delta = flush_data.asset_count - self.last_flush_asset_count
+        size_delta = flush_data.chain_size - self.db_chain_size
+        self.db_chain_size = flush_data.chain_size
 
         self.backup_fs(flush_data.height, flush_data.tx_count, flush_data.asset_count)
         self.history.backup(touched, flush_data.tx_count)
@@ -613,7 +620,8 @@ class DB(object):
         self.logger.info(f'backup flush #{self.history.flush_count:,d} took '
                          f'{elapsed:.1f}s.  Height {flush_data.height:,d} '
                          f'txs: {flush_data.tx_count:,d} ({tx_delta:+,d}) '
-                         f'assets: {flush_data.asset_count:,d} ({asset_delta:+,d})')
+                         f'assets: {flush_data.asset_count:,d} ({asset_delta:+,d})'
+                         f'size: {flush_data.chain_size:,d} ({size_delta:+,d})')
 
     def backup_fs(self, height, tx_count, asset_count):
         '''Back up during a reorg.  This just updates our pointers.'''
@@ -686,8 +694,8 @@ class DB(object):
     async def fs_block_hashes(self, height, count):
         headers_concat, headers_count = await self.read_headers(height, count)
         if headers_count != count:
-            raise self.DBError('only got {:,d} headers starting at {:,d}, not '
-                               '{:,d}'.format(headers_count, height, count))
+            raise self.DBError(f'only got {headers_count:,d} headers starting at {height:,d}, '
+                               f'not {count:,d}')
         offset = 0
         headers = []
         for n in range(count):
@@ -790,29 +798,6 @@ class DB(object):
         for undo_info, height in undo_infos:
             batch_put(self.undo_key(height), b''.join(undo_info))
 
-    def raw_block_prefix(self):
-        return 'meta/block'
-
-    def raw_block_path(self, height):
-        return f'{self.raw_block_prefix()}{height:d}'
-
-    def read_raw_block(self, height):
-        '''Returns a raw block read from disk.  Raises FileNotFoundError
-        if the block isn't on-disk.'''
-        with util.open_file(self.raw_block_path(height)) as f:
-            return f.read(-1)
-
-    def write_raw_block(self, block, height):
-        '''Write a raw block to disk.'''
-        with util.open_truncate(self.raw_block_path(height)) as f:
-            f.write(block)
-        # Delete old blocks to prevent them accumulating
-        try:
-            del_height = self.min_undo_height(height) - 1
-            os.remove(self.raw_block_path(del_height))
-        except FileNotFoundError:
-            pass
-
     def clear_excess_undo_info(self):
         '''Clear excess undo info.  Only most recent N are kept.'''
         prefix = b'U'
@@ -879,19 +864,6 @@ class DB(object):
                     batch.delete(key)
                 self.logger.info(f'deleted {len(keys):,d} stale asset undo entries')
 
-        # delete old block files
-        prefix = self.raw_block_prefix()
-        paths = [path for path in glob(f'{prefix}[0-9]*')
-                 if len(path) > len(prefix)
-                 and int(path[len(prefix):]) < min_height]
-        if paths:
-            for path in paths:
-                try:
-                    os.remove(path)
-                except FileNotFoundError:
-                    pass
-            self.logger.info(f'deleted {len(paths):,d} stale block files')
-
     # -- Asset database
 
     def read_asset_state(self):
@@ -914,6 +886,7 @@ class DB(object):
         if not state:
             self.db_height = -1
             self.db_tx_count = 0
+            self.db_chain_size = 0
             self.db_tip = b'\0' * 32
             self.db_version = max(self.DB_VERSIONS)
             self.utxo_flush_count = 0
@@ -948,10 +921,6 @@ class DB(object):
         self.fs_tx_count = self.db_tx_count
         self.last_flush_tx_count = self.fs_tx_count
 
-        # Upgrade DB
-        if self.db_version != max(self.DB_VERSIONS):
-            self.upgrade_db()
-
         # Log some stats
         self.logger.info('UTXO DB version: {:d}'.format(self.db_version))
         self.logger.info('coin: {}'.format(self.coin.NAME))
@@ -966,102 +935,13 @@ class DB(object):
             self.logger.info('sync time so far: {}'
                              .format(util.formatted_time(self.wall_time)))
 
-    def upgrade_db(self):
-        self.logger.info(f'UTXO DB version: {self.db_version}')
-        self.logger.info('Upgrading your DB; this can take some time...')
-
-        def upgrade_u_prefix(prefix):
-            count = 0
-            with self.utxo_db.write_batch() as batch:
-                batch_delete = batch.delete
-                batch_put = batch.put
-                # Key: b'u' + address_hashX + tx_idx + tx_num
-                for db_key, db_value in self.utxo_db.iterator(prefix=prefix):
-                    if len(db_key) == 21:
-                        return
-                    break
-                if self.db_version == 6:
-                    for db_key, db_value in self.utxo_db.iterator(prefix=prefix):
-                        count += 1
-                        batch_delete(db_key)
-                        batch_put(db_key[:14] + b'\0\0' + db_key[14:] + b'\0', db_value)
-                else:
-                    for db_key, db_value in self.utxo_db.iterator(prefix=prefix):
-                        count += 1
-                        batch_delete(db_key)
-                        batch_put(db_key + b'\0', db_value)
-            return count
-
-        last = time.monotonic()
-        count = 0
-        for cursor in range(65536):
-            prefix = b'u' + pack_be_uint16(cursor)
-            count += upgrade_u_prefix(prefix)
-            now = time.monotonic()
-            if now > last + 10:
-                last = now
-                self.logger.info(f'DB 1 of 3: {count:,d} entries updated, '
-                                 f'{cursor * 100 / 65536:.1f}% complete')
-        self.logger.info('DB 1 of 3 upgraded successfully')
-
-        def upgrade_h_prefix(prefix):
-            count = 0
-            with self.utxo_db.write_batch() as batch:
-                batch_delete = batch.delete
-                batch_put = batch.put
-                # Key: b'h' + compressed_tx_hash + tx_idx + tx_num
-                for db_key, db_value in self.utxo_db.iterator(prefix=prefix):
-                    if len(db_key) == 14:
-                        return
-                    break
-                if self.db_version == 6:
-                    for db_key, db_value in self.utxo_db.iterator(prefix=prefix):
-                        count += 1
-                        batch_delete(db_key)
-                        batch_put(db_key[:7] + b'\0\0' + db_key[7:] + b'\0', db_value)
-                else:
-                    for db_key, db_value in self.utxo_db.iterator(prefix=prefix):
-                        count += 1
-                        batch_delete(db_key)
-                        batch_put(db_key + b'\0', db_value)
-            return count
-
-        last = time.monotonic()
-        count = 0
-        for cursor in range(65536):
-            prefix = b'h' + pack_be_uint16(cursor)
-            count += upgrade_h_prefix(prefix)
-            now = time.monotonic()
-            if now > last + 10:
-                last = now
-                self.logger.info(f'DB 2 of 3: {count:,d} entries updated, '
-                                 f'{cursor * 100 / 65536:.1f}% complete')
-
-        # Upgrade tx_counts file
-        size = (self.db_height + 1) * 8
-        tx_counts = self.tx_counts_file.read(0, size)
-        if len(tx_counts) == (self.db_height + 1) * 4:
-            tx_counts = array.array('I', tx_counts)
-            tx_counts = array.array('Q', tx_counts)
-            self.tx_counts_file.write(0, tx_counts.tobytes())
-
-        self.db_version = max(self.DB_VERSIONS)
-        with self.utxo_db.write_batch() as batch:
-            self.write_utxo_state(batch)
-        self.logger.info('DB 2 of 3 upgraded successfully')
-
-    def write_asset_state(self, batch):
-        state = {
-            'asset_count': self.db_asset_count,
-        }
-        batch.put(b'state', repr(state).encode())
-
     def write_utxo_state(self, batch):
         '''Write (UTXO) state to the batch.'''
         state = {
             'genesis': self.coin.GENESIS_HASH,
             'height': self.db_height,
             'tx_count': self.db_tx_count,
+            'chain_size': self.db_chain_size,
             'tip': self.db_tip,
             'utxo_flush_count': self.utxo_flush_count,
             'wall_time': self.wall_time,

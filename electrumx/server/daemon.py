@@ -14,9 +14,9 @@ import json
 import time
 
 import aiohttp
-from aiorpcx import JSONRPC
+from aiorpcx import JSONRPC, run_in_thread
 
-from electrumx.lib.util import hex_to_bytes, class_logger
+from electrumx.lib.util import hex_to_bytes, open_truncate, class_logger
 
 
 class DaemonError(Exception):
@@ -95,17 +95,33 @@ class Daemon(object):
             return True
         return False
 
-    async def _send_data(self, data):
+    async def _post_json(self, payload, processor):
+        data = json.dumps(payload)
         async with self.workqueue_semaphore:
             async with self.session.post(self.current_url(), data=data) as resp:
                 kind = resp.headers.get('Content-Type', None)
                 if kind == 'application/json':
-                    return await resp.json()
+                    return processor(await resp.json())
                 text = await resp.text()
                 text = text.strip() or resp.reason
                 raise ServiceRefusedError(text)
 
-    async def _send(self, payload, processor):
+    async def _get_to_file(self, rest_url, filename):
+        full_url = self.current_url() + rest_url
+        async with self.workqueue_semaphore:
+             with open_truncate(filename) as file:
+                async with self.session.get(full_url) as resp:
+                    kind = resp.headers.get('Content-Type', None)
+                    if kind != 'application/octet-stream':
+                        text = await resp.text()
+                        text = text.strip() or resp.reason
+                        raise ServiceRefusedError(text)
+                    size = 0
+                    async for part, _ in resp.content.iter_chunks():
+                        size += await run_in_thread(file.write, part)
+                    return size
+
+    async def _send(self, func, *args):
         '''Send a payload to be converted to JSON.
 
         Handles temporary connection issues.  Daemon reponse errors
@@ -122,12 +138,10 @@ class Daemon(object):
 
         on_good_message = None
         last_error_log = -1000   # Monotonic time starts at 0
-        data = json.dumps(payload)
         retry = self.init_retry
         while True:
             try:
-                result = await self._send_data(data)
-                result = processor(result)
+                result = await func(*args)
                 if on_good_message:
                     self.logger.info(on_good_message)
                 return result
@@ -143,8 +157,8 @@ class Daemon(object):
                 log_error('connection problem - check your daemon is running')
                 on_good_message = 'connection restored'
             except aiohttp.ClientError as e:
-                log_error(f'daemon error: {e}')
-                on_good_message = 'running normally'
+                log_error(f'reguest failed: {e}; your ravend might have gone down')
+                on_good_message = None
             except ServiceRefusedError as e:
                 log_error(f'daemon service refused: {e}')
                 on_good_message = 'running normally'
@@ -168,7 +182,7 @@ class Daemon(object):
         payload = {'method': method, 'id': next(self.id_counter)}
         if params:
             payload['params'] = params
-        return await self._send(payload, processor)
+        return await self._send(self._post_json, payload, processor)
 
     async def _send_vector(self, method, params_iterable, replace_errs=False):
         '''Send several requests of the same method.
@@ -212,16 +226,9 @@ class Daemon(object):
         params_iterable = ((h, ) for h in range(first, first + count))
         return await self._send_vector('getblockhash', params_iterable)
 
-    async def deserialised_block(self, hex_hash):
-        '''Return the deserialised block with the given hex hash.'''
-        return await self._send_single('getblock', (hex_hash, True))
-
-    async def raw_blocks(self, hex_hashes):
-        '''Return the raw binary blocks with the given hex hashes.'''
-        params_iterable = ((h, False) for h in hex_hashes)
-        blocks = await self._send_vector('getblock', params_iterable)
-        # Convert hex string to bytes
-        return [hex_to_bytes(block) for block in blocks]
+    async def get_block(self, hex_hash, filename):
+        rest_url = f'rest/block/{hex_hash}.bin'
+        return await self._send(self._get_to_file, rest_url, filename)
 
     async def mempool_hashes(self):
         '''Update our record of the daemon's mempool hashes.'''

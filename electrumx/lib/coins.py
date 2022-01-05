@@ -112,7 +112,7 @@ class Coin:
         '''Return a coin class given name and network.
 
         Raise an exception if unrecognised.'''
-        req_attrs = ['TX_COUNT', 'TX_COUNT_HEIGHT', 'TX_PER_BLOCK']
+        req_attrs = ['CHAIN_SIZE', 'CHAIN_SIZE_HEIGHT', 'AVG_BLOCK_SIZE']
         for coin in util.subclasses(Coin):
             if (coin.NAME.lower() == name.lower() and
                     coin.NET.lower() == net.lower()):
@@ -139,11 +139,6 @@ class Coin:
             url = 'http://' + url
         return url + '/'
 
-    @classmethod
-    def max_fetch_blocks(cls, height):
-        if height < 130000:
-            return 1000
-        return 100
 
     @classmethod
     def genesis_block(cls, block):
@@ -240,19 +235,19 @@ class Ravencoin(Coin):
     P2SH_VERBYTES = [bytes.fromhex("7A")]
     GENESIS_HASH = ('0000006b444bc2f2ffe627be9d9e7e7a'
                     '0730000870ef6eb6da46c8eae389df90')
-    DESERIALIZER = lib_tx.DeserializerSegWit
     DEFAULT_MAX_SEND = 10_000_000
     X16RV2_ACTIVATION_TIME = 1569945600   # algo switch to x16rv2 at this timestamp
     KAWPOW_ACTIVATION_TIME = 1588788000  # kawpow algo activation time
     KAWPOW_ACTIVATION_HEIGHT = 1219736
     KAWPOW_HEADER_SIZE = 120
-    TX_COUNT = 5626682
-    TX_COUNT_HEIGHT = 887000
-    TX_PER_BLOCK = 6
+    CHAIN_SIZE = 21_000_000_000
+    CHAIN_SIZE_HEIGHT = 2_090_000
+    AVG_BLOCK_SIZE = 51_000
     RPC_PORT = 8766
     REORG_LIMIT = 100
     PEERS = [
         'rvn4lyfe.com s50002',
+        'aethyn.com t s',
         'electrum1.rvn.rocks s50002',
         'electrum2.rvn.rocks s50002',
         'electrum3.rvn.rocks s50002',
@@ -311,9 +306,11 @@ class RavencoinTestnet(Ravencoin):
     X16RV2_ACTIVATION_TIME = 1567533600
     KAWPOW_ACTIVATION_HEIGHT = 231544
     KAWPOW_ACTIVATION_TIME = 1585159200
-    TX_COUNT = 496158
-    TX_COUNT_HEIGHT = 420500
-    TX_PER_BLOCK = 1
+    
+    CHAIN_SIZE = 500_000_000
+    CHAIN_SIZE_HEIGHT = 1_040_000
+    AVG_BLOCK_SIZE = 500
+
     RPC_PORT = 18766
     PEER_DEFAULT_PORTS = {'t': '50003', 's': '50004'}
     REORG_LIMIT = 100
