@@ -20,8 +20,8 @@ from aiorpcx import TaskGroup, run_in_thread, sleep
 from electrumx.lib.addresses import public_key_to_address
 from electrumx.lib.hash import hash_to_hex_str, hex_str_to_hash
 from electrumx.lib.script import OpCodes, ScriptError, Script
-from electrumx.lib.tx import Deserializer
-from electrumx.lib.util import class_logger, chunks, base_encode
+from electrumx.lib.tx import read_tx
+from electrumx.lib.util import DataParser, class_logger, chunks
 from electrumx.server.db import UTXO, ASSET
 
 
@@ -296,7 +296,7 @@ class MemPool(object):
 
         def deserialize_txs():    # This function is pure
             to_hashX = self.coin.hashX_from_script
-            deserializer = Deserializer
+            read_tx_and_size = read_tx
 
             txs = {}
             for tx_hash, raw_tx in zip(hashes, raw_txs):
@@ -304,7 +304,7 @@ class MemPool(object):
                 # mempool or it may have gotten in a block
                 if not raw_tx:
                     continue
-                tx, tx_size = deserializer(raw_tx).read_tx_and_vsize()
+                tx, tx_size = read_tx_and_size(raw_tx, 0)
                 # Convert the inputs and outputs into (hashX, value) pairs
                 # Drop generation-like inputs from MemPoolTx.prevouts
                 txin_pairs = tuple((txin.prev_hash, txin.prev_idx)
@@ -339,16 +339,14 @@ class MemPool(object):
                         try:
                             next_op = ops[op_ptr + 1]
                             asset_script = next_op[2]
-                            asset_deserializer = Deserializer(asset_script)
-                            asset_deserializer._read_byte()
-                            asset_deserializer._read_byte()
-                            asset_deserializer._read_byte()
-                            asset_type = asset_deserializer._read_byte()
-                            asset_name = asset_deserializer._read_varbytes()
+                            asset_deserializer = DataParser(asset_script)
+                            asset_deserializer.read_bytes(3)
+                            asset_type = asset_deserializer.read_int()
+                            asset_name = asset_deserializer.read_var_bytes()
                             if asset_type == b'o'[0]:
                                 txout_tuple_list.append((hashX, 100_000_000, True, asset_name))
                             else:
-                                value = asset_deserializer._read_le_int64()
+                                value = int.from_bytes(asset_deserializer.read_bytes(8), 'little', signed=False)
                                 txout_tuple_list.append((hashX, value, True, asset_name))
                         except:
                             txout_tuple_list.append((hashX, value, False, None))
