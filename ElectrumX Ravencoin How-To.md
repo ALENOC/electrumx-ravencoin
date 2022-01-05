@@ -63,7 +63,7 @@ Full documentation and information about installation / running of the electrumx
 
 It is assumed that you have basic knowledge of editing files on Linux (vi, vim, nano etc.) and also basic knowledge of Python is helpful in case errors come up during the installation. 
 
-- Download and unpack the latest version of electrumx ravencoin from the link above (e.g. wget <path>) – the tar.gz version is suggested as that can easily be unpacked with tar –xzf {name}.tar.gz . 
+- Download latest version of electrumx ravencoin with **git clone https://github.com/Electrum-RVN-SIG/electrumx-ravencoin.git** or download from the link above (e.g. wget <path>) – the tar.gz version is suggested as that can easily be unpacked with tar –xzf {name}.tar.gz . 
 
 - Make a symbolic link to the electrumx, e.g., **ln -s {name} electrumx** so the version can be found by the scripts in-system. 
 
