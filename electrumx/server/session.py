@@ -23,7 +23,7 @@ import pylru
 from aiorpcx import (
     RPCSession, JSONRPCAutoDetect, JSONRPCConnection, serve_rs, serve_ws, NewlineFramer,
     TaskGroup, handler_invocation, RPCError, Request, sleep, Event, ReplyAndDisconnect,
-    timeout_after
+    TaskTimeout, timeout_after
 )
 
 import electrumx
@@ -1069,7 +1069,10 @@ class ElectrumX(SessionBase):
         try:
             async with timeout_after(30):
                 await self._notify_inner(touched, height_changed, assets)
-        except Exception:   # pylint:disable=W0703
+        except TaskTimeout:
+            self.logger.warning('timeout notifying client, closing...')
+            await self.close(force_after=1.0)
+        except Exception:
             self.logger.exception('unexpected exception notifying client')
 
     async def _notify_inner(self, touched, height_changed, assets):
