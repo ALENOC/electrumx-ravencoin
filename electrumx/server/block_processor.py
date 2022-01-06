@@ -12,15 +12,13 @@ import asyncio
 import os
 import re
 import hashlib
-import itertools
 import logging
 import os
-import time
 import traceback
 from datetime import datetime
 from asyncio import sleep
 from struct import error as struct_error
-from typing import Callable, Dict, Sequence, Optional, List
+from typing import Callable, Dict, Optional, List
 
 from aiorpcx import CancelledError, run_in_thread, spawn
 
@@ -100,8 +98,9 @@ class OnDiskBlock:
     # Map from hex hash to prefetch task
     tasks = {}
     # If set it logs the next time a block is processed
-    daemon_height = None
-    chain_size = 0
+    log_block = False
+    daemon = None
+    state = None
 
     def __init__(self, coin, hex_hash, height, size):
         self.hex_hash = hex_hash
@@ -148,11 +147,12 @@ class OnDiskBlock:
         deserializer = Deserializer(raw)
         tx_count = deserializer.read_varint()
 
-        if self.daemon_height:
-            logger.info(f'height {self.height:,d} of {self.daemon_height:,d} {self.hex_hash} '
-                        f'{self.date_str()} {self.size / 1_000_000_000:.3f}GB {tx_count:,d} txs '
-                        f'chain {self.chain_size // 1_000_000_000:,d}GB')
-            OnDiskBlock.daemon_height = None
+        if self.log_block:
+            logger.info(f'height {self.height:,d} of {self.daemon.cached_height():,d} '
+                        f'{self.hex_hash} {self.date_str()} '
+                        f'{self.size / 1_000_000:.3f}MB {tx_count:,d} txs '
+                        f'chain {self.state.chain_size / 1_000_000_000:.3f}GB')
+            OnDiskBlock.log_block = False
 
         count = 0
         while True:
@@ -166,6 +166,7 @@ class OnDiskBlock:
                 pass
 
             if tx_count == count:
+
                 return
             raw = raw[cursor:] + self._read(self.chunk_size)
             deserializer = Deserializer(raw)
@@ -173,7 +174,7 @@ class OnDiskBlock:
     def _chunk_offsets(self):
         '''Iterate the transactions forwards to find their boundaries.'''
         base_offset = self.block_file.tell()
-        assert base_offset == 80
+        assert base_offset in (80, 120)
         raw = self._read(self.chunk_size)
         deserializer = Deserializer(raw)
         tx_count = deserializer.read_varint()
@@ -346,16 +347,14 @@ class BlockProcessor:
         
         # Meta
         self.caught_up = False
-        self.ok = False
+        self.ok = True
         self.touched = set()
         # A count >= 0 is a user-forced reorg; < 0 is a natural reorg
         self.reorg_count = None
-        self.height = -1
-        self.tip = None
-        self.tx_count = 0
-        self.chain_size = 0
-        self.asset_count = 0
         self.force_flush_arg = None
+
+         # State.  Initially taken from DB;
+        self.state = None
 
         # Caches of unflushed items.
         self.headers = []
@@ -422,8 +421,7 @@ class BlockProcessor:
 
         self.backed_up_event = asyncio.Event()
 
-        # When the lock is acquired, in-memory chain state is consistent with self.height.
-        # This is a requirement for safe flushing.
+        # When the lock is acquired, in-memory chain state is consistent with state.height.        # This is a requirement for safe flushing.
         self.state_lock = asyncio.Lock()
 
     async def run_with_lock(self, coro):
@@ -449,14 +447,12 @@ class BlockProcessor:
         self.is_qualified_size = 0
         self.is_qualified_len = 0
 
-    async def next_block_hashes(self, count=30):
+    async def next_block_hashes(self):
         daemon_height = await self.daemon.height()
-
-        # Fetch remaining block hashes to a limit
-        first = self.height + 1
-        n = min(daemon_height - first + 1, count * 2)
-        if n:
-            hex_hashes = await self.daemon.block_hex_hashes(first, n)
+        first = self.state.height + 1
+        count = min(daemon_height - first + 1, self.coin.prefetch_limit(first))
+        if count:
+            hex_hashes = await self.daemon.block_hex_hashes(first, count)
             kind = 'new' if self.caught_up else 'sync'
             await OnDiskBlock.prefetch_many(self.daemon, enumerate(hex_hashes, start=first), kind)
         else:
@@ -465,9 +461,9 @@ class BlockProcessor:
         # Remove stale blocks
         await OnDiskBlock.delete_blocks(first - 5, False)
 
-        return hex_hashes[:count], daemon_height
+        return hex_hashes[:(count + 1) // 2], daemon_height
 
-    async def _reorg_chain(self, count):
+    async def reorg_chain(self, count):
         '''Handle a chain reorganisation.
 
         Count is the number of blocks to simulate a reorg, or None for a real reorg.
@@ -484,7 +480,7 @@ class BlockProcessor:
         await OnDiskBlock.prefetch_many(self.daemon, pairs, 'reorg')
 
         for hex_hash in reversed(hex_hashes):
-            if hex_hash != hash_to_hex_str(self.tip):
+            if hex_hash != hash_to_hex_str(self.state.tip):
                 logger.error(f'block {hex_hash} is not tip; cannot back up')
                 return
             block = await OnDiskBlock.streamed_block(self.coin, hex_hash)
@@ -492,7 +488,7 @@ class BlockProcessor:
                 break
             await self.run_with_lock(run_in_thread(self.backup_block, block))       
         
-        logger.info(f'backed up to height {self.height:,d}')
+        logger.info(f'backed up to height {self.state.height:,d}')
         self.backed_up_event.set()
         self.backed_up_event.clear()
 
@@ -527,9 +523,10 @@ class BlockProcessor:
                     return n
             return len(hashes)
 
+        height = self.state.height
         if count < 0:
             # A real reorg
-            start = self.height - 1
+            start = height - 1
             count = 1
             while start > 0:
                 hashes = await self.db.fs_block_hashes(start, count)
@@ -542,22 +539,22 @@ class BlockProcessor:
                 count = min(count * 2, start)
                 start -= count
 
-            count = (self.height - start) + 1
+            count = (height - start) + 1
         else:
-            start = (self.height - count) + 1
+            start = (height - count) + 1
 
         return start, count
 
     # - Flushing
     def flush_data(self):
         '''The data for a flush.'''        
-        return FlushData(self.height, self.tx_count, self.headers, self.chain_size,
+        return FlushData(self.state, self.headers,
                          self.tx_hashes, self.undo_infos, self.utxo_cache,
-                         self.db_deletes, self.tip,
+                         self.db_deletes,
                          self.asset_cache, self.asset_deletes,
                          self.asset_data_new, self.asset_data_reissued,
                          self.asset_undo_infos, self.asset_data_undo_infos,
-                         self.asset_data_deletes, self.asset_count,
+                         self.asset_data_deletes,
                          self.restricted_to_qualifier, self.restricted_to_qualifier_deletes,
                          self.restricted_to_qualifier_undos, self.qr_associations,
                          self.global_freezes, self.is_frozen,
@@ -572,10 +569,9 @@ class BlockProcessor:
             self.reset_size_cache()
         # Estimate size remaining
         daemon_height = self.daemon.cached_height()
-        tail_size = ((daemon_height - max(self.height, self.coin.CHAIN_SIZE_HEIGHT))
-                     * self.coin.AVG_BLOCK_SIZE)
-        size_remaining = max(self.coin.CHAIN_SIZE - self.chain_size, 0) + tail_size
-        logger.info(f'SIZES: {tail_size} {size_remaining}')
+        tail_blocks = max(0, (daemon_height - max(self.state.height, self.coin.CHAIN_SIZE_HEIGHT)))
+        size_remaining = (max(self.coin.CHAIN_SIZE - self.state.chain_size, 0) +
+                          tail_blocks * self.coin.AVG_BLOCK_SIZE)
         await run_in_thread(self.db.flush_dbs, self.flush_data(), flush_utxos, size_remaining)
 
     async def check_cache_size_loop(self):
@@ -585,14 +581,15 @@ class BlockProcessor:
 
         one_MB = 1000 * 1000
         cache_MB = self.env.cache_MB
+        OnDiskBlock.daemon = self.daemon
 
         while True:
             utxo_cache_size = len(self.utxo_cache) * 205
             db_deletes_size = len(self.db_deletes) * 57
             hist_cache_size = self.db.history.unflushed_memsize()
             # Roughly ntxs * 32 + nblocks * 42
-            tx_hash_size = ((self.tx_count - self.db.fs_tx_count) * 32
-                            + (self.height - self.db.fs_height) * 42)
+            tx_hash_size = ((self.state.tx_count - self.db.fs_tx_count) * 32
+                            + (self.state.height - self.db.fs_height) * 42)
 
             # TODO Fix/add these approximations
             # These are average case approximations
@@ -633,13 +630,9 @@ class BlockProcessor:
                         self.qr_associations_size + self.tag_to_address_size +
                         self.is_qualified_size) // one_MB
 
-            OnDiskBlock.daemon_height = await self.daemon.height()
-            OnDiskBlock.chain_size = self.chain_size
-            if hist_MB:
-                logger.info('our height: {:,d} daemon: {:,d} '
-                            'UTXOs {:,d}MB hist {:,d}MB assets {:,d}MB'
-                            .format(self.height, self.daemon.cached_height(),
-                                    utxo_MB, hist_MB, asset_MB))
+            OnDiskBlock.log_block = True
+            if hist_cache_size:
+                logger.info(f'UTXOs {utxo_MB:,d}MB Assets {asset_MB:,d}MB hist {hist_MB:,d}MB')
 
             # Flush history if it takes up over 20% of cache memory.
             # Flush UTXOs once they take up 80% of cache memory.
@@ -695,6 +688,7 @@ class BlockProcessor:
         #await sleep(0)
 
         # Use local vars for speed in the loops
+        state = self.state
         tx_hashes = []
         undo_info = []
         asset_undo_info = []
@@ -706,8 +700,8 @@ class BlockProcessor:
 
         asset_broadcast_undo_info = []
 
-        tx_num = self.tx_count
-        asset_num = self.asset_count
+        tx_num = state.tx_count
+        asset_num = state.asset_count
         script_hashX = self.coin.hashX_from_script
         put_utxo = self.utxo_cache.__setitem__
 
@@ -740,12 +734,12 @@ class BlockProcessor:
         to_le_uint32 = pack_le_uint32
         to_le_uint64 = pack_le_uint64
 
-        self.ok = False
         with block as block:
-            if self.coin.header_prevhash(block.header) != self.tip:
+            if self.coin.header_prevhash(block.header) != self.state.tip:
                 self.reorg_count = -1
                 return
-        
+            
+            self.ok = False
             for tx, tx_hash in block.iter_txs():
                 hashXs = []
                 append_hashX = hashXs.append
@@ -757,8 +751,8 @@ class BlockProcessor:
                 for txin in tx.inputs:
                     if txin.is_generation():  # Don't spend block rewards
                         continue
-                    cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
-                    asset_cache_value = spend_asset(txin.prev_hash, txin.prev_idx)
+                    cache_value = spend_utxo(bytes(txin.prev_hash), txin.prev_idx)
+                    asset_cache_value = spend_asset(bytes(txin.prev_hash), txin.prev_idx)
                     undo_info_append(cache_value)
                     asset_undo_info_append(asset_cache_value)
                     append_hashX(cache_value[:-13])
@@ -1342,11 +1336,9 @@ class BlockProcessor:
                 self.current_restricted_asset = None
                 self.current_qualifiers = []
 
+         # Do this first - it uses the prior state
         self.tx_hashes.append(b''.join(tx_hashes))
-        self.db.history.add_unflushed(hashXs_by_tx, self.tx_count)
-
-        self.asset_count = asset_num
-        self.tx_count = tx_num
+        self.db.history.add_unflushed(hashXs_by_tx, state.tx_count)
         self.db.tx_counts.append(tx_num)
 
         # Assets aren't always in tx's... remove None types
@@ -1361,10 +1353,14 @@ class BlockProcessor:
             self.restricted_to_qualifier_undos.append((association_undo_info, block.height))
             self.asset_broadcast_undos.append((asset_broadcast_undo_info, block.height))
 
-        self.height = block.height
         self.headers.append(block.header)
-        self.tip = self.coin.header_hash(block.header)
-        self.chain_size += block.size
+        
+        #Update State
+        state.height = block.height
+        state.tip = self.coin.header_hash(block.header)
+        state.chain_size += block.size
+        state.tx_count = tx_num
+        state.asset_count = asset_num 
         self.ok = True
 
     def backup_block(self, block):
@@ -1373,7 +1369,7 @@ class BlockProcessor:
         assert block.height > 0
         genesis_activation = self.coin.GENESIS_ACTIVATION
         
-        is_unspendable = (is_unspendable_genesis if self.height >= genesis_activation
+        is_unspendable = (is_unspendable_genesis if block.height >= genesis_activation
                           else is_unspendable_legacy)
         
         undo_info = self.db.read_undo_info(block.height)
@@ -1575,6 +1571,7 @@ class BlockProcessor:
 
         count = 0
         with block as block:
+            self.ok = False
             for tx, tx_hash in block.iter_txs_reversed():
                 for idx, txout in enumerate(tx.outputs):
                     # Spend the TX outputs.  Be careful with unspendable
@@ -1600,30 +1597,34 @@ class BlockProcessor:
                         continue
                     n -= undo_entry_len
                     undo_item = undo_info[n:n + undo_entry_len]
-                    put_utxo(txin.prev_hash + pack_le_uint32(txin.prev_idx), undo_item)
+                    put_utxo(bytes(txin.prev_hash) + pack_le_uint32(txin.prev_idx), undo_item)
                     touched_add(undo_item[:-13])
 
                     asset_undo_entry_len = find_asset_undo_len(asset_n)
                     new_asset_n = asset_n - asset_undo_entry_len
                     if new_asset_n >= 0 and asset_undo_entry_len > 0:
                         undo_item = asset_undo_info[new_asset_n:new_asset_n + asset_undo_entry_len]
-                        if undo_item[:32] == txin.prev_hash and undo_item[32:36] == prev_idx_bytes:
-                            put_asset(txin.prev_hash + prev_idx_bytes, undo_item[36:])
+                        if undo_item[:32] == bytes(txin.prev_hash) and undo_item[32:36] == prev_idx_bytes:
+                            put_asset(bytes(txin.prev_hash) + prev_idx_bytes, undo_item[36:])
                             asset_n = new_asset_n
                 count += 1
 
         assert n == 0
         assert asset_n == 0
-        self.tx_count -= count
-        self.asset_count -= assets
-        self.chain_size += block.size
-        self.tip = self.coin.header_prevhash(block.header)
-        self.height -= 1
+        
+        state = self.state
+        state.height -= 1
+        state.tip = self.coin.header_prevhash(block.header)
+        state.chain_size -= block.size
+        state.tx_count -= count
+        state.asset_count -= assets
+
         self.db.tx_counts.pop()
 
         # self.touched can include other addresses which is harmless, but remove None.
         self.touched.discard(None)
         self.db.flush_backup(self.flush_data(), self.touched)
+        self.ok = True
 
     '''An in-memory UTXO cache, representing all changes to UTXO state
     since the last DB flush.
@@ -1720,8 +1721,7 @@ class BlockProcessor:
                 self.db_deletes.append(udb_key)
                 return hashX + tx_num_packed + utxo_value_packed
 
-        raise ChainError('UTXO {} / {:,d} not found in "h" table'
-                         .format(hash_to_hex_str(tx_hash), tx_idx))
+        raise ChainError(f'UTXO {hash_to_hex_str(tx_hash)} / {tx_idx:,d} not found in "h" table')
 
     def spend_asset(self, tx_hash, tx_idx):
         # TODO: Find a way to make this faster
@@ -1765,29 +1765,20 @@ class BlockProcessor:
         # .format(hash_to_hex_str(tx_hash), tx_idx))
 
     async def on_caught_up(self):
-        is_first_sync = self.db.first_sync
-        self.db.first_sync = False
+        was_first_sync = self.state.first_sync
+        self.state.first_sync = False
         await self.flush(True)
         if self.caught_up:
             # Flush everything before notifying as client queries are performed on the DB
-            await self.notifications.on_block(self.touched, self.height)
+            await self.notifications.on_block(self.touched, self.state.height)
             self.touched = set()
+            self.asset_touched = set()
         else:
             self.caught_up = True
-            if is_first_sync:
-                logger.info(f'{electrumx.version} synced to height {self.height:,d}')
-                self.db.first_sync = False
-            await self.flush(True)
+            if was_first_sync:
+                logger.info(f'{electrumx.version} synced to height {self.state.height:,d}')
             # Reopen for serving
             await self.db.open_for_serving()
-
-    async def _first_open_dbs(self):
-        await self.db.open_for_sync()
-        self.height = self.db.db_height
-        self.tip = self.db.db_tip
-        self.tx_count = self.db.db_tx_count
-        self.asset_count = self.db.db_asset_count
-        self.chain_size = self.db.db_chain_size
 
     # --- External API
 
@@ -1806,8 +1797,8 @@ class BlockProcessor:
 
         if self.env.write_bad_vouts_to_file and not os.path.isdir(self.bad_vouts_path):
             os.mkdir(self.bad_vouts_path)
-
-        await self._first_open_dbs()
+        
+        self.state = OnDiskBlock.state = (await self.db.open_for_sync()).copy()
         await OnDiskBlock.scan_files()
         
         try:
@@ -1816,7 +1807,7 @@ class BlockProcessor:
                 hex_hashes, daemon_height = await self.next_block_hashes()
                 if show_summary:
                     show_summary = False
-                    behind = daemon_height - self.height
+                    behind = daemon_height - self.state.height                    
                     if behind > 0:
                         logger.info(f'catching up to daemon height {daemon_height:,d} '
                                     f'({behind:,d} blocks behind)')

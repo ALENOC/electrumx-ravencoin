@@ -41,7 +41,7 @@ ZERO = bytes(32)
 MINUS_1 = 4294967295
 
 
-class Tx(namedtuple("Tx", "version inputs outputs locktime")):
+class Tx(namedtuple("Tx", "version inputs outputs locktime witness")):
     '''Class representing a transaction.'''
 
     def serialize(self):
@@ -97,7 +97,7 @@ class Deserializer:
 
     def read_tx(self):
         '''Return a deserialized transaction.'''
-        tx, self.cursor = read_tx(self.view, self.cursor)
+        tx, self.cursor, hash = read_tx(self.view, self.cursor)
         return tx
 
     def read_tx_and_hash(self):
@@ -108,9 +108,9 @@ class Deserializer:
         '''
         start = self.cursor
 
-        tx, end = read_tx(self.view, self.cursor)
+        tx, end, hash = read_tx(self.view, self.cursor)
         self.cursor = end
-        return tx, double_sha256(self.view[start:end])
+        return tx, hash if hash else double_sha256(self.view[start:end])
 
     def read_varint(self):
         value, self.cursor = read_varint(self.view, self.cursor)
@@ -177,6 +177,18 @@ def read_output(buf, cursor):
     return TxOutput(value, pk_script), cursor
 
 
+def read_witness(buf, cursor, input_len):
+    ret = []
+    for _ in range(input_len):
+        wit_for_in, cursor = read_varint(buf, cursor)
+        app_val = []
+        for _ in range(wit_for_in):
+            data, cursor = read_varbytes(buf, cursor)
+            app_val.append(data.hex())
+        ret.append(app_val)
+    return ret, cursor
+
+
 def read_many(buf, cursor, reader):
     count, cursor = read_varint(buf, cursor)
 
@@ -194,9 +206,31 @@ def read_tx(buf, cursor):
 
     If the buffer does not hold the whole transaction, raises struct.error or IndexError.
     '''
+    start = cursor
     version, cursor = read_le_int32(buf, cursor)
+
+    original = bytes(buf[start:cursor])
+    
+    # Check if flag, if true, has witness info
+    check_flag = buf[cursor:cursor+2].hex() == '0001'
+    if check_flag:
+        flag, cursor = read_le_uint16(buf, cursor)
+
+    start = cursor
+
     inputs, cursor = read_many(buf, cursor, read_input)
     outputs, cursor = read_many(buf, cursor, read_output)
+
+    original += bytes(buf[start:cursor])
+
+    witness = None
+    if check_flag:
+        witness, cursor = read_witness(buf, cursor, len(inputs))
+
+    start = cursor
+
     locktime, cursor = read_le_uint32(buf, cursor)
 
-    return Tx(version, inputs, outputs, locktime), cursor
+    original += bytes(buf[start:cursor])
+
+    return Tx(version, inputs, outputs, locktime, witness), cursor, double_sha256(original) if check_flag else None

@@ -10,9 +10,9 @@
 
 
 import ast
+import copy
 import os
 import time
-import re
 from array import array
 from bisect import bisect_right
 from collections import namedtuple
@@ -36,16 +36,13 @@ UTXO = namedtuple("UTXO", "tx_num tx_pos tx_hash height value")
 
 @attr.s(slots=True)
 class FlushData(object):
-    height = attr.ib()
-    tx_count = attr.ib()
+    state = attr.ib()
     headers = attr.ib()
-    chain_size = attr.ib()
     block_tx_hashes = attr.ib()
     # The following are flushed to the UTXO DB if undo_infos is not None
     undo_infos = attr.ib()
     adds = attr.ib()
     deletes = attr.ib()
-    tip = attr.ib()
     # Assets
     asset_adds = attr.ib()
     asset_deletes = attr.ib()
@@ -54,7 +51,6 @@ class FlushData(object):
     asset_undo_infos = attr.ib()
     asset_meta_undos = attr.ib()
     asset_meta_deletes = attr.ib()
-    asset_count = attr.ib()
 
     # Asset Qualifiers
     asset_restricted2qual = attr.ib()
@@ -76,6 +72,23 @@ class FlushData(object):
     asset_broadcasts = attr.ib()
     asset_broadcasts_undo = attr.ib()
     asset_broadcasts_del = attr.ib()
+
+
+@attr.s(slots=True)
+class ChainState:
+    height = attr.ib()
+    tx_count = attr.ib()
+    asset_count = attr.ib()
+    chain_size = attr.ib()
+    tip = attr.ib()
+    flush_count = attr.ib()   # of UTXOs
+    sync_time = attr.ib()     # Cumulative
+    flush_time = attr.ib()    # Time of flush
+    first_sync = attr.ib()
+    db_version = attr.ib()
+
+    def copy(self):
+        return copy.copy(self)
 
 
 class DB:
@@ -104,23 +117,15 @@ class DB:
         self.db_class = db_class(self.env.db_engine)
         self.history = History()
         self.utxo_db = None
-        self.utxo_flush_count = 0
+        self.state = None
+        self.last_flush_state = None
+
         self.fs_height = -1
         self.fs_tx_count = 0
         self.fs_asset_count = 0
-        self.db_height = -1
-        self.db_tx_count = 0
-        self.db_chain_size = 0
-        self.db_asset_count = 0
-        self.db_tip = None
+        
         self.tx_counts = None
-        self.last_flush = time.time()
-        self.last_flush_tx_count = 0
-        self.last_flush_asset_count = 0
-        self.wall_time = 0
-        self.first_sync = True
-        self.db_version = -1
-
+        
         self.asset_db = None
         self.asset_info_db = None
 
@@ -139,14 +144,14 @@ class DB:
             return
         # tx_counts[N] has the cumulative number of txs at the end of
         # height N.  So tx_counts[0] is 1 - the genesis coinbase
-        size = (self.db_height + 1) * 8
+        size = (self.state.height + 1) * 8
         tx_counts = self.tx_counts_file.read(0, size)
         assert len(tx_counts) == size
         self.tx_counts = array('Q', tx_counts)
         if self.tx_counts:
-            assert self.db_tx_count == self.tx_counts[-1]
+            assert self.state.tx_count == self.tx_counts[-1]
         else:
-            assert self.db_tx_count == 0
+            assert self.state.tx_count == 0
 
     async def _open_dbs(self, for_sync, compacting):
         assert self.utxo_db is None
@@ -168,20 +173,20 @@ class DB:
 
         # Asset DB
         self.asset_db = self.db_class('asset', for_sync)
-        self.read_asset_state()
         self.asset_info_db = self.db_class('asset_info', for_sync)
 
         # Then history DB
-        self.utxo_flush_count = self.history.open_db(self.db_class, for_sync,
-                                                     self.utxo_flush_count,
-                                                     compacting)
+        self.state.flush_count = self.history.open_db(self.db_class, for_sync,
+                                                      self.state.flush_count,
+                                                      compacting)
         self.clear_excess_undo_info()
 
         # Read TX counts (requires meta directory)
         await self._read_tx_counts()
+        return self.state
 
     async def open_for_compacting(self):
-        await self._open_dbs(True, True)
+        return await self._open_dbs(True, True)
 
     async def open_for_sync(self):
         '''Open the databases to sync to the daemon.
@@ -190,7 +195,7 @@ class DB:
         synchronization.  When serving clients we want the open files for
         serving network connections.
         '''
-        await self._open_dbs(True, False)
+        return await self._open_dbs(True, False)
 
     async def open_for_serving(self):
         '''Open the databases for serving.  If they are already open they are
@@ -205,12 +210,12 @@ class DB:
             self.utxo_db = None
             self.asset_db = None
             self.asset_info_db = None
-        await self._open_dbs(False, False)
+        return await self._open_dbs(False, False)
 
     # Header merkle cache
     async def populate_header_merkle_cache(self):
         self.logger.info('populating header merkle cache...')
-        length = max(1, self.db_height - self.env.reorg_limit)
+        length = max(1, self.state.height - self.env.reorg_limit)
         start = time.monotonic()
         await self.header_mc.initialize(length)
         elapsed = time.monotonic() - start
@@ -222,10 +227,10 @@ class DB:
     # Flushing
     def assert_flushed(self, flush_data):
         '''Asserts state is fully flushed.'''
-        assert flush_data.tx_count == self.fs_tx_count == self.db_tx_count
-        assert flush_data.asset_count == self.fs_asset_count == self.db_asset_count
-        assert flush_data.height == self.fs_height == self.db_height
-        assert flush_data.tip == self.db_tip
+        assert flush_data.state.tx_count == self.fs_tx_count == self.state.tx_count
+        assert flush_data.state.asset_count == self.fs_asset_count == self.state.asset_count
+        assert flush_data.state.height == self.fs_height == self.state.height
+        assert flush_data.state.tip == self.state.tip
         assert not flush_data.headers
         assert not flush_data.block_tx_hashes
         assert not flush_data.adds
@@ -265,59 +270,55 @@ class DB:
     def flush_dbs(self, flush_data, flush_utxos, size_remaining):
         '''Flush out cached state.  History is always flushed; UTXOs are
         flushed if flush_utxos.'''
-        if flush_data.height == self.db_height:
+        if flush_data.state.height == self.state.height:
             self.assert_flushed(flush_data)
             return
 
         start_time = time.time()
-        prior_flush = self.last_flush
-        tx_delta = flush_data.tx_count - self.last_flush_tx_count
-        asset_delta = flush_data.asset_count - self.last_flush_asset_count
-        size_delta = flush_data.chain_size - self.db_chain_size
-        self.db_chain_size = flush_data.chain_size
 
         # Flush to file system
         self.flush_fs(flush_data)
 
         # Then history
         self.flush_history()
-
-        with self.asset_db.write_batch() as batch:
-            if flush_utxos:
-                self.flush_asset_db(batch, flush_data)
-            self.flush_asset_state(batch)
-
-        with self.asset_info_db.write_batch() as batch:
-            if flush_utxos:
-                self.flush_asset_info_db(batch, flush_data)
+        flush_data.state.flush_count = self.history.flush_count
 
         # Flush state last as it reads the wall time.
-        with self.utxo_db.write_batch() as batch:
-            if flush_utxos:
-                self.flush_utxo_db(batch, flush_data)
-            self.flush_state(batch)
+        if flush_utxos:
+            self.flush_asset_db(flush_data)
+            self.flush_asset_info_db(flush_data)
+            self.flush_utxo_db(flush_data)
 
-        # Update and put the wall time again - otherwise we drop the
-        # time it took to commit the batch
-        self.flush_state(self.utxo_db)
+        end_time = time.time()
+        elapsed = end_time - start_time
+        flush_interval = end_time - self.last_flush_state.flush_time
+        flush_data.state.flush_time = end_time
+        flush_data.state.sync_time += flush_interval
 
-        elapsed = self.last_flush - start_time
-        self.logger.info(f'flush #{self.history.flush_count:,d} took '
-                         f'{elapsed:.1f}s.  Height {flush_data.height:,d} '
-                         f'txs: {flush_data.tx_count:,d} ({tx_delta:+,d}) '
-                         f'assets: {flush_data.asset_count:,d} ({asset_delta:+,d})'
-                         f'size: {flush_data.chain_size:,d} ({size_delta:+,d})')
+        # Update and flush state again so as not to drop the batch commit time
+        if flush_utxos:
+            self.state = flush_data.state.copy()
+            self.write_utxo_state(self.utxo_db)
+
+        tx_delta = flush_data.state.tx_count - self.last_flush_state.tx_count
+        size_delta = flush_data.state.chain_size - self.last_flush_state.chain_size
+
+        self.logger.info(f'flush #{self.history.flush_count:,d} took {elapsed:.1f}s.  '
+                         f'Height {flush_data.state.height:,d} '
+                         f'txs: {flush_data.state.tx_count:,d} ({tx_delta:+,d}) '
+                         f'size: {flush_data.state.chain_size:,d} ({size_delta:+,d})')
 
         # Catch-up stats
         if self.utxo_db.for_sync:
-            flush_interval = self.last_flush - prior_flush
-            size_per_sec_gen = flush_data.chain_size / self.wall_time
+            size_per_sec_gen = flush_data.state.chain_size / (flush_data.state.sync_time + 0.01)
             size_per_sec_last = size_delta / (flush_interval + 0.01)
             eta = size_remaining / (size_per_sec_last + 0.01) * 1.1
             self.logger.info(f'MB/sec since genesis: {size_per_sec_gen / 1_000_000:.2f}, '
                              f'since last flush: {size_per_sec_last / 1_000_000:.2f}')
-            self.logger.info(f'sync time: {formatted_time(self.wall_time)}  '
+            self.logger.info(f'sync time: {formatted_time(flush_data.state.sync_time)}  '
                              f'ETA: {formatted_time(eta)}')
+
+        self.last_flush_state = flush_data.state.copy()
 
     def flush_fs(self, flush_data):
         '''Write headers, tx counts and block tx hashes to the filesystem.
@@ -329,17 +330,15 @@ class DB:
         prior_tx_count = (self.tx_counts[self.fs_height]
                           if self.fs_height >= 0 else 0)
         assert len(flush_data.block_tx_hashes) == len(flush_data.headers)
-        assert flush_data.height == self.fs_height + len(flush_data.headers)
-        assert flush_data.tx_count == (self.tx_counts[-1] if self.tx_counts
-                                       else 0)
-        assert len(self.tx_counts) == flush_data.height + 1
+        assert flush_data.state.height == self.fs_height + len(flush_data.headers)
+        assert flush_data.state.tx_count == (self.tx_counts[-1] if self.tx_counts else 0)
+        assert len(self.tx_counts) == flush_data.state.height + 1
         hashes = b''.join(flush_data.block_tx_hashes)
         flush_data.block_tx_hashes.clear()
         assert len(hashes) % 32 == 0
-        assert len(hashes) // 32 == flush_data.tx_count - prior_tx_count
+        assert len(hashes) // 32 == flush_data.state.tx_count - prior_tx_count
 
         # Write the headers, tx counts, and tx hashes
-        start_time = time.monotonic()
         height_start = self.fs_height + 1
         offset = self.header_offset(height_start)
         self.headers_file.write(offset, b''.join(flush_data.headers))
@@ -351,38 +350,35 @@ class DB:
         offset = prior_tx_count * 32
         self.hashes_file.write(offset, hashes)
 
-        self.fs_height = flush_data.height
-        self.fs_tx_count = flush_data.tx_count
-        self.fs_asset_count = flush_data.asset_count
-
-        if self.utxo_db.for_sync:
-            elapsed = time.monotonic() - start_time
-            self.logger.info(f'flushed filesystem data in {elapsed:.2f}s')
+        self.fs_height = flush_data.state.height
+        self.fs_tx_count = flush_data.state.tx_count
+        self.fd_asset_count = flush_data.state.asset_count
 
     def flush_history(self):
         self.history.flush()
 
-    def flush_asset_info_db(self, batch, flush_data: FlushData):
+    def flush_asset_info_db(self, flush_data: FlushData):
         start_time = time.monotonic()
         adds = len(flush_data.asset_meta_adds)
         reissues = len(flush_data.asset_meta_reissues)
 
-        batch_delete = batch.delete
-        for key in flush_data.asset_meta_deletes:
-            batch_delete(key)
-        flush_data.asset_meta_deletes.clear()
+        with self.asset_info_db.write_batch() as batch:
+            batch_delete = batch.delete
+            for key in flush_data.asset_meta_deletes:
+                batch_delete(key)
+            flush_data.asset_meta_deletes.clear()
 
-        batch_put = batch.put
-        for key, value in flush_data.asset_meta_reissues.items():
-            batch_put(key, value)
-        flush_data.asset_meta_reissues.clear()
+            batch_put = batch.put
+            for key, value in flush_data.asset_meta_reissues.items():
+                batch_put(key, value)
+            flush_data.asset_meta_reissues.clear()
 
-        for key, value in flush_data.asset_meta_adds.items():
-            batch_put(key, value)
-        flush_data.asset_meta_adds.clear()
+            for key, value in flush_data.asset_meta_adds.items():
+                batch_put(key, value)
+            flush_data.asset_meta_adds.clear()
 
-        self.flush_asset_meta_undos(batch_put, flush_data.asset_meta_undos)
-        flush_data.asset_meta_undos.clear()
+            self.flush_asset_meta_undos(batch_put, flush_data.asset_meta_undos)
+            flush_data.asset_meta_undos.clear()
 
         if self.asset_info_db.for_sync:
             elapsed = time.monotonic() - start_time
@@ -390,7 +386,7 @@ class DB:
                              f'{reissues:,d} assets\' metadata reissued, '
                              f'{elapsed:.1f}s, committing...')
 
-    def flush_asset_db(self, batch, flush_data: FlushData):
+    def flush_asset_db(self, flush_data: FlushData):
         start_time = time.monotonic()
         add_count = len(flush_data.asset_adds)
         spend_count = len(flush_data.asset_deletes) // 2
@@ -401,126 +397,127 @@ class DB:
 
         broadcasts = len(flush_data.asset_broadcasts)
 
-        # Spends
-        batch_delete = batch.delete
-        for key in sorted(flush_data.asset_deletes):
-            batch_delete(key)
-        flush_data.asset_deletes.clear()
+        with self.asset_db.write_batch() as batch:
+            # Spends
+            batch_delete = batch.delete
+            for key in sorted(flush_data.asset_deletes):
+                batch_delete(key)
+            flush_data.asset_deletes.clear()
 
-        # Qualifiers
-        for key in sorted(flush_data.asset_restricted_freezes_del):
-            batch_delete(key)
-        flush_data.asset_restricted_freezes_del.clear()
+            # Qualifiers
+            for key in sorted(flush_data.asset_restricted_freezes_del):
+                batch_delete(key)
+            flush_data.asset_restricted_freezes_del.clear()
 
-        for key in sorted(flush_data.asset_restricted2qual_del):
-            batch_delete(key)
-        flush_data.asset_restricted2qual_del.clear()
+            for key in sorted(flush_data.asset_restricted2qual_del):
+                batch_delete(key)
+            flush_data.asset_restricted2qual_del.clear()
 
-        for key in sorted(flush_data.asset_tag2pub_del):
-            batch_delete(key)
-        flush_data.asset_tag2pub_del.clear()
+            for key in sorted(flush_data.asset_tag2pub_del):
+                batch_delete(key)
+            flush_data.asset_tag2pub_del.clear()
 
-        for key in sorted(flush_data.asset_broadcasts_del):
-            batch_delete(b'b' + key)
-        flush_data.asset_broadcasts_del.clear()
+            for key in sorted(flush_data.asset_broadcasts_del):
+                batch_delete(b'b' + key)
+            flush_data.asset_broadcasts_del.clear()
 
-        # New Assets
-        batch_put = batch.put
-        for key, value in flush_data.asset_adds.items():
-            # suffix = tx_idx + tx_num
-            # key tx_hash (32), tx_idx (4)
-            # value = hashx (11) + tx_num (5) + u64 sat val(8)+ namelen(1) + asset name
-            hashX = value[:HASHX_LEN]
-            suffix = key[-4:] + value[HASHX_LEN:5+HASHX_LEN]
-            batch_put(b'h' + key[:4] + suffix, hashX)
-            batch_put(b'u' + hashX + suffix, value[5+HASHX_LEN:])
-        flush_data.asset_adds.clear()
+            # New Assets
+            batch_put = batch.put
+            for key, value in flush_data.asset_adds.items():
+                # suffix = tx_idx + tx_num
+                # key tx_hash (32), tx_idx (4)
+                # value = hashx (11) + tx_num (5) + u64 sat val(8)+ namelen(1) + asset name
+                hashX = value[:HASHX_LEN]
+                suffix = key[-4:] + value[HASHX_LEN:5+HASHX_LEN]
+                batch_put(b'h' + key[:4] + suffix, hashX)
+                batch_put(b'u' + hashX + suffix, value[5+HASHX_LEN:])
+            flush_data.asset_adds.clear()
 
-        # New undo information
-        self.flush_undo_infos(batch_put, flush_data.asset_undo_infos)
-        flush_data.asset_undo_infos.clear()
+            # New undo information
+            self.flush_undo_infos(batch_put, flush_data.asset_undo_infos)
+            flush_data.asset_undo_infos.clear()
 
-        # FIXME: For current values, maybe have them in the db if they are true
-        # or omit them if they are false. For now, there are not enough qualifiers
-        # or restricted assets for this to be a problem.
+            # FIXME: For current values, maybe have them in the db if they are true
+            # or omit them if they are false. For now, there are not enough qualifiers
+            # or restricted assets for this to be a problem.
 
-        for key, value in flush_data.asset_tag2pub.items():
-            # b'p' h160 -> asset
-            # b'a' asset -> h160
-            key_parser = util.DataParser(key)
-            asset_len, asset = key_parser.read_var_bytes_tuple_bytes()
-            h160_len, h160 = key_parser.read_var_bytes_tuple_bytes()
-            idx = key_parser.read_bytes(4)
-            tx_numb = key_parser.read_bytes(5)
-            batch_put(b'p' + h160_len + h160 + idx + tx_numb, asset_len + asset + value)
-            batch_put(b'a' + asset_len + asset + idx + tx_numb, h160_len + h160 + value)
-        flush_data.asset_tag2pub.clear()
+            for key, value in flush_data.asset_tag2pub.items():
+                # b'p' h160 -> asset
+                # b'a' asset -> h160
+                key_parser = util.DataParser(key)
+                asset_len, asset = key_parser.read_var_bytes_tuple_bytes()
+                h160_len, h160 = key_parser.read_var_bytes_tuple_bytes()
+                idx = key_parser.read_bytes(4)
+                tx_numb = key_parser.read_bytes(5)
+                batch_put(b'p' + h160_len + h160 + idx + tx_numb, asset_len + asset + value)
+                batch_put(b'a' + asset_len + asset + idx + tx_numb, h160_len + h160 + value)
+            flush_data.asset_tag2pub.clear()
 
-        self.flush_t2p_undo_infos(batch_put, flush_data.asset_tag2pub_undo)
-        flush_data.asset_tag2pub_undo.clear()
+            self.flush_t2p_undo_infos(batch_put, flush_data.asset_tag2pub_undo)
+            flush_data.asset_tag2pub_undo.clear()
 
-        for key, value in flush_data.asset_tag2pub_current.items():
-            # b't' h160 -> asset
-            # b'Q' asset -> h160
-            batch_put(key, value)
-        flush_data.asset_tag2pub_current.clear()
+            for key, value in flush_data.asset_tag2pub_current.items():
+                # b't' h160 -> asset
+                # b'Q' asset -> h160
+                batch_put(key, value)
+            flush_data.asset_tag2pub_current.clear()
 
-        for key, value in flush_data.asset_restricted_freezes.items():
-            # b'f'
-            batch_put(b'f' + key, value)
-        flush_data.asset_restricted_freezes.clear()
+            for key, value in flush_data.asset_restricted_freezes.items():
+                # b'f'
+                batch_put(b'f' + key, value)
+            flush_data.asset_restricted_freezes.clear()
 
-        self.flush_freezes_undo_info(batch_put, flush_data.asset_restricted_freezes_undo)
-        flush_data.asset_restricted_freezes_undo.clear()
+            self.flush_freezes_undo_info(batch_put, flush_data.asset_restricted_freezes_undo)
+            flush_data.asset_restricted_freezes_undo.clear()
 
-        for key, value in flush_data.asset_restricted_freezes_current.items():
-            #b'l'
-            batch_put(b'l' + key, value)
-        flush_data.asset_restricted_freezes_current.clear()
+            for key, value in flush_data.asset_restricted_freezes_current.items():
+                #b'l'
+                batch_put(b'l' + key, value)
+            flush_data.asset_restricted_freezes_current.clear()
 
-        # Change this
-        for key, value in flush_data.asset_restricted2qual.items():
-            #b'1' res
-            #b'2' qual
-            parser = util.DataParser(key)
-            restricted_len, restricted_asset = parser.read_var_bytes_tuple_bytes()
-            bytes_append = parser.read_bytes(4 + 4 + 5)
-            qual_adds, qual_removes = value
-            batch_put(
-                b'1' + restricted_len + restricted_asset + bytes_append,
-                bytes([len(qual_adds)]) + b''.join([bytes([len(qual)]) + qual for qual in qual_adds]) +
-                bytes([len(qual_removes)]) + b''.join([bytes([len(qual)]) + qual for qual in qual_removes])
-            )
-
-            for qual in qual_adds:
+            # Change this
+            for key, value in flush_data.asset_restricted2qual.items():
+                #b'1' res
+                #b'2' qual
+                parser = util.DataParser(key)
+                restricted_len, restricted_asset = parser.read_var_bytes_tuple_bytes()
+                bytes_append = parser.read_bytes(4 + 4 + 5)
+                qual_adds, qual_removes = value
                 batch_put(
-                    b'2' + bytes([len(qual)]) + qual + bytes_append,
-                    b'\x01' + restricted_len + restricted_asset
+                    b'1' + restricted_len + restricted_asset + bytes_append,
+                    bytes([len(qual_adds)]) + b''.join([bytes([len(qual)]) + qual for qual in qual_adds]) +
+                    bytes([len(qual_removes)]) + b''.join([bytes([len(qual)]) + qual for qual in qual_removes])
                 )
 
-            for qual in qual_removes:
-                batch_put(
-                    b'2' + bytes([len(qual)]) + qual + bytes_append,
-                    b'\0' + restricted_len + restricted_asset
-                )
+                for qual in qual_adds:
+                    batch_put(
+                        b'2' + bytes([len(qual)]) + qual + bytes_append,
+                        b'\x01' + restricted_len + restricted_asset
+                    )
 
-        flush_data.asset_restricted2qual.clear()
+                for qual in qual_removes:
+                    batch_put(
+                        b'2' + bytes([len(qual)]) + qual + bytes_append,
+                        b'\0' + restricted_len + restricted_asset
+                    )
 
-        self.flush_restricted2qual_undo_info(batch_put, flush_data.asset_restricted2qual_undo)
-        flush_data.asset_restricted2qual_undo.clear()
+            flush_data.asset_restricted2qual.clear()
 
-        for key, value in flush_data.asset_current_associations.items():
-            # b'r' res
-            # b'c' qual
-            batch_put(key, value)
-        flush_data.asset_current_associations.clear()
+            self.flush_restricted2qual_undo_info(batch_put, flush_data.asset_restricted2qual_undo)
+            flush_data.asset_restricted2qual_undo.clear()
 
-        for key, value in flush_data.asset_broadcasts.items():
-            batch_put(b'b' + key, value)
-        flush_data.asset_broadcasts.clear()
+            for key, value in flush_data.asset_current_associations.items():
+                # b'r' res
+                # b'c' qual
+                batch_put(key, value)
+            flush_data.asset_current_associations.clear()
 
-        self.flush_asset_broadcast_undos(batch_put, flush_data.asset_broadcasts_undo)
-        flush_data.asset_broadcasts_undo.clear()
+            for key, value in flush_data.asset_broadcasts.items():
+                batch_put(b'b' + key, value)
+            flush_data.asset_broadcasts.clear()
+
+            self.flush_asset_broadcast_undos(batch_put, flush_data.asset_broadcasts_undo)
+            flush_data.asset_broadcasts_undo.clear()
 
         if self.asset_db.for_sync:
             elapsed = time.monotonic() - start_time
@@ -532,9 +529,8 @@ class DB:
                              f'{broadcasts:,d} messages broadcast, '
                              f'{elapsed:.1f}s, committing...')
 
-        self.db_asset_count = flush_data.asset_count
 
-    def flush_utxo_db(self, batch, flush_data):
+    def flush_utxo_db(self, flush_data):
         '''Flush the cached DB writes and UTXO set to the batch.'''
         # Care is needed because the writes generated by flushing the
         # UTXO state may have keys in common with our write cache or
@@ -542,86 +538,68 @@ class DB:
         start_time = time.monotonic()
         add_count = len(flush_data.adds)
         spend_count = len(flush_data.deletes) // 2
+        with self.utxo_db.write_batch() as batch:
+            # Spends
+            batch_delete = batch.delete
+            for key in sorted(flush_data.deletes):
+                batch_delete(key)
+            flush_data.deletes.clear()
 
-        # Spends
-        batch_delete = batch.delete
-        for key in sorted(flush_data.deletes):
-            batch_delete(key)
-        flush_data.deletes.clear()
+            # New UTXOs
+            batch_put = batch.put
+            for key, value in flush_data.adds.items():
+                # suffix = tx_idx + tx_num
+                hashX = value[:-13]
+                suffix = key[-4:] + value[-13:-8]
+                batch_put(b'h' + key[:4] + suffix, hashX)
+                batch_put(b'u' + hashX + suffix, value[-8:])
+            flush_data.adds.clear()
 
-        # New UTXOs
-        batch_put = batch.put
-        for key, value in flush_data.adds.items():
-            # suffix = tx_idx + tx_num
-            hashX = value[:-13]
-            suffix = key[-4:] + value[-13:-8]
-            batch_put(b'h' + key[:4] + suffix, hashX)
-            batch_put(b'u' + hashX + suffix, value[-8:])
-        flush_data.adds.clear()
+            # New undo information
+            self.flush_undo_infos(batch_put, flush_data.undo_infos)
+            flush_data.undo_infos.clear()
 
-        # New undo information
-        self.flush_undo_infos(batch_put, flush_data.undo_infos)
-        flush_data.undo_infos.clear()
+            if self.utxo_db.for_sync:
+                block_count = flush_data.state.height - self.state.height
+                tx_count = flush_data.state.tx_count - self.state.tx_count
+                size = (flush_data.state.chain_size - self.state.chain_size) / 1_000_000_000
+                elapsed = time.monotonic() - start_time
+                self.logger.info(f'flushed {block_count:,d} blocks size {size:.1f} GB with '
+                                 f'{tx_count:,d} txs, {add_count:,d} UTXO adds, '
+                                 f'{spend_count:,d} spends in '
+                                 f'{elapsed:.1f}s, committing...')
 
-        if self.utxo_db.for_sync:
-            block_count = flush_data.height - self.db_height
-            tx_count = flush_data.tx_count - self.db_tx_count
-            elapsed = time.monotonic() - start_time
-            self.logger.info(f'flushed {block_count:,d} blocks with '
-                             f'{tx_count:,d} txs, {add_count:,d} UTXO adds, '
-                             f'{spend_count:,d} spends in '
-                             f'{elapsed:.1f}s, committing...')
-
-        self.utxo_flush_count = self.history.flush_count
-        self.db_height = flush_data.height
-        self.db_tx_count = flush_data.tx_count
-        self.db_tip = flush_data.tip
-
-    def flush_asset_state(self, batch):
-        self.last_flush_asset_count = self.fs_asset_count
-        self.write_asset_state(batch)
-
-    def flush_state(self, batch):
-        '''Flush chain state to the batch.'''
-        now = time.time()
-        self.wall_time += now - self.last_flush
-        self.last_flush = now
-        self.last_flush_tx_count = self.fs_tx_count
-        self.write_utxo_state(batch)
+            self.state = flush_data.state.copy()
+            self.write_utxo_state(batch)
 
     def flush_backup(self, flush_data, touched):
         '''Like flush_dbs() but when backing up.  All UTXOs are flushed.'''
         assert not flush_data.headers
         assert not flush_data.block_tx_hashes
-        assert flush_data.height < self.db_height
+        assert flush_data.state.height < self.state.height
         self.history.assert_flushed()
 
         start_time = time.time()
-        tx_delta = flush_data.tx_count - self.last_flush_tx_count
-        asset_delta = flush_data.asset_count - self.last_flush_asset_count
-        size_delta = flush_data.chain_size - self.db_chain_size
-        self.db_chain_size = flush_data.chain_size
+        
+        self.backup_fs(flush_data.state.height, flush_data.state.tx_count)
+        self.history.backup(touched, flush_data.state.tx_count)
 
-        self.backup_fs(flush_data.height, flush_data.tx_count, flush_data.asset_count)
-        self.history.backup(touched, flush_data.tx_count)
-        with self.utxo_db.write_batch() as batch:
-            self.flush_utxo_db(batch, flush_data)
-            # Flush state last as it reads the wall time.
-            self.flush_state(batch)
+        self.flush_utxo_db(flush_data)
+        self.flush_asset_db(flush_data)
+        self.flush_asset_info_db(flush_data)
 
-        with self.asset_db.write_batch() as batch:
-            self.flush_asset_db(batch, flush_data)
-            self.flush_asset_state(batch)
+        elapsed = time.time() - start_time
+        tx_delta = flush_data.state.tx_count - self.last_flush_state.tx_count
+        asset_delta = flush_data.state.asset_count - self.last_flush_state.asset_count
+        size_delta = flush_data.state.chain_size - self.last_flush_state.chain_size
 
-        with self.asset_info_db.write_batch() as batch:
-            self.flush_asset_info_db(batch, flush_data)
-
-        elapsed = self.last_flush - start_time
         self.logger.info(f'backup flush #{self.history.flush_count:,d} took '
-                         f'{elapsed:.1f}s.  Height {flush_data.height:,d} '
-                         f'txs: {flush_data.tx_count:,d} ({tx_delta:+,d}) '
-                         f'assets: {flush_data.asset_count:,d} ({asset_delta:+,d})'
-                         f'size: {flush_data.chain_size:,d} ({size_delta:+,d})')
+                         f'{elapsed:.1f}s.  Height {flush_data.state.height:,d} '
+                         f'txs: {flush_data.state.tx_count:,d} ({tx_delta:+,d}) '
+                         f'assets: {flush_data.state.asset_count:,d} ({asset_delta:+,d}) '
+                         f'size: {flush_data.state.chain_size:,d} ({size_delta:+,d})')
+
+        self.last_flush_state = flush_data.state.copy()
 
     def backup_fs(self, height, tx_count, asset_count):
         '''Back up during a reorg.  This just updates our pointers.'''
@@ -639,12 +617,12 @@ class DB:
         return header
 
     async def read_headers(self, start_height, count):
-        '''Requires start_height >= 0, count >= 0.  Reads as many headers as
-        are available starting at start_height up to count.  This
-        would be zero if start_height is beyond self.db_height, for
-        example.
-        Returns a (binary, n) pair where binary is the concatenated
-        binary headers, and n is the count of headers returned.
+        '''Requires start_height >= 0, count >= 0.  Reads as many headers as are available
+        starting at start_height up to count.  This would be zero if start_height is
+        beyond state.height, for example.
+
+        Returns a (binary, n) pair where binary is the concatenated binary headers, and n
+        is the count of headers returned.
         '''
         if start_height < 0 or count < 0:
             raise self.DBError(f'{count:,d} headers starting at '
@@ -652,7 +630,7 @@ class DB:
 
         def read_headers():
             # Read some from disk
-            disk_count = max(0, min(count, self.db_height + 1 - start_height))
+            disk_count = max(0, min(count, self.state.height + 1 - start_height))
             if disk_count:
                 offset = self.header_offset(start_height)
                 size = self.header_offset(start_height + disk_count) - offset
@@ -666,7 +644,7 @@ class DB:
 
         If the tx_height is not on disk, returns (None, tx_height).'''
         tx_height = bisect_right(self.tx_counts, tx_num)
-        if tx_height > self.db_height:
+        if tx_height > self.state.height:
             tx_hash = None
         else:
             tx_hash = self.hashes_file.read(tx_num * 32, 32)
@@ -676,8 +654,8 @@ class DB:
         '''Return a list of tx_hashes at given block height,
         in the same order as in the block.
         '''
-        if block_height > self.db_height:
-            raise self.DBError(f'block {block_height:,d} not on disk (>{self.db_height:,d})')
+        if block_height > self.state.height:
+            raise self.DBError(f'block {block_height:,d} not on disk (>{self.state.height:,d})')
         assert block_height >= 0
         if block_height > 0:
             first_tx_num = self.tx_counts[block_height - 1]
@@ -801,7 +779,7 @@ class DB:
     def clear_excess_undo_info(self):
         '''Clear excess undo info.  Only most recent N are kept.'''
         prefix = b'U'
-        min_height = self.min_undo_height(self.db_height)
+        min_height = self.min_undo_height(self.state.height)
         keys = []
         for key, _hist in self.utxo_db.iterator(prefix=prefix):
             height, = unpack_be_uint32(key[-4:])
@@ -864,96 +842,81 @@ class DB:
                     batch.delete(key)
                 self.logger.info(f'deleted {len(keys):,d} stale asset undo entries')
 
-    # -- Asset database
-
-    def read_asset_state(self):
-        state = self.asset_db.get(b'state')
-        if not state:
-            self.db_asset_count = 0
-        else:
-            state = ast.literal_eval(state.decode())
-            if not isinstance(state, dict):
-                raise self.DBError('failed reading state from asset DB')
-            self.db_asset_count = state['asset_count']
-
-        self.fs_asset_count = self.db_asset_count
-        self.last_flush_asset_count = self.fs_asset_count
-
     # -- UTXO database
 
     def read_utxo_state(self):
+        now = time.time()
         state = self.utxo_db.get(b'state')
         if not state:
-            self.db_height = -1
-            self.db_tx_count = 0
-            self.db_chain_size = 0
-            self.db_tip = b'\0' * 32
-            self.db_version = max(self.DB_VERSIONS)
-            self.utxo_flush_count = 0
-            self.wall_time = 0
-            self.first_sync = True
+            state = ChainState(height=-1, tx_count=0, asset_count=0, chain_size=0, tip=bytes(32),
+                    flush_count=0, sync_time=0, flush_time=now,
+                    first_sync=True, db_version=max(self.DB_VERSIONS))
         else:
             state = ast.literal_eval(state.decode())
             if not isinstance(state, dict):
                 raise self.DBError('failed reading state from DB')
-            self.db_version = state['db_version']
-            if self.db_version not in self.DB_VERSIONS:
-                raise self.DBError('your UTXO DB version is {} but this '
-                                   'software only handles versions {}'
-                                   .format(self.db_version, self.DB_VERSIONS))
-            # backwards compat
-            genesis_hash = state['genesis']
-            if isinstance(genesis_hash, bytes):
-                genesis_hash = genesis_hash.decode()
-            if genesis_hash != self.coin.GENESIS_HASH:
-                raise self.DBError('DB genesis hash {} does not match coin {}'
-                                   .format(genesis_hash,
-                                           self.coin.GENESIS_HASH))
-            self.db_height = state['height']
-            self.db_tx_count = state['tx_count']
-            self.db_tip = state['tip']
-            self.utxo_flush_count = state['utxo_flush_count']
-            self.wall_time = state['wall_time']
-            self.first_sync = state['first_sync']
+            
+            if state['genesis'] != self.coin.GENESIS_HASH:
+                raise self.DBError(f'DB genesis hash {state["genesis"]} does not match '
+                                   f'coin {self.coin.GENESIS_HASH}')
 
-        # These are our state as we move ahead of DB state
-        self.fs_height = self.db_height
-        self.fs_tx_count = self.db_tx_count
-        self.last_flush_tx_count = self.fs_tx_count
+            state = ChainState(
+                height=state['height'],
+                tx_count=state['tx_count'],
+                asset_count=state['asset_count'],
+                chain_size=state.get('chain_size', 0),
+                tip=state['tip'],
+                flush_count=state['utxo_flush_count'],
+                sync_time=state['wall_time'],
+                flush_time=now,
+                first_sync=state['first_sync'],
+                db_version=state['db_version'],
+            )
+
+        self.state = state
+        self.last_flush_state = state.copy()
+        if state.db_version not in self.DB_VERSIONS:
+            raise self.DBError(f'your UTXO DB version is {state.db_version} but this '
+                               f'software only handles versions {self.DB_VERSIONS}')
+
+        # These are as we flush data to disk ahead of DB state
+        self.fs_height = state.height
+        self.fs_tx_count = state.tx_count
+        self.fs_asset_count = state.asset_count
 
         # Log some stats
-        self.logger.info('UTXO DB version: {:d}'.format(self.db_version))
+        self.logger.info('UTXO DB version: {:d}'.format(state.db_version))
         self.logger.info('coin: {}'.format(self.coin.NAME))
-        self.logger.info('network: {}'.format(self.coin.NET))
-        self.logger.info('height: {:,d}'.format(self.db_height))
-        self.logger.info('tip: {}'.format(hash_to_hex_str(self.db_tip)))
-        self.logger.info('tx count: {:,d}'.format(self.db_tx_count))
+        self.logger.info(f'height: {state.height:,d}')
+        self.logger.info(f'tip: {hash_to_hex_str(state.tip)}')
+        self.logger.info(f'tx count: {state.tx_count:,d}')
+        self.logger.info(f'chain size: {state.chain_size // 1_000_000_000} GB '
+                         f'({state.chain_size:,d} bytes)')
         self.logger.info('VOUT debugging: {}'.format(self.env.write_bad_vouts_to_file))
         if self.utxo_db.for_sync:
             self.logger.info(f'flushing DB cache at {self.env.cache_MB:,d} MB')
-        if self.first_sync:
-            self.logger.info('sync time so far: {}'
-                             .format(util.formatted_time(self.wall_time)))
+        if self.state.first_sync:
+            self.logger.info(f'sync time so far: {util.formatted_time(state.sync_time)}')
 
     def write_utxo_state(self, batch):
         '''Write (UTXO) state to the batch.'''
         state = {
             'genesis': self.coin.GENESIS_HASH,
-            'height': self.db_height,
-            'tx_count': self.db_tx_count,
-            'chain_size': self.db_chain_size,
-            'tip': self.db_tip,
-            'utxo_flush_count': self.utxo_flush_count,
-            'wall_time': self.wall_time,
-            'first_sync': self.first_sync,
-            'db_version': self.db_version,
+            'height': self.state.height,
+            'tx_count': self.state.tx_count,
+            'asset_count': self.state.asset_count,
+            'chain_size': self.state.chain_size,
+            'tip': self.state.tip,
+            'utxo_flush_count': self.state.flush_count,
+            'wall_time': self.state.sync_time,
+            'first_sync': self.state.first_sync,
+            'db_version': self.state.db_version,
         }
         batch.put(b'state', repr(state).encode())
 
     def set_flush_count(self, count):
-        self.utxo_flush_count = count
-        with self.utxo_db.write_batch() as batch:
-            self.write_utxo_state(batch)
+        self.state.flush_count = count
+        self.write_utxo_state(self.utxo_db)
 
     async def all_assets(self, hashX):
         def read_assets():

@@ -14,7 +14,7 @@ import json
 import time
 
 import aiohttp
-from aiorpcx import JSONRPC, run_in_thread
+from aiorpcx import run_in_thread
 
 from electrumx.lib.util import hex_to_bytes, open_truncate, class_logger
 
@@ -38,7 +38,7 @@ class Daemon(object):
     WARMING_UP = -28
     id_counter = itertools.count()
 
-    def __init__(self, coin, url, *, max_workqueue=10, init_retry=0.25, max_retry=4.0):
+    def __init__(self, coin, url, *, init_retry=0.25, max_retry=4.0):
         self.coin = coin
         self.logger = class_logger(__name__, self.__class__.__name__)
         self.url_index = None
@@ -46,7 +46,8 @@ class Daemon(object):
         self.set_url(url)
         # Limit concurrent RPC calls to this number.
         # See DEFAULT_HTTP_WORKQUEUE in bitcoind, which is typically 16
-        self.workqueue_semaphore = asyncio.Semaphore(value=max_workqueue)
+        self.workqueue_semaphore = asyncio.Semaphore(value=10)
+        self.block_semaphore = asyncio.Semaphore(value=6)
         self.init_retry = init_retry
         self.max_retry = max_retry
         self._height = None
@@ -106,20 +107,91 @@ class Daemon(object):
                 text = text.strip() or resp.reason
                 raise ServiceRefusedError(text)
 
-    async def _get_to_file(self, rest_url, filename):
-        full_url = self.current_url() + rest_url
-        async with self.workqueue_semaphore:
+    async def _get_to_file(self, payload, filename):
+        #full_url = self.current_url() + rest_url
+
+        class ASYNC_HACK:
+            # LOLOLOLOLOLOL I HAVE NO IDEA WHAT IM DOING
+            # I want to try in minimize differences with the base bitcoin electrum server
+            result = 'result'
+            def __init__(self):
+                self.pointer = 0
+                self.first_pass = True
+                self.done = False
+                self.last_odd = ''
+
+            def check_against(self, bytez: bytes):
+                if self.done:
+                    return b''
+                #O(n) which isn't too bad
+                i1 = 0
+                i2 = len(bytez)
+                for i, b in enumerate(bytez):
+                    b = bytes([b])
+                    if self.pointer < len(self.result):
+                        if b == self.result[self.pointer].encode('ascii'):
+                            self.pointer += 1
+                        else:
+                            self.pointer = 0
+                    elif b in (b' ', b':', b'"'):
+                        # We don't want json structure, just the raw resp
+                        if self.first_pass:
+                            pass
+                        else:
+                            i2 = i
+                            self.done = True
+                            break
+                    elif self.first_pass:
+                            i1 = i
+                            self.first_pass = False
+
+                ret_check = bytez[i1:i2]
+
+                if self.last_odd:
+                    ret_check = self.last_odd + ret_check
+                    i2 += 1
+
+                if (i2 - i1) % 2 != 0:
+                    self.last_odd = ret_check[-1:]
+                    ret_check = ret_check[:-1]
+                else:
+                    self.last_odd = b''
+
+                s = ret_check.decode('ascii')
+                # Will raise if invalid hex
+                return bytes.fromhex(s)
+                
+
+        data = json.dumps(payload)
+        hack = ASYNC_HACK()
+        async with self.block_semaphore:
              with open_truncate(filename) as file:
-                async with self.session.get(full_url) as resp:
+                #async with self.session.get(full_url) as resp:
+                #    kind = resp.headers.get('Content-Type', None)
+                #    if kind != 'application/octet-stream':
+                #        text = await resp.text()
+                #        text = text.strip() or resp.reason
+                #        raise ServiceRefusedError(text)
+                #    size = 0
+                #    async for part, _ in resp.content.iter_chunks():
+                #        size += await run_in_thread(file.write, part)
+                #    return size
+                async with self.session.post(self.current_url(), data=data) as resp:
                     kind = resp.headers.get('Content-Type', None)
-                    if kind != 'application/octet-stream':
+                    if kind == 'application/json':
+                        size = 0
+                        async for part, _ in resp.content.iter_chunks():
+                            #print(f'Normal: {part}')
+                            #print(f'Hacked: {hack.check_against(part)}')
+                            h = hack.check_against(part)
+                            #print(f'({filename}): {h.hex()} vs {part.decode("ascii")}')
+                            if h:
+                                size += await run_in_thread(file.write, h)
+                        return size
+                    else:
                         text = await resp.text()
                         text = text.strip() or resp.reason
                         raise ServiceRefusedError(text)
-                    size = 0
-                    async for part, _ in resp.content.iter_chunks():
-                        size += await run_in_thread(file.write, part)
-                    return size
 
     async def _send(self, func, *args):
         '''Send a payload to be converted to JSON.
@@ -201,25 +273,8 @@ class Daemon(object):
         payload = [{'method': method, 'params': p, 'id': next(self.id_counter)}
                    for p in params_iterable]
         if payload:
-            return await self._send(payload, processor)
+            return await self._send(self._post_json, payload, processor)
         return []
-
-    async def _is_rpc_available(self, method):
-        '''Return whether given RPC method is available in the daemon.
-
-        Results are cached and the daemon will generally not be queried with
-        the same method more than once.'''
-        available = self.available_rpcs.get(method)
-        if available is None:
-            available = True
-            try:
-                await self._send_single(method)
-            except DaemonError as e:
-                err = e.args[0]
-                error_code = err.get("code")   # pylint:disable=E1101
-                available = error_code != JSONRPC.METHOD_NOT_FOUND
-            self.available_rpcs[method] = available
-        return available
 
     async def block_hex_hashes(self, first, count):
         '''Return the hex hashes of count block starting at height first.'''
@@ -227,8 +282,9 @@ class Daemon(object):
         return await self._send_vector('getblockhash', params_iterable)
 
     async def get_block(self, hex_hash, filename):
-        rest_url = f'rest/block/{hex_hash}.bin'
-        return await self._send(self._get_to_file, rest_url, filename)
+        #rest_url = f'rest/block/{hex_hash}.bin'
+        payload = {'method': 'getblock', 'id': next(self.id_counter), 'params': [hex_hash, 0]}
+        return await self._send(self._get_to_file, payload, filename)
 
     async def mempool_hashes(self):
         '''Update our record of the daemon's mempool hashes.'''

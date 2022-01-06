@@ -299,7 +299,7 @@ class SessionManager:
             'coin': self.env.coin.__name__,
             'daemon': self.daemon.logged_url(),
             'daemon height': self.daemon.cached_height(),
-            'db height': self.db.db_height,
+            'db height': self.db.state.height,
             'db_flush_count': self.db.history.flush_count,
             'groups': len(self.session_groups),
             'history cache': cache_fmt.format(
@@ -367,8 +367,8 @@ class SessionManager:
         '''Refresh the cached header subscription responses to be for height,
         and record that as notified_height.
         '''
-        # Paranoia: a reorg could race and leave db_height lower
-        height = min(height, self.db.db_height)
+        # Paranoia: a reorg could race and leave state height lower
+        height = min(height, self.db.state.height)
         raw = await self.raw_header(height)
         self.hsub_results = {'hex': raw.hex(), 'height': height}
         self.notified_height = height
@@ -604,7 +604,7 @@ class SessionManager:
             for service in self.env.report_services:
                 self.logger.info(f'advertising service {service}')
             # Start notifications; initialize hsub_results
-            await notifications.start(self.db.db_height, self._notify_sessions)
+            await notifications.start(self.db.state.height, self._notify_sessions)
             await self._start_external_servers()
             # Peer discovery should start after the external servers
             # because we connect to ourself
@@ -1334,7 +1334,7 @@ class ElectrumX(SessionBase):
         return self.unsubscribe_hashX(hashX) is not None
 
     async def _merkle_proof(self, cp_height, height):
-        max_height = self.db.db_height
+        max_height = self.db.state.height
         if not height <= cp_height <= max_height:
             raise RPCError(BAD_REQUEST,
                            f'require header height {height:,d} <= '

@@ -40,7 +40,6 @@ from electrumx.lib.hash import Base58, double_sha256, hash_to_hex_str
 from electrumx.lib.hash import HASHX_LEN
 from electrumx.lib.script import ScriptPubKey
 import electrumx.lib.tx as lib_tx
-import electrumx.server.block_processor as block_proc
 from electrumx.server import daemon
 from electrumx.server.session import ElectrumX
 
@@ -64,8 +63,6 @@ class Coin:
     BASIC_HEADER_SIZE = 80
     DEFAULT_MAX_SEND = 1000000
     DESERIALIZER = lib_tx.Deserializer
-    DAEMON = daemon.Daemon
-    BLOCK_PROCESSOR = block_proc.BlockProcessor
     P2PKH_VERBYTE = bytes.fromhex("00")
     P2SH_VERBYTES = [bytes.fromhex("05")]
     RPC_PORT = 8332
@@ -92,6 +89,12 @@ class Coin:
         if n <= 1008:
             return n // 24 * 24
         return 1008
+
+    @classmethod
+    def prefetch_limit(cls, height):
+        if height <= 650_000:
+            return 100
+        return 10
 
     @classmethod
     def static_header_offset(cls, height):
@@ -138,21 +141,6 @@ class Coin:
         if not url.startswith('http://') and not url.startswith('https://'):
             url = 'http://' + url
         return url + '/'
-
-
-    @classmethod
-    def genesis_block(cls, block):
-        '''Check the Genesis block is the right one for this coin.
-        Return the block less its unspendable coinbase.
-        '''
-        header = cls.block_header(block, 0)
-        header_hex_hash = hash_to_hex_str(cls.header_hash(header))
-        if header_hex_hash != cls.GENESIS_HASH:
-            raise CoinError('genesis block has hash {} expected {}'
-                            .format(header_hex_hash, cls.GENESIS_HASH))
-
-        return header + bytes(1)
-
 
     @classmethod
     def hashX_from_script(cls, script):
