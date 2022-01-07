@@ -1770,7 +1770,7 @@ class BlockProcessor:
         await self.flush(True)
         if self.caught_up:
             # Flush everything before notifying as client queries are performed on the DB
-            await self.notifications.on_block(self.touched, self.state.height)
+            await self.notifications.on_block(self.touched, self.state.height, self.asset_touched)
             self.touched = set()
             self.asset_touched = set()
         else:

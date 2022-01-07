@@ -304,7 +304,7 @@ class MemPool(object):
                 # mempool or it may have gotten in a block
                 if not raw_tx:
                     continue
-                tx, tx_size = read_tx_and_size(raw_tx, 0)
+                tx, tx_size, wit_hash = read_tx_and_size(raw_tx, 0)
                 # Convert the inputs and outputs into (hashX, value) pairs
                 # Drop generation-like inputs from MemPoolTx.prevouts
                 txin_pairs = tuple((txin.prev_hash, txin.prev_idx)

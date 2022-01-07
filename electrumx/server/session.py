@@ -1460,7 +1460,7 @@ class ElectrumX(SessionBase):
         cache_item = cache.get((number, mode))
         if cache_item is not None:
             blockhash, feerate, lock = cache_item
-            if blockhash and blockhash == self.session_mgr.bp.tip:
+            if blockhash and blockhash == self.session_mgr.bp.state.tip:
                 return feerate
         else:
             # create lock now, store it, and only then await on it
@@ -1470,10 +1470,10 @@ class ElectrumX(SessionBase):
             cache_item = cache.get((number, mode))
             if cache_item is not None:
                 blockhash, feerate, lock = cache_item
-                if blockhash == self.session_mgr.bp.tip:
+                if blockhash == self.session_mgr.bp.state.tip:
                     return feerate
             self.bump_cost(2.0)  # cache miss incurs extra cost
-            blockhash = self.session_mgr.bp.tip
+            blockhash = self.session_mgr.bp.state.tip
             if mode:
                 feerate = await self.daemon_request('estimatesmartfee', number, mode)
             else:

@@ -403,7 +403,7 @@ class DataParser:
                 return 'ParserException raised'
 
     def __init__(self, data: bytes):
-        self.data = data
+        self.data = bytes(data)
         self.cursor = 0
         self.length = len(data) if data else 0
 
