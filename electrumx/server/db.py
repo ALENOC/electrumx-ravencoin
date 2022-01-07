@@ -53,20 +53,21 @@ class FlushData(object):
     asset_meta_deletes = attr.ib()
 
     # Asset Qualifiers
-    asset_restricted2qual = attr.ib()
-    asset_restricted2qual_del = attr.ib()
-    asset_restricted2qual_undo = attr.ib()
-    asset_current_associations = attr.ib()
+    h160_qualifier = attr.ib()
+    h160_qualifier_undos = attr.ib()
+    h160_qualifier_deletes = attr.ib()
 
-    asset_restricted_freezes = attr.ib()
-    asset_restricted_freezes_current = attr.ib()
-    asset_restricted_freezes_del = attr.ib()
-    asset_restricted_freezes_undo = attr.ib()
+    restricted_freezes = attr.ib()
+    restricted_freezes_undos = attr.ib()
+    restricted_freezes_deletes = attr.ib()
 
-    asset_tag2pub = attr.ib()
-    asset_tag2pub_current = attr.ib()
-    asset_tag2pub_del = attr.ib()
-    asset_tag2pub_undo = attr.ib()
+    restricted_strings = attr.ib()
+    restricted_strings_undos = attr.ib()
+    restricted_strings_deletes = attr.ib()
+
+    qualifier_associations = attr.ib()
+    qualifier_associations_undos = attr.ib()
+    qualifier_associations_deletes = attr.ib()
 
     # Broadcasts
     asset_broadcasts = attr.ib()
@@ -82,7 +83,7 @@ class ChainState:
     chain_size = attr.ib()
     tip = attr.ib()
     flush_count = attr.ib()   # of UTXOs
-    sync_time = attr.ib()     # Cumulative
+    sync_time = attr.ib()    # Cumulative
     flush_time = attr.ib()    # Time of flush
     first_sync = attr.ib()
     db_version = attr.ib()
@@ -246,20 +247,21 @@ class DB:
         assert not flush_data.asset_meta_undos
         assert not flush_data.asset_meta_deletes
 
-        assert not flush_data.asset_restricted2qual
-        assert not flush_data.asset_restricted2qual_del
-        assert not flush_data.asset_restricted2qual_undo
-        assert not flush_data.asset_current_associations
+        assert not flush_data.h160_qualifier
+        assert not flush_data.h160_qualifier_undos
+        assert not flush_data.h160_qualifier_deletes
 
-        assert not flush_data.asset_restricted_freezes
-        assert not flush_data.asset_restricted_freezes_current
-        assert not flush_data.asset_restricted_freezes_del
-        assert not flush_data.asset_restricted_freezes_undo
+        assert not flush_data.restricted_freezes
+        assert not flush_data.restricted_freezes_undos
+        assert not flush_data.restricted_freezes_deletes
 
-        assert not flush_data.asset_tag2pub
-        assert not flush_data.asset_tag2pub_del
-        assert not flush_data.asset_tag2pub_undo
-        assert not flush_data.asset_tag2pub_current
+        assert not flush_data.restricted_strings
+        assert not flush_data.restricted_strings_undos
+        assert not flush_data.restricted_strings_deletes
+
+        assert not flush_data.qualifier_associations
+        assert not flush_data.qualifier_associations_undos
+        assert not flush_data.qualifier_associations_deletes
 
         assert not flush_data.asset_broadcasts
         assert not flush_data.asset_broadcasts_undo
@@ -301,11 +303,13 @@ class DB:
             self.write_utxo_state(self.utxo_db)
 
         tx_delta = flush_data.state.tx_count - self.last_flush_state.tx_count
+        asset_delta = flush_data.state.asset_count - self.last_flush_state.asset_count
         size_delta = flush_data.state.chain_size - self.last_flush_state.chain_size
 
         self.logger.info(f'flush #{self.history.flush_count:,d} took {elapsed:.1f}s.  '
                          f'Height {flush_data.state.height:,d} '
                          f'txs: {flush_data.state.tx_count:,d} ({tx_delta:+,d}) '
+                         f'assets: {flush_data.state.asset_count:,d} ({asset_delta:+,d}) '
                          f'size: {flush_data.state.chain_size:,d} ({size_delta:+,d})')
 
         # Catch-up stats
@@ -352,7 +356,7 @@ class DB:
 
         self.fs_height = flush_data.state.height
         self.fs_tx_count = flush_data.state.tx_count
-        self.fd_asset_count = flush_data.state.asset_count
+        self.fs_asset_count = flush_data.state.asset_count
 
     def flush_history(self):
         self.history.flush()
@@ -391,9 +395,10 @@ class DB:
         add_count = len(flush_data.asset_adds)
         spend_count = len(flush_data.asset_deletes) // 2
 
-        restricted_assets = len(flush_data.asset_restricted2qual)
-        freezes = len(flush_data.asset_restricted_freezes)
-        tags = len(flush_data.asset_tag2pub)
+        restricted_assets = len(flush_data.restricted_strings)
+        freezes = len(flush_data.restricted_freezes)
+        tags = len(flush_data.h160_qualifier)
+        quals = len(flush_data.qualifier_associations)
 
         broadcasts = len(flush_data.asset_broadcasts)
 
@@ -405,17 +410,21 @@ class DB:
             flush_data.asset_deletes.clear()
 
             # Qualifiers
-            for key in sorted(flush_data.asset_restricted_freezes_del):
-                batch_delete(key)
-            flush_data.asset_restricted_freezes_del.clear()
+            for key in sorted(flush_data.h160_qualifier_deletes):
+                batch_delete(b't' + key)
+            flush_data.h160_qualifier_deletes.clear()
 
-            for key in sorted(flush_data.asset_restricted2qual_del):
-                batch_delete(key)
-            flush_data.asset_restricted2qual_del.clear()
+            for key in sorted(flush_data.restricted_freezes_deletes):
+                batch_delete(b'f' + key)
+            flush_data.restricted_freezes_deletes.clear()
 
-            for key in sorted(flush_data.asset_tag2pub_del):
-                batch_delete(key)
-            flush_data.asset_tag2pub_del.clear()
+            for key in sorted(flush_data.restricted_strings_deletes):
+                batch_delete(b'r' + key)
+            flush_data.restricted_strings_deletes.clear()
+
+            for key in sorted(flush_data.qualifier_associations_deletes):
+                batch_delete(b'q' + key)
+            flush_data.qualifier_associations_deletes.clear()
 
             for key in sorted(flush_data.asset_broadcasts_del):
                 batch_delete(b'b' + key)
@@ -437,81 +446,37 @@ class DB:
             self.flush_undo_infos(batch_put, flush_data.asset_undo_infos)
             flush_data.asset_undo_infos.clear()
 
-            # FIXME: For current values, maybe have them in the db if they are true
-            # or omit them if they are false. For now, there are not enough qualifiers
-            # or restricted assets for this to be a problem.
+            # New h160 tags
+            for key, value in flush_data.h160_qualifier.items():
+                # key: h160 + asset
+                # value: idx + txnumb + flag
+                batch_put(b't' + key, value)
+            flush_data.h160_qualifier.clear()
+            self.flush_asset_h160_tag_undos(batch_put, flush_data.h160_qualifier_undos)
+            flush_data.h160_qualifier_undos.clear()
 
-            for key, value in flush_data.asset_tag2pub.items():
-                # b'p' h160 -> asset
-                # b'a' asset -> h160
-                key_parser = util.DataParser(key)
-                asset_len, asset = key_parser.read_var_bytes_tuple_bytes()
-                h160_len, h160 = key_parser.read_var_bytes_tuple_bytes()
-                idx = key_parser.read_bytes(4)
-                tx_numb = key_parser.read_bytes(5)
-                batch_put(b'p' + h160_len + h160 + idx + tx_numb, asset_len + asset + value)
-                batch_put(b'a' + asset_len + asset + idx + tx_numb, h160_len + h160 + value)
-            flush_data.asset_tag2pub.clear()
+            # New restricted strings
+            for key, value in flush_data.restricted_strings.items():
+                batch_put(b'r' + key, value)
+            flush_data.restricted_strings.clear()
+            self.flush_restricted_string_undos(batch_put, flush_data.restricted_strings_undos)
+            flush_data.restricted_strings_undos.clear()
 
-            self.flush_t2p_undo_infos(batch_put, flush_data.asset_tag2pub_undo)
-            flush_data.asset_tag2pub_undo.clear()
-
-            for key, value in flush_data.asset_tag2pub_current.items():
-                # b't' h160 -> asset
-                # b'Q' asset -> h160
-                batch_put(key, value)
-            flush_data.asset_tag2pub_current.clear()
-
-            for key, value in flush_data.asset_restricted_freezes.items():
-                # b'f'
+            # New restricted freezes
+            for key, value in flush_data.restricted_freezes.items():
                 batch_put(b'f' + key, value)
-            flush_data.asset_restricted_freezes.clear()
+            flush_data.restricted_freezes.clear()
+            self.flush_restricted_freeze_undos(batch_put, flush_data.restricted_freezes_undos)
+            flush_data.restricted_freezes_undos.clear()
 
-            self.flush_freezes_undo_info(batch_put, flush_data.asset_restricted_freezes_undo)
-            flush_data.asset_restricted_freezes_undo.clear()
+            # New qualifier association
+            for key, value in flush_data.qualifier_associations.items():
+                batch_put(b'q' + key, value)
+            flush_data.qualifier_associations.clear()
+            self.flush_qualifier_associations_undos(batch_put, flush_data.qualifier_associations_undos)
+            flush_data.qualifier_associations_undos.clear()
 
-            for key, value in flush_data.asset_restricted_freezes_current.items():
-                #b'l'
-                batch_put(b'l' + key, value)
-            flush_data.asset_restricted_freezes_current.clear()
-
-            # Change this
-            for key, value in flush_data.asset_restricted2qual.items():
-                #b'1' res
-                #b'2' qual
-                parser = util.DataParser(key)
-                restricted_len, restricted_asset = parser.read_var_bytes_tuple_bytes()
-                bytes_append = parser.read_bytes(4 + 4 + 5)
-                qual_adds, qual_removes = value
-                batch_put(
-                    b'1' + restricted_len + restricted_asset + bytes_append,
-                    bytes([len(qual_adds)]) + b''.join([bytes([len(qual)]) + qual for qual in qual_adds]) +
-                    bytes([len(qual_removes)]) + b''.join([bytes([len(qual)]) + qual for qual in qual_removes])
-                )
-
-                for qual in qual_adds:
-                    batch_put(
-                        b'2' + bytes([len(qual)]) + qual + bytes_append,
-                        b'\x01' + restricted_len + restricted_asset
-                    )
-
-                for qual in qual_removes:
-                    batch_put(
-                        b'2' + bytes([len(qual)]) + qual + bytes_append,
-                        b'\0' + restricted_len + restricted_asset
-                    )
-
-            flush_data.asset_restricted2qual.clear()
-
-            self.flush_restricted2qual_undo_info(batch_put, flush_data.asset_restricted2qual_undo)
-            flush_data.asset_restricted2qual_undo.clear()
-
-            for key, value in flush_data.asset_current_associations.items():
-                # b'r' res
-                # b'c' qual
-                batch_put(key, value)
-            flush_data.asset_current_associations.clear()
-
+            # Asset broadcasts
             for key, value in flush_data.asset_broadcasts.items():
                 batch_put(b'b' + key, value)
             flush_data.asset_broadcasts.clear()
@@ -526,6 +491,7 @@ class DB:
                              f'{restricted_assets:,d} restricted assets modified, '
                              f'{freezes:,d} retricted asset freezes, '
                              f'{tags:,d} addresses tagged, '
+                             f'{quals:,d} qualifier associations changed, '
                              f'{broadcasts:,d} messages broadcast, '
                              f'{elapsed:.1f}s, committing...')
 
@@ -711,33 +677,39 @@ class DB:
     def undo_key_broadcast(self, height):
         return b'B' + pack_be_uint32(height)
 
+    def undo_key_tag(self, height):
+        return b'T' + pack_be_uint32(height)
+
+    def undo_key_res_string(self, height):
+        return b'R' + pack_be_uint32(height)
+
+    def undo_key_res_freeze(self, height):
+        return b'F' + pack_be_uint32(height)
+
+    def undo_key_qual(self, height):
+        return b'Q' + pack_be_uint32(height)
+
     def undo_key(self, height):
         '''DB key for undo information at the given height.'''
         return b'U' + pack_be_uint32(height)
 
-    def undo_res2qual_key(self, height):
-        return b'R' + pack_be_uint32(height)
-
-    def undo_freeze_key(self, height):
-        return b'F' + pack_be_uint32(height)
-
-    def undo_tag_key(self, height):
-        return b'T' + pack_be_uint32(height)
-
     def read_asset_broadcast_undo_info(self, height):
         return self.asset_info_db.get(self.undo_key_broadcast(height))
 
+    def read_h160_tag_undo_info(self, height):
+        return self.asset_db.get(self.undo_key_tag(height))
+
+    def read_res_freeze_undo_info(self, height):
+        return self.asset_db.get(self.undo_key_res_freeze(height))
+
+    def read_res_string_undo_info(self, height):
+        return self.asset_db.get(self.undo_key_res_string(height))
+
+    def read_qual_undo_info(self, height):
+        return self.asset_db.get(self.undo_key_qual(height))
+
     def read_asset_meta_undo_info(self, height):
         return self.asset_info_db.get(self.undo_key(height))
-
-    def read_asset_undo_res2qual_key(self, height):
-        return self.asset_db.get(self.undo_res2qual_key(height))
-
-    def read_asset_undo_freeze_info(self, height):
-        return self.asset_db.get(self.undo_freeze_key(height))
-
-    def read_asset_undo_tag_info(self, height):
-        return self.asset_db.get(self.undo_tag_key(height))
 
     def read_asset_undo_info(self, height):
         return self.asset_db.get(self.undo_key(height))
@@ -745,6 +717,26 @@ class DB:
     def read_undo_info(self, height):
         '''Read undo information from a file for the current height.'''
         return self.utxo_db.get(self.undo_key(height))
+
+    def flush_qualifier_associations_undos(self, batch_put, undo_infos):
+        for undo_info, height in undo_infos:
+            if len(undo_info) > 0:
+                batch_put(self.undo_key_qual(height), b''.join(undo_info))
+
+    def flush_restricted_freeze_undos(self, batch_put, undo_infos):
+        for undo_info, height in undo_infos:
+            if len(undo_info) > 0:
+                batch_put(self.undo_key_res_freeze(height), b''.join(undo_info))
+
+    def flush_restricted_string_undos(self, batch_put, undo_infos):
+        for undo_info, height in undo_infos:
+            if len(undo_info) > 0:
+                batch_put(self.undo_key_res_string(height), b''.join(undo_info))
+
+    def flush_asset_h160_tag_undos(self, batch_put, undo_infos):
+        for undo_info, height in undo_infos:
+            if len(undo_info) > 0:
+                batch_put(self.undo_key_tag(height), b''.join(undo_info))
 
     def flush_asset_broadcast_undos(self, batch_put, undo_infos):
         for undo_info, height in undo_infos:
@@ -756,20 +748,7 @@ class DB:
             if len(undo_info) > 0:
                 batch_put(self.undo_key(height), b''.join(undo_info))
 
-    def flush_t2p_undo_infos(self, batch_put, undo_infos):
-        for undo_info, height in undo_infos:
-            if len(undo_info) > 0:
-                batch_put(self.undo_tag_key(height), b''.join(undo_info))
-
-    def flush_freezes_undo_info(self, batch_put, undo_infos):
-        for undo_info, height in undo_infos:
-            if len(undo_info) > 0:
-                batch_put(self.undo_freeze_key(height), b''.join(undo_info))
-
-    def flush_restricted2qual_undo_info(self, batch_put, undo_infos):
-        for undo_info, height in undo_infos:
-            if len(undo_info) > 0:
-                batch_put(self.undo_res2qual_key(height), b''.join(undo_info))
+    
 
     def flush_undo_infos(self, batch_put, undo_infos):
         '''undo_infos is a list of (undo_info, height) pairs.'''
@@ -1017,307 +996,105 @@ class DB:
         return [i for i in await run_in_thread(lookup_utxos, hashX_pairs) if i]
 
     # For external use
-    async def get_associations_for_qualifier_current(self, asset: bytes):
-        def get_current_info():
-            ret = {}
-            data = self.asset_db.get(b'c' + asset)
-            if data is None:
-                return ret
-            parser = util.DataParser(data)
-            for _ in range(parser.read_int()):
-                ass = parser.read_var_bytes_as_ascii()
-                res_idx, = unpack_le_uint32(parser.read_bytes(4))
-                qual_idx, = unpack_le_uint32(parser.read_bytes(4))
-                tx_numb = parser.read_bytes(5)
-                flag = parser.read_boolean()
-                tx_num, = unpack_le_uint64(tx_numb + bytes(3))
+    
+    async def is_h160_qualified(self, h160: bytes, qualifier: bytes):
+        def lookup_h160():
+            key = b't' + bytes([len(h160)]) + h160 + bytes([len(qualifier)]) + qualifier
+            db_ret = self.asset_db.get(key, None)
+            ret_val = {}
+            if db_ret:
+                tx_pos, = unpack_le_uint32(db_ret[:4])
+                tx_num, = unpack_le_uint64(db_ret[4:9] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
-                ret[ass] = {
-                    'associated': flag,
+                flag = db_ret[-1]
+                ret_val['qualified'] = True if flag != 0 else False
+                ret_val['height'] = height
+                ret_val['tx_hash'] = hash_to_hex_str(tx_hash)
+                ret_val['tx_pos'] = tx_pos
+            else:
+                ret_val['qualified'] = False
+            return ret_val
+        return await run_in_thread(lookup_h160)
+
+    async def qualifications_for_h160(self, h160: bytes):
+        def lookup_quals():
+            prefix = b't' + bytes([len(h160)]) + h160
+            prefix_len = len(prefix) + 1
+            ret_val = {}
+            for db_key, db_value in self.asset_db.iterator(prefix=prefix):
+                tx_pos, = unpack_le_uint32(db_value[:4])
+                tx_num, = unpack_le_uint64(db_value[4:9] + bytes(3))
+                tx_hash, height = self.fs_tx_hash(tx_num)
+                flag = db_value[-1]
+                asset_name = db_key[prefix_len:].decode('ascii')
+                ret_val[asset_name] = {
+                    'qualified': True if flag != 0 else False,
                     'height': height,
-                    'txid': hash_to_hex_str(tx_hash),
-                    'res_tx_pos': res_idx,
-                    'qual_tx_pos': qual_idx,
+                    'tx_hash': tx_hash,
+                    'tx_pos': tx_pos
                 }
-            return ret
-        return await run_in_thread(get_current_info)
+        return await run_in_thread(lookup_quals)
 
-    async def get_associations_for_qualifier_history(self, asset: bytes):
-        def get_asset_history():
-            ret = {}
-            prefix = b'2' + bytes([len(asset)]) + asset
+    async def is_restricted_frozen(self, asset: bytes):
+        def lookup_restricted():
+            key = b'f' + bytes([len(asset)]) + asset
+            db_ret = self.asset_db.get(key, None)
+            ret_val = {}
+            if db_ret:
+                tx_pos, = unpack_le_uint32(db_ret[:4])
+                tx_num, = unpack_le_uint64(db_ret[4:9] + bytes(3))
+                tx_hash, height = self.fs_tx_hash(tx_num)
+                flag = db_ret[-1]
+                ret_val['frozen'] = True if flag != 0 else False
+                ret_val['height'] = height
+                ret_val['tx_hash'] = hash_to_hex_str(tx_hash)
+                ret_val['tx_pos'] = tx_pos
+            else:
+                ret_val['frozen'] = False
+            return ret_val
+        return await run_in_thread(lookup_restricted)
+
+    async def get_restricted_string(self, asset: bytes):
+        def lookup_restricted():
+            key = b'r' + bytes([len(asset)]) + asset
+            db_ret = self.asset_db.get(key, None)
+            ret_val = {}
+            if db_ret:
+                restricted_tx_pos, = unpack_le_uint32(db_ret[:4])
+                qualifying_tx_pos, = unpack_le_uint32(db_ret[:8])
+                tx_num, = unpack_le_uint64(db_ret[8:13] + bytes(3))
+                tx_hash, height = self.fs_tx_hash(tx_num)
+                flag = db_ret[-1]
+                ret_val['frozen'] = True if flag != 0 else False
+                ret_val['height'] = height
+                ret_val['tx_hash'] = hash_to_hex_str(tx_hash)
+                ret_val['restricted_tx_pos'] = restricted_tx_pos
+                ret_val['qualifying_tx_pos'] = qualifying_tx_pos
+            else:
+                ret_val['frozen'] = False
+            return ret_val
+        return await run_in_thread(lookup_restricted)
+
+    async def lookup_qualifier_associations(self, asset:bytes):
+        def lookup_associations():
+            prefix = b't' + bytes([len(asset)]) + asset
+            prefix_len = len(prefix) + 1
+            ret_val = {}
             for db_key, db_value in self.asset_db.iterator(prefix=prefix):
-                res_tx_pos, = unpack_le_uint32(db_key[-13:-9])
-                qual_tx_pos, = unpack_le_uint32(db_key[-9:-5])
-                tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
+                restricted_tx_pos, = unpack_le_uint32(db_value[:4])
+                qualifying_tx_pos, = unpack_le_uint32(db_value[:8])
+                tx_num, = unpack_le_uint64(db_value[8:13] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
-                parser = util.DataParser(db_value)
-
-                flag = parser.read_boolean()
-                ass = parser.read_var_bytes_as_ascii()
-
-                if height in ret.keys():
-                    ret[height][hash_to_hex_str(tx_hash)] = {
-                        'asset': ass,
-                        'associated': flag,
-                        'res_tx_pos': res_tx_pos,
-                        'qual_tx_pos': qual_tx_pos,
-                    }
-                else:
-                    ret[height] = {
-                        hash_to_hex_str(tx_hash): {
-                            'asset': ass,
-                            'associated': flag,
-                            'res_tx_pos': res_tx_pos,
-                            'qual_tx_pos': qual_tx_pos,
-                        }
-                    }
-
-            return ret
-        return await run_in_thread(get_asset_history)
-
-    # For external use
-    async def get_associations_for_restricted_current(self, asset: bytes):
-        def get_current_info():
-            ret = {}
-            data = self.asset_db.get(b'r' + asset)
-            if data is None:
-                return ret
-            parser = util.DataParser(data)
-            for _ in range(parser.read_int()):
-                ass = parser.read_var_bytes_as_ascii()
-                res_idx, = unpack_le_uint32(parser.read_bytes(4))
-                qual_idx, = unpack_le_uint32(parser.read_bytes(4))
-                tx_numb = parser.read_bytes(5)
-                flag = parser.read_boolean()
-                tx_num, = unpack_le_uint64(tx_numb + bytes(3))
-                tx_hash, height = self.fs_tx_hash(tx_num)
-                ret[ass] = {
-                    'associated': flag,
+                flag = db_value[-1]
+                asset_name = db_key[prefix_len:].decode('ascii')
+                ret_val[asset_name] = {
+                    'associated': True if flag != 0 else False,
                     'height': height,
-                    'txid': hash_to_hex_str(tx_hash),
-                    'res_tx_pos': res_idx,
-                    'qual_tx_pos': qual_idx,
+                    'tx_hash': tx_hash,
+                    'restricted_tx_pos': restricted_tx_pos,
+                    'qualifying_tx_pos': qualifying_tx_pos
                 }
-            return ret
-        return await run_in_thread(get_current_info)
-
-    async def get_associations_for_restricted_history(self, asset: bytes):
-        def get_asset_history():
-            ret = {}
-            prefix = b'1' + bytes([len(asset)]) + asset
-            for db_key, db_value in self.asset_db.iterator(prefix=prefix):
-                res_tx_pos, = unpack_le_uint32(db_key[-13:-9])
-                qual_tx_pos, = unpack_le_uint32(db_key[-9:-5])
-                tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
-                tx_hash, height = self.fs_tx_hash(tx_num)
-                parser = util.DataParser(db_value)
-
-                adds = []
-                removes = []
-
-                for _ in range(parser.read_int()):
-                    adds.append(parser.read_var_bytes_as_ascii())
-                for _ in range(parser.read_int()):
-                    removes.append(parser.read_var_bytes_as_ascii())
-
-                if height in ret.keys():
-                    ret[height][hash_to_hex_str(tx_hash)] = {
-                        'associations': adds,
-                        'removes': removes,
-                        'res_tx_pos': res_tx_pos,
-                        'qual_tx_pos': qual_tx_pos
-                    }
-                else:
-                    ret[height] = {
-                        hash_to_hex_str(tx_hash): {
-                            'associations': adds,
-                            'removes': removes,
-                            'res_tx_pos': res_tx_pos,
-                            'qual_tx_pos': qual_tx_pos
-                        }
-                    }
-
-            return ret
-        return await run_in_thread(get_asset_history)
-
-    # For external use
-    async def is_qualified(self, asset: bytes, hex: bytes):
-        def run():
-            data = self.asset_db.get(b'Q' + asset)
-            if data is None:
-                return {}
-            parser = util.DataParser(data)
-            for _ in range(parser.read_int()):
-                h160 = parser.read_var_bytes()
-                tx_pos, = unpack_le_uint32(parser.read_bytes(4))
-                tx_numb = parser.read_bytes(5)
-                flag = parser.read_boolean()
-                tx_num, = unpack_le_uint64(tx_numb + bytes(3))
-                tx_hash, height = self.fs_tx_hash(tx_num)
-                if hex == h160:
-                    return {
-                        'flag': flag,
-                        'height': height,
-                        'txid': hash_to_hex_str(tx_hash),
-                        'tx_pos': tx_pos,
-                    }
-            return {}
-        return await run_in_thread(run)
-
-    # For external use
-    async def get_h160s_associated_with_asset_current(self, asset: bytes):
-        def get_current_info():
-            ret = {}
-            data = self.asset_db.get(b'Q' + asset)
-            if data is None:
-                return ret
-            parser = util.DataParser(data)
-            for _ in range(parser.read_int()):
-                h160 = parser.read_var_bytes()
-                tx_pos, = unpack_le_uint32(parser.read_bytes(4))
-                tx_numb = parser.read_bytes(5)
-                flag = parser.read_boolean()
-                tx_num, = unpack_le_uint64(tx_numb + bytes(3))
-                tx_hash, height = self.fs_tx_hash(tx_num)
-                ret[h160.hex()] = {
-                    'flag': flag,
-                    'height': height,
-                    'txid': hash_to_hex_str(tx_hash),
-                    'tx_pos': tx_pos,
-                }
-            return ret
-        return await run_in_thread(get_current_info)
-
-    async def get_h160s_associated_with_asset_history(self, asset: bytes):
-        def get_h160_history():
-            ret = {}
-            prefix = b'a' + bytes([len(asset)]) + asset
-            for db_key, db_value in self.asset_db.iterator(prefix=prefix):
-                tx_pos, = unpack_le_uint32(db_key[-9:-5])
-                tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
-                tx_hash, height = self.fs_tx_hash(tx_num)
-                parser = util.DataParser(db_value)
-                h160 = parser.read_var_bytes()
-                flag = parser.read_boolean()
-                if height in ret.keys():
-                    ret[height][hash_to_hex_str(tx_hash)] = {
-                        'pubkey': h160.hex(),
-                        'tx_pos': tx_pos,
-                        'flag': flag,
-                    }
-                else:
-                    ret[height] = {
-                        hash_to_hex_str(tx_hash): {
-                            'pubkey': h160.hex(),
-                            'tx_pos': tx_pos,
-                            'flag': flag,
-                        }
-                    }
-            return ret
-
-        return await run_in_thread(get_h160_history)
-
-    # For external use
-    async def get_tags_associated_with_h160_current(self, h160: bytes):
-        def get_current_info():
-            ret = {}
-            data = self.asset_db.get(b't' + h160)
-            if data is None:
-                return ret
-            parser = util.DataParser(data)
-            for _ in range(parser.read_int()):
-                asset = parser.read_var_bytes_as_ascii()
-                tx_pos, = unpack_le_uint32(parser.read_bytes(4))
-                tx_numb = parser.read_bytes(5)
-                flag = parser.read_boolean()
-                tx_num, = unpack_le_uint64(tx_numb + bytes(3))
-                tx_hash, height = self.fs_tx_hash(tx_num)
-                ret[asset] = {
-                    'flag': flag,
-                    'height': height,
-                    'txid': hash_to_hex_str(tx_hash),
-                    'tx_pos': tx_pos,
-                }
-            return ret
-        return await run_in_thread(get_current_info)
-
-    async def get_tags_associated_with_h160_history(self, h160: bytes):
-
-        def get_h160_history():
-            ret = {}
-            prefix = b'p' + bytes([len(h160)]) + h160
-            for db_key, db_value in self.asset_db.iterator(prefix=prefix):
-                tx_pos, = unpack_le_uint32(db_key[-9:-5])
-                tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
-                tx_hash, height = self.fs_tx_hash(tx_num)
-                parser = util.DataParser(db_value)
-                asset = parser.read_var_bytes_as_ascii()
-                flag = parser.read_boolean()
-                if height in ret.keys():
-                    ret[height][hash_to_hex_str(tx_hash)] = {
-                        'tag': asset,
-                        'tx_pos': tx_pos,
-                        'flag': flag,
-                    }
-                else:
-                    ret[height] = {
-                        hash_to_hex_str(tx_hash): {
-                            'tag': asset,
-                            'tx_pos': tx_pos,
-                            'flag': flag,
-                        }
-                    }
-            return ret
-
-        return await run_in_thread(get_h160_history)
-
-    # For external use
-    async def get_frozen_status_of_restricted_current(self, asset: bytes):
-        def get_current_info():
-            data = self.asset_db.get(b'l' + asset)
-            if not data:
-                return {}
-            parser = util.DataParser(data)
-            tx_pos, = unpack_le_uint32(parser.read_bytes(4))
-            tx_numb = parser.read_bytes(5)
-            flag = parser.read_boolean()
-            tx_num, = unpack_le_uint64(tx_numb + bytes(3))
-            tx_hash, height = self.fs_tx_hash(tx_num)
-            return {
-                'frozen': flag,
-                'height': height,
-                'txid': hash_to_hex_str(tx_hash),
-                'tx_pos': tx_pos,
-            }
-
-        return await run_in_thread(get_current_info)
-
-    async def get_frozen_status_of_restricted_history(self, asset: bytes):
-        def get_frozen_history():
-            ret = {}
-            prefix = b'f' + bytes([len(asset)]) + asset
-            for db_key, db_value in self.asset_db.iterator(prefix=prefix):
-                tx_pos, = unpack_le_uint32(db_key[-9:-5])
-                tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
-                tx_hash, height = self.fs_tx_hash(tx_num)
-                parser = util.DataParser(db_value)
-                flag = parser.read_boolean()
-                if height in ret.keys():
-                    ret[height][hash_to_hex_str(tx_hash)] = {
-                        'frozen': flag,
-                        'tx_pos': tx_pos,
-                    }
-                else:
-                    ret[height] = {
-                        hash_to_hex_str(tx_hash): {
-                            'frozen': flag,
-                            'tx_pos': tx_pos,
-                        }
-                    }
-            return ret
-
-        return await run_in_thread(get_frozen_history)
+        return await run_in_thread(lookup_associations)
 
     async def lookup_messages(self, asset_name: bytes):
         def read_messages():
