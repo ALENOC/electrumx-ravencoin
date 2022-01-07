@@ -985,12 +985,25 @@ class SessionBase(RPCSession):
         return await coro
 
 
-def check_asset_len(name):
+def check_asset(name):
+    if not isinstance(name, str):
+        raise RPCError(
+            BAD_REQUEST, f'the asset name must be a string'
+        ) from None
     if len(name) > 32:
         raise RPCError(
             BAD_REQUEST, f'asset name greater than 32 characters'
         ) from None
 
+def check_h160(h160):
+    if not isinstance(h160, str):
+        raise RPCError(
+            BAD_REQUEST, f'the h160 must be a string'
+        ) from None
+    if len(h160) != 20:
+        raise RPCError(
+            BAD_REQUEST, f'h160 not 20 bytes'
+        ) from None
 
 class ElectrumX(SessionBase):
     '''A TCP server that handles incoming Electrum connections.'''
@@ -1578,7 +1591,7 @@ class ElectrumX(SessionBase):
             c = 1
         else:
             c = len(ret)
-        self.bump_cost(c * 1.5)
+        self.bump_cost(c * 2)
         return ret
 
     async def transaction_merkle(self, tx_hash, height):
@@ -1648,142 +1661,50 @@ class ElectrumX(SessionBase):
             self.bump_cost(cost)
             return hash_to_hex_str(tx_hash)
 
-    async def asset_get_meta(self, name):
+    async def asset_get_meta(self, name: str):
+        check_asset(name)
         self.bump_cost(1.0)
         return await self.db.lookup_asset_meta(name.encode('ascii'))
 
     async def get_assets_with_prefix(self, prefix):
-        check_asset_len(prefix)
+        check_asset(prefix)
         ret = await self.db.get_assets_with_prefix(prefix.encode('ascii'))
-        self.bump_cost(1.0 + len(ret) / 100)
+        self.bump_cost(1.0 + len(ret) / 10)
         return ret
 
     async def get_messages(self, name):
-        check_asset_len(name)
+        check_asset(name)
         ret = await self.db.lookup_messages(name.encode('ascii'))
-        self.bump_cost(1.0 + len(ret) / 50)
+        self.bump_cost(1.0 + len(ret) / 10)
         return ret
 
     async def is_qualified(self, h160: str, asset: str):
-        check_asset_len(asset)
+        check_asset(asset)
+        check_h160(h160)
         self.bump_cost(1.0)
-        return await self.db.is_qualified(asset.encode('ascii'), bytes.fromhex(h160))
+        return await self.db.is_h160_qualified(bytes.fromhex(h160), asset.encode('ascii'))
 
-    async def get_restricted_associations_current(self, asset: str):
-        check_asset_len(asset)
+    async def qualifications_for_h160(self, h160: str):
+        check_h160(h160)
+        res = await self.db.is_h160_qualified(bytes.fromhex(h160))
+        self.bump_cost(1.0 + len(res) / 10)
+        return res
 
-        ret = await self.db.get_associations_for_restricted_current(asset.encode('ascii'))
+    async def is_restricted_frozen(self, asset: str):
+        check_asset(asset)
+        self.bump_cost(1.0)
+        return await self.db.is_restricted_frozen(asset.encode('ascii'))
 
-        if not ret:
-            self.bump_cost(1.0)
-            return ret
-        cost = 1.0 + len(ret) / 50
-        self.bump_cost(cost)
-        return ret
+    async def get_restricted_string(self, asset: str):
+        check_asset(asset)
+        self.bump_cost(1.0)
+        return await self.db.get_restricted_string(asset.encode('ascii'))
 
-    async def get_restricted_associations_history(self, asset: str):
-        check_asset_len(asset)
-
-        ret = await self.db.get_associations_for_restricted_history(asset.encode('ascii'))
-
-        if not ret:
-            self.bump_cost(1.0)
-            return ret
-        cost = 1.0 + len(ret) / 50
-        self.bump_cost(cost)
-        return ret
-
-    async def get_qualifier_associations_current(self, asset: str):
-        check_asset_len(asset)
-
-        ret = await self.db.get_associations_for_qualifier_current(asset.encode('ascii'))
-
-        if not ret:
-            self.bump_cost(1.0)
-            return ret
-        cost = 1.0 + len(ret) / 50
-        self.bump_cost(cost)
-        return ret
-
-    async def get_qualifier_associations_history(self, asset: str):
-        check_asset_len(asset)
-
-        ret = await self.db.get_associations_for_qualifier_history(asset.encode('ascii'))
-
-        if not ret:
-            self.bump_cost(1.0)
-            return ret
-        cost = 1.0 + len(ret) / 50
-        self.bump_cost(cost)
-        return ret
-
-    async def get_tags_for_h160_current(self, h160: str):
-        ret = await self.db.get_tags_associated_with_h160_current(bytes.fromhex(h160))
-
-        if not ret:
-            self.bump_cost(1.0)
-            return ret
-        cost = 1.0 + len(ret) / 50
-        self.bump_cost(cost)
-        return ret
-
-    async def get_tags_for_h160_history(self, h160: str):
-        ret = await self.db.get_tags_associated_with_h160_history(bytes.fromhex(h160))
-
-        if not ret:
-            self.bump_cost(1.0)
-            return ret
-        cost = 1.0 + len(ret) / 50
-        self.bump_cost(cost)
-        return ret
-
-    async def get_h160_for_asset_current(self, asset: str):
-        check_asset_len(asset)
-
-        ret = await self.db.get_h160s_associated_with_asset_current(asset.encode('ascii'))
-
-        if not ret:
-            self.bump_cost(1.0)
-            return ret
-        cost = 1.0 + len(ret) / 50
-        self.bump_cost(cost)
-        return ret
-
-    async def get_h160_for_asset_history(self, asset: str):
-        check_asset_len(asset)
-
-        ret = await self.db.get_h160s_associated_with_asset_history(asset.encode('ascii'))
-
-        if not ret:
-            self.bump_cost(1.0)
-            return ret
-        cost = 1.0 + len(ret) / 50
-        self.bump_cost(cost)
-        return ret
-
-    async def frozen_status_current(self, asset: str):
-        check_asset_len(asset)
-
-        ret = await self.db.get_frozen_status_of_restricted_current(asset.encode('ascii'))
-
-        if not ret:
-            self.bump_cost(1.0)
-            return ret
-        cost = 1.0 + len(ret) / 50
-        self.bump_cost(cost)
-        return ret
-
-    async def frozen_status_history(self, asset: str):
-        check_asset_len(asset)
-
-        ret = await self.db.get_frozen_status_of_restricted_history(asset.encode('ascii'))
-
-        if not ret:
-            self.bump_cost(1.0)
-            return ret
-        cost = 1.0 + len(ret) / 50
-        self.bump_cost(cost)
-        return ret
+    async def lookup_qualifier_associations(self, asset: str):
+        check_asset(asset)
+        res = await self.db.is_h160_qualified(asset.encode('ascii'))
+        self.bump_cost(1.0 + len(res) / 10)
+        return res
 
     async def compact_fee_histogram(self):
         self.bump_cost(1.0)
@@ -1849,16 +1770,10 @@ class ElectrumX(SessionBase):
 
         if ptuple >= (1, 9):
             handlers['blockchain.asset.is_qualified'] = self.is_qualified
-            handlers['blockchain.asset.get_restricted_associations_current'] = self.get_restricted_associations_current
-            handlers['blockchain.asset.get_restricted_associations_history'] = self.get_restricted_associations_history
-            handlers['blockchain.asset.get_qualifier_associations_current'] = self.get_qualifier_associations_current
-            handlers['blockchain.asset.get_qualifier_associations_history'] = self.get_qualifier_associations_history
-            handlers['blockchain.asset.get_tags_for_h160_current'] = self.get_tags_for_h160_current
-            handlers['blockchain.asset.get_tags_for_h160_history'] = self.get_tags_for_h160_history
-            handlers['blockchain.asset.get_h160_for_asset_current'] = self.get_h160_for_asset_current
-            handlers['blockchain.asset.get_h160_for_asset_history'] = self.get_h160_for_asset_history
-            handlers['blockchain.asset.frozen_status_current'] = self.frozen_status_current
-            handlers['blockchain.asset.frozen_status_history'] = self.frozen_status_history
+            handlers['blockchain.asset.all_qualifications'] = self.qualifications_for_h160
+            handlers['blockchain.asset.is_frozen'] = self.is_restricted_frozen
+            handlers['blockchain.asset.validator_string'] = self.get_restricted_string
+            handlers['blockchain.asset.restricted_associations'] = self.lookup_qualifier_associations
             handlers['blockchain.asset.broadcasts'] = self.get_messages
             handlers['blockchain.asset.get_assets_with_prefix'] = self.get_assets_with_prefix
             handlers['blockchain.asset.list_addresses_by_asset'] = self.list_addresses_by_asset
