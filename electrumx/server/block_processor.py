@@ -907,7 +907,7 @@ class BlockProcessor:
                             # Get the hashx and continue
                             hashX = script_hashX(txout.pk_script)
                             append_hashX(hashX)
-                            put_utxo(tx_hash + to_le_uint32(idx),
+                            put_utxo(tx_hash + idx,
                                 hashX + tx_numb + to_le_uint64(txout.value))
                             
                             continue
