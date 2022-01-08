@@ -1110,8 +1110,11 @@ class DB:
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
                 tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
+                hash = db_value[:34]
+                expire, = unpack_le_uint64(db_value[34:])
                 ret_val[hash_to_hex_str(tx_hash)] = {
-                    'data': base_encode(db_value, 58),
+                    'data': base_encode(hash, 58),
+                    'expiration': expire,
                     'height': height,
                     'tx_pos': tx_pos,
                 }

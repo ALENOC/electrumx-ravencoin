@@ -1024,20 +1024,26 @@ class BlockProcessor:
                                         asset_name_len + asset_name)
 
                                 if not asset_deserializer.is_finished():
-                                    if b'~' in asset_name and hashX in hashXs:  # This hashX was also in the inputs; we are sending to ourself; this is a broadcast
+                                    if (b'!' in asset_name or b'~' in asset_name) and hashX in hashXs:  # This hashX was also in the inputs; we are sending to ourself; this is a broadcast
                                         if second_loop:
                                             if asset_deserializer.cursor + 34 <= asset_deserializer.length:
                                                 data = asset_deserializer.read_bytes(34)
+                                                timestamp = b'\0\0\0\0\0\0\0\0'
+                                                if not asset_deserializer.is_finished():
+                                                    timestamp = asset_deserializer.read_bytes(8)
                                                 # This is a message broadcast
                                                 put_asset_broadcast(
-                                                    asset_name_len + asset_name + to_le_uint32(idx) + tx_numb, data)
+                                                    asset_name_len + asset_name + to_le_uint32(idx) + tx_numb, data + timestamp)
                                                 asset_broadcast_undo_info.append(
                                                     asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
                                         else:
                                             data = asset_deserializer.read_bytes(34)
+                                            timestamp = b'\0\0\0\0\0\0\0\0'
+                                            if not asset_deserializer.is_finished():
+                                                timestamp = asset_deserializer.read_bytes(8)
                                             # This is a message broadcast
                                             put_asset_broadcast(asset_name_len + asset_name + to_le_uint32(idx) + tx_numb,
-                                                                data)
+                                                                data + timestamp)
                                             asset_broadcast_undo_info.append(
                                                 asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
                             else:
