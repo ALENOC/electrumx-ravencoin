@@ -265,9 +265,10 @@ class Daemon(object):
         def processor(result):
             try:
                 errs = [item['error'] for item in result if item['error']]
-            except TypeError:
+            except TypeError as e:
                 print(result.__class__)
                 print(result)
+                raise e
             if any(err.get('code') == self.WARMING_UP for err in errs):
                 raise WarmingUpError
             if not errs or replace_errs:
