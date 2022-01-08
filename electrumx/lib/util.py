@@ -403,13 +403,13 @@ class DataParser:
                 return 'ParserException raised'
 
     def __init__(self, data: bytes):
-        self.data = bytes(data)
+        self.data = bytes(data) if data else data
         self.cursor = 0
         self.length = len(data) if data else 0
 
     def _assert_space(self, length: int):
         if self.cursor + length > self.length:
-            raise self.ParserException(self, 'Out of bounds: trying to read {} byte(s)'.format(length))
+            raise self.ParserException(self, f'Out of bounds: trying to read {length} byte(s) {self.cursor} {self.length} {len(self.data)}')
 
     def read_byte(self):
         self._assert_space(1)
@@ -462,4 +462,4 @@ class DataParser:
         if self.data is None:
             return True
         else:
-            return self.cursor == self.length
+            return self.cursor >= self.length - 1

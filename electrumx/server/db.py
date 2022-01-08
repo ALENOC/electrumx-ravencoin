@@ -547,7 +547,7 @@ class DB:
 
         start_time = time.time()
         
-        self.backup_fs(flush_data.state.height, flush_data.state.tx_count)
+        self.backup_fs(flush_data.state.height, flush_data.state.tx_count, flush_data.state.asset_count)
         self.history.backup(touched, flush_data.state.tx_count)
 
         self.flush_utxo_db(flush_data)
@@ -791,7 +791,7 @@ class DB:
                 break
             keys.append(key)
 
-        for key, _hist in self.asset_db.iterator(prefix=b'R'):
+        for key, _hist in self.asset_db.iterator(prefix=b'T'):
             height, = unpack_be_uint32(key[-4:])
             if height >= min_height:
                 break
@@ -803,7 +803,13 @@ class DB:
                 break
             keys.append(key)
 
-        for key, _hist in self.asset_db.iterator(prefix=b'T'):
+        for key, _hist in self.asset_db.iterator(prefix=b'R'):
+            height, = unpack_be_uint32(key[-4:])
+            if height >= min_height:
+                break
+            keys.append(key)
+
+        for key, _hist in self.asset_db.iterator(prefix=b'Q'):
             height, = unpack_be_uint32(key[-4:])
             if height >= min_height:
                 break
@@ -1007,12 +1013,12 @@ class DB:
                 tx_num, = unpack_le_uint64(db_ret[4:9] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
                 flag = db_ret[-1]
-                ret_val['qualified'] = True if flag != 0 else False
+                ret_val['flag'] = True if flag != 0 else False
                 ret_val['height'] = height
                 ret_val['tx_hash'] = hash_to_hex_str(tx_hash)
                 ret_val['tx_pos'] = tx_pos
             else:
-                ret_val['qualified'] = False
+                ret_val['flag'] = False
             return ret_val
         return await run_in_thread(lookup_h160)
 
@@ -1028,11 +1034,12 @@ class DB:
                 flag = db_value[-1]
                 asset_name = db_key[prefix_len:].decode('ascii')
                 ret_val[asset_name] = {
-                    'qualified': True if flag != 0 else False,
+                    'flag': True if flag != 0 else False,
                     'height': height,
-                    'tx_hash': tx_hash,
+                    'tx_hash': hash_to_hex_str(tx_hash),
                     'tx_pos': tx_pos
                 }
+            return ret_val
         return await run_in_thread(lookup_quals)
 
     async def is_restricted_frozen(self, asset: bytes):
@@ -1061,28 +1068,26 @@ class DB:
             ret_val = {}
             if db_ret:
                 restricted_tx_pos, = unpack_le_uint32(db_ret[:4])
-                qualifying_tx_pos, = unpack_le_uint32(db_ret[:8])
+                qualifying_tx_pos, = unpack_le_uint32(db_ret[4:8])
                 tx_num, = unpack_le_uint64(db_ret[8:13] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
-                flag = db_ret[-1]
-                ret_val['frozen'] = True if flag != 0 else False
+                string = db_ret[14:].decode('ascii')
+                ret_val['string'] = string
                 ret_val['height'] = height
                 ret_val['tx_hash'] = hash_to_hex_str(tx_hash)
                 ret_val['restricted_tx_pos'] = restricted_tx_pos
                 ret_val['qualifying_tx_pos'] = qualifying_tx_pos
-            else:
-                ret_val['frozen'] = False
             return ret_val
         return await run_in_thread(lookup_restricted)
 
     async def lookup_qualifier_associations(self, asset:bytes):
         def lookup_associations():
-            prefix = b't' + bytes([len(asset)]) + asset
+            prefix = b'q' + bytes([len(asset)]) + asset
             prefix_len = len(prefix) + 1
             ret_val = {}
             for db_key, db_value in self.asset_db.iterator(prefix=prefix):
                 restricted_tx_pos, = unpack_le_uint32(db_value[:4])
-                qualifying_tx_pos, = unpack_le_uint32(db_value[:8])
+                qualifying_tx_pos, = unpack_le_uint32(db_value[4:8])
                 tx_num, = unpack_le_uint64(db_value[8:13] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
                 flag = db_value[-1]
@@ -1090,10 +1095,11 @@ class DB:
                 ret_val[asset_name] = {
                     'associated': True if flag != 0 else False,
                     'height': height,
-                    'tx_hash': tx_hash,
+                    'tx_hash': hash_to_hex_str(tx_hash),
                     'restricted_tx_pos': restricted_tx_pos,
                     'qualifying_tx_pos': qualifying_tx_pos
                 }
+            return ret_val
         return await run_in_thread(lookup_associations)
 
     async def lookup_messages(self, asset_name: bytes):

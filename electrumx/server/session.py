@@ -990,6 +990,10 @@ def check_asset(name):
         raise RPCError(
             BAD_REQUEST, f'the asset name must be a string'
         ) from None
+    if len(name) <= 0:
+        raise RPCError(
+            BAD_REQUEST, f'asset name is empty!'
+        ) from None
     if len(name) > 32:
         raise RPCError(
             BAD_REQUEST, f'asset name greater than 32 characters'
@@ -1000,7 +1004,7 @@ def check_h160(h160):
         raise RPCError(
             BAD_REQUEST, f'the h160 must be a string'
         ) from None
-    if len(h160) != 20:
+    if len(h160) != 40:
         raise RPCError(
             BAD_REQUEST, f'h160 not 20 bytes'
         ) from None
@@ -1686,7 +1690,7 @@ class ElectrumX(SessionBase):
 
     async def qualifications_for_h160(self, h160: str):
         check_h160(h160)
-        res = await self.db.is_h160_qualified(bytes.fromhex(h160))
+        res = await self.db.qualifications_for_h160(bytes.fromhex(h160))
         self.bump_cost(1.0 + len(res) / 10)
         return res
 
@@ -1702,7 +1706,9 @@ class ElectrumX(SessionBase):
 
     async def lookup_qualifier_associations(self, asset: str):
         check_asset(asset)
-        res = await self.db.is_h160_qualified(asset.encode('ascii'))
+        if asset[0] == '#':
+            asset = asset[1:]
+        res = await self.db.lookup_qualifier_associations(asset.encode('ascii'))
         self.bump_cost(1.0 + len(res) / 10)
         return res
 
@@ -1769,8 +1775,8 @@ class ElectrumX(SessionBase):
             handlers['blockchain.asset.unsubscribe'] = self.asset_unsubscribe
 
         if ptuple >= (1, 9):
-            handlers['blockchain.asset.is_qualified'] = self.is_qualified
-            handlers['blockchain.asset.all_qualifications'] = self.qualifications_for_h160
+            handlers['blockchain.asset.check_tag'] = self.is_qualified
+            handlers['blockchain.asset.all_tags'] = self.qualifications_for_h160
             handlers['blockchain.asset.is_frozen'] = self.is_restricted_frozen
             handlers['blockchain.asset.validator_string'] = self.get_restricted_string
             handlers['blockchain.asset.restricted_associations'] = self.lookup_qualifier_associations

@@ -827,7 +827,6 @@ class BlockProcessor:
                             hashX = script_hashX(txout.pk_script[:script_hash_end])
                         elif op_ptr == 0:
                             # This is an asset tag
-                            # These are verifiably unspendable
 
                             # continue is called after this block
 
@@ -904,6 +903,13 @@ class BlockProcessor:
                                         f.write('Traceback : {}\n'.format(traceback.format_exc()))
                                 if isinstance(e, (DataParser.ParserException, KeyError)):
                                     raise e
+
+                            # Get the hashx and continue
+                            hashX = script_hashX(txout.pk_script)
+                            append_hashX(hashX)
+                            put_utxo(tx_hash + to_le_uint32(idx),
+                                hashX + tx_numb + to_le_uint64(txout.value))
+                            
                             continue
                         else:
                             # There is no OP_RVN_ASSET. Hash as-is.
@@ -1088,7 +1094,7 @@ class BlockProcessor:
                                         f.write('Exception : {}\n'.format(repr(e)))
                                         f.write('Traceback : {}\n'.format(traceback.format_exc()))
 
-                if self.current_restricted_asset and self.current_qualifiers:
+                if self.current_restricted_asset and self.current_restricted_string:
                     res = self.current_restricted_asset  # type: bytes
 
                     res_to_string_key = bytes([len(res)]) + res
@@ -1214,7 +1220,7 @@ class BlockProcessor:
             # bytes([len(asset_name)]) + asset_name + to_le_uint32(idx) + tx_numb
             key_len = asset_len + 4 + 5
             key = data_parser.read_bytes(key_len)
-            self.asset_broadcast_dels.append(b'b' + key)
+            self.asset_broadcast_dels.append(key)
 
         data_parser = DataParser(self.db.read_h160_tag_undo_info(block.height))
         while not data_parser.is_finished():
@@ -1223,7 +1229,7 @@ class BlockProcessor:
             idx_txnumb = data_parser.read_bytes(9)
             flag = data_parser.read_byte()
             if flag == b'\xff':
-                self.h160_qualified_deletes.append(b't' + h160_len + h160 + asset_len + asset)
+                self.h160_qualified_deletes.append(h160_len + h160 + asset_len + asset)
             else:
                 self.h160_qualified.__setitem__(h160_len + h160 + asset_len + asset, idx_txnumb + flag)
 
@@ -1233,7 +1239,7 @@ class BlockProcessor:
             idx_txnumb = data_parser.read_bytes(9)
             flag = data_parser.read_byte()
             if flag == b'\xff':
-                self.restricted_freezes_deletes.append(b'f' + asset_len + asset)
+                self.restricted_freezes_deletes.append(asset_len + asset)
             else:
                 self.restricted_freezes.__setitem__(asset_len + asset, idx_txnumb + flag)
 
@@ -1243,7 +1249,7 @@ class BlockProcessor:
             idx_txnumb = data_parser.read_bytes(4 + 4 + 5)
             str_len, tags = data_parser.read_var_bytes_tuple_bytes()
             if str_len == b'\0':
-                self.restricted_strings_deletes.append(b'r' + asset_len + asset)
+                self.restricted_strings_deletes.append(asset_len + asset)
             else:
                 self.restricted_strings.__setitem__(asset_len + asset, idx_txnumb + str_len + tags)
 
@@ -1254,7 +1260,7 @@ class BlockProcessor:
             idx_txnumb = data_parser.read_bytes(4 + 4 + 5)
             flag = data_parser.read_byte()
             if flag == b'\xff':
-                self.qualifier_associations_deletes.append(b'q' + qual_len + qual + restricted_len + restricted)
+                self.qualifier_associations_deletes.append(qual_len + qual + restricted_len + restricted)
             else:
                 self.qualifier_associations.__setitem__(qual_len + qual + restricted_len + restricted, idx_txnumb + flag)
 
