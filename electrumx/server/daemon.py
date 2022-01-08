@@ -263,7 +263,11 @@ class Daemon(object):
         If replace_errs is true, any item with an error is returned as None,
         otherwise an exception is raised.'''
         def processor(result):
-            errs = [item['error'] for item in result if item['error']]
+            try:
+                errs = [item['error'] for item in result if item['error']]
+            except TypeError:
+                print(result.__class__)
+                print(result)
             if any(err.get('code') == self.WARMING_UP for err in errs):
                 raise WarmingUpError
             if not errs or replace_errs:
