@@ -662,6 +662,7 @@ class DB:
             return [fs_tx_hash(tx_num) for tx_num in tx_nums]
 
         while True:
+            print('while 26')
             history = await run_in_thread(read_history)
             if all(hash is not None for hash, height in history):
                 return history
@@ -918,6 +919,7 @@ class DB:
             return assets
 
         while True:
+            print('while 27')
             assets = await run_in_thread(read_assets)
             if all(asset.tx_hash is not None for asset in assets):
                 return assets
@@ -944,6 +946,7 @@ class DB:
             return utxos
 
         while True:
+            print('while 28')
             utxos = await run_in_thread(read_utxos)
             if all(utxo.tx_hash is not None for utxo in utxos):
                 return utxos
