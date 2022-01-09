@@ -223,7 +223,7 @@ class Ravencoin(Coin):
     P2SH_VERBYTES = [bytes.fromhex("7A")]
     GENESIS_HASH = ('0000006b444bc2f2ffe627be9d9e7e7a'
                     '0730000870ef6eb6da46c8eae389df90')
-    DEFAULT_MAX_SEND = 5_000_000
+    DEFAULT_MAX_SEND = 10_000_000
     X16RV2_ACTIVATION_TIME = 1569945600   # algo switch to x16rv2 at this timestamp
     KAWPOW_ACTIVATION_TIME = 1588788000  # kawpow algo activation time
     KAWPOW_ACTIVATION_HEIGHT = 1219736
