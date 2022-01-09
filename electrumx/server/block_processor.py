@@ -156,9 +156,11 @@ class OnDiskBlock:
 
         count = 0
         while True:
+            print('while 9')
             read = deserializer.read_tx_and_hash
             try:
                 while True:
+                    print('while 10')
                     cursor = deserializer.cursor
                     yield read()
                     count += 1
@@ -183,10 +185,12 @@ class OnDiskBlock:
         offsets = [base_offset + deserializer.cursor]
 
         while True:
+            print('while 11')
             read = deserializer.read_tx
             count = 0
             try:
                 while True:
+                    print('while 12')
                     cursor = deserializer.cursor
                     read()
                     count += 1
@@ -212,6 +216,7 @@ class OnDiskBlock:
             deserializer = Deserializer(self._read_at_pos(start, size))
             pairs = []
             while deserializer.cursor < size:
+                print('while 13')
                 pairs.append(deserializer.read_tx_and_hash())
             for item in reversed(pairs):
                 yield item
@@ -518,6 +523,7 @@ class BlockProcessor:
             start = height - 1
             count = 1
             while start > 0:
+                print('while 14')
                 hashes = await self.db.fs_block_hashes(start, count)
                 hex_hashes = [hash_to_hex_str(hash) for hash in hashes]
                 d_hex_hashes = await self.daemon.block_hex_hashes(start, count)
@@ -568,6 +574,7 @@ class BlockProcessor:
         OnDiskBlock.daemon = self.daemon
 
         while True:
+            print('while 15')
             utxo_cache_size = len(self.utxo_cache) * 205
             db_deletes_size = len(self.db_deletes) * 57
             hist_cache_size = self.db.history.unflushed_memsize()
@@ -1052,6 +1059,7 @@ class BlockProcessor:
                     # function for malformed asset
                     def try_parse_asset_iterative(script: bytes):
                         while script[:3] != b'rvn' and len(script) > 0:
+                            print('while 16')
                             script = script[1:]
                         assert script[:3] == b'rvn'
                         return try_parse_asset(DataParser(script), True)
@@ -1213,6 +1221,7 @@ class BlockProcessor:
 
         data_parser = DataParser(self.db.read_asset_meta_undo_info(block.height))
         while not data_parser.is_finished():  # Stops when None or empty
+            print('while 17')
             name = data_parser.read_var_bytes()
             data_len, data = data_parser.read_var_bytes_tuple()
             if data_len == 0:
@@ -1222,6 +1231,7 @@ class BlockProcessor:
 
         data_parser = DataParser(self.db.read_asset_broadcast_undo_info(block.height))
         while not data_parser.is_finished():
+            print('while 18')
             asset_len = data_parser.read_int()
             # bytes([len(asset_name)]) + asset_name + to_le_uint32(idx) + tx_numb
             key_len = asset_len + 4 + 5
@@ -1230,6 +1240,7 @@ class BlockProcessor:
 
         data_parser = DataParser(self.db.read_h160_tag_undo_info(block.height))
         while not data_parser.is_finished():
+            print('while 19')
             h160_len, h160 = data_parser.read_var_bytes_tuple_bytes()
             asset_len, asset = data_parser.read_var_bytes_tuple_bytes()
             idx_txnumb = data_parser.read_bytes(9)
@@ -1241,6 +1252,7 @@ class BlockProcessor:
 
         data_parser = DataParser(self.db.read_res_freeze_undo_info(block.height))
         while not data_parser.is_finished():
+            print('while 20')
             asset_len, asset = data_parser.read_var_bytes_tuple_bytes()
             idx_txnumb = data_parser.read_bytes(9)
             flag = data_parser.read_byte()
@@ -1251,6 +1263,7 @@ class BlockProcessor:
 
         data_parser = DataParser(self.db.read_res_string_undo_info(block.height))
         while not data_parser.is_finished():
+            print('while 21')
             asset_len, asset = data_parser.read_var_bytes_tuple_bytes()
             idx_txnumb = data_parser.read_bytes(4 + 4 + 5)
             str_len, tags = data_parser.read_var_bytes_tuple_bytes()
@@ -1261,6 +1274,7 @@ class BlockProcessor:
 
         data_parser = DataParser(self.db.read_qual_undo_info(block.height))
         while not data_parser.is_finished():
+            print('while 22')
             qual_len, qual = data_parser.read_var_bytes_tuple_bytes()
             restricted_len, restricted = data_parser.read_var_bytes_tuple_bytes()
             idx_txnumb = data_parser.read_bytes(4 + 4 + 5)
@@ -1296,6 +1310,7 @@ class BlockProcessor:
 
                 last_val_ptr = 0
                 while True:
+                    print('while 23')
                     next_data = last_val_ptr + val_len(last_val_ptr)
                     if next_data >= max:
                         break
@@ -1542,6 +1557,7 @@ class BlockProcessor:
         try:
             show_summary = True
             while True:
+                print('while 24')
                 hex_hashes, daemon_height = await self.next_block_hashes()
                 if show_summary:
                     show_summary = False

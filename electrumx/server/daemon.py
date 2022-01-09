@@ -212,6 +212,7 @@ class Daemon(object):
         last_error_log = -1000   # Monotonic time starts at 0
         retry = self.init_retry
         while True:
+            print('while 25')
             try:
                 result = await func(*args)
                 if on_good_message:

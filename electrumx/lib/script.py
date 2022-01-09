@@ -251,6 +251,7 @@ class Script(object):
         n = 0
         try:
             while n < len(script):
+                print('while 4')
                 op = script[n]
                 op_v = (script[n], n+1)
                 n += 1

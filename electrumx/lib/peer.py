@@ -122,6 +122,7 @@ class Peer(object):
         # ports first.
         pairs = [('SSL', self.ssl_port), ('TCP', self.tcp_port)]
         while self.other_port_pairs:
+            print('while 2')
             pairs.append(self.other_port_pairs.pop())
         if isinstance(self.ip_address, IPv4Address):
             families = [AF_INET]
