@@ -195,6 +195,7 @@ class LogicalFile(object):
         If size is -1 all bytes are read.'''
         parts = []
         while size != 0:
+            print('while 5')
             try:
                 with self.open_file(start, False) as f:
                     part = f.read(size)
@@ -211,6 +212,7 @@ class LogicalFile(object):
     def write(self, start, b):
         '''Write the bytes-like object, b, to the underlying virtual file.'''
         while b:
+            print('while 6')
             size = min(len(b), self.file_size - (start % self.file_size))
             with self.open_file(start, True) as f:
                 f.write(b if size == len(b) else b[:size])
@@ -272,6 +274,7 @@ def version_string(ptuple):
     '''Convert a version tuple such as (1, 2) to "1.2".
     There is always at least one dot, so (1, ) becomes "1.0".'''
     while len(ptuple) < 2:
+        print('while 7')
         ptuple += (0,)
     return '.'.join(str(p) for p in ptuple)
 
@@ -363,6 +366,7 @@ def base_encode(v: bytes, base: int) -> str:
         long_value += (256 ** i) * c
     result = bytearray()
     while long_value >= base:
+        print('while 8')
         div, mod = divmod(long_value, base)
         result.append(chars[mod])
         long_value = div

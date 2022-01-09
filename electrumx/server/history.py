@@ -318,6 +318,7 @@ class History(object):
         # Loop over 2-byte prefixes
         cursor = self.comp_cursor
         while write_size < limit and cursor < (2**8)**4:  # 65536:
+            print('while 29')
             prefix = pack_be_uint32(cursor)
             write_size += self._compact_prefix(prefix, write_items,
                                                keys_to_delete)

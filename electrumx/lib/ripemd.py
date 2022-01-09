@@ -369,6 +369,7 @@ def RMD160Update(ctx, inp, inplen):
             off = need
             have = 0
         while off + 64 <= inplen:
+            print('while 3')
             RMD160Transform(ctx.state, inp[off:]) #<---
             off += 64
     if off < inplen:

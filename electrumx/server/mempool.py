@@ -168,6 +168,7 @@ class MemPool(object):
         elapsed = time.monotonic() - start
         self.logger.info(f'synced in {elapsed:.2f}s')
         while True:
+            print('while 30')
             mempool_size = sum(tx.size for tx in self.txs.values()) / 1_000_000
             self.logger.info(f'{len(self.txs):,d} txs {mempool_size:.2f} MB '
                              f'touching {len(self.hashXs):,d} addresses')
@@ -224,6 +225,7 @@ class MemPool(object):
         # call transfers ownership
         touched = set()
         while True:
+            print('while 31')
             height = self.api.cached_height()
             hex_hashes = await self.api.mempool_hashes()
             if height != await self.api.height():
@@ -279,6 +281,7 @@ class MemPool(object):
             prior_count = 0
             # FIXME: this is not particularly efficient
             while tx_map and len(tx_map) != prior_count:
+                print('while 32')
                 prior_count = len(tx_map)
                 tx_map, utxo_map = self._accept_transactions(tx_map, utxo_map,
                                                              touched)
