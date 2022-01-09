@@ -211,7 +211,6 @@ class SessionManager:
         max_sessions = self.env.max_sessions
         low_watermark = max_sessions * 19 // 20
         while True:
-            print('while 35')
             await self.session_event.wait()
             self.session_event.clear()
             if not paused and len(self.sessions) >= max_sessions:
@@ -233,7 +232,6 @@ class SessionManager:
         log_interval = self.env.log_sessions
         if log_interval:
             while True:
-                print('while 36')
                 await sleep(log_interval)
                 data = self._session_data(for_log=True)
                 for line in sessions_lines(data):
@@ -251,7 +249,6 @@ class SessionManager:
     async def _clear_stale_sessions(self):
         '''Cut off sessions that haven't done anything for 10 minutes.'''
         while True:
-            print('while 37')
             await sleep(60)
             stale_cutoff = time.time() - self.env.session_timeout
             stale_sessions = [session for session in self.sessions
@@ -262,7 +259,6 @@ class SessionManager:
     async def _handle_chain_reorgs(self):
         '''Clear caches on chain reorgs.'''
         while True:
-            print('while 38')
             await self.bp.backed_up_event.wait()
             self.logger.info('reorg signalled; clearing tx_hashes and merkle caches')
             self._reorg_count += 1
@@ -274,7 +270,6 @@ class SessionManager:
         session_class = self.env.coin.SESSIONCLS
         period = 300
         while True:
-            print('while 39')
             await sleep(period)
             hard_limit = session_class.cost_hard_limit
 
@@ -782,7 +777,6 @@ class SessionManager:
 
         # Ensure the tx_hashes are fresh before placing in the cache
         while True:
-            print('while 40')
             reorg_count = self._reorg_count
             try:
                 tx_hashes = await self.db.tx_hashes_at_blockheight(height)

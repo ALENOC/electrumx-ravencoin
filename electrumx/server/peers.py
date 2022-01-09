@@ -150,7 +150,6 @@ class PeerManager:
         else:
             ports = [self.env.tor_proxy_port]
         while True:
-            print('while 33')
             self.logger.info(f'trying to detect proxy on "{host}" '
                              f'ports {ports}')
             proxy = await SOCKSProxy.auto_detect_at_host(host, ports, None)
@@ -203,7 +202,6 @@ class PeerManager:
     async def _monitor_peer(self, peer):
         # Stop monitoring if we were dropped (a duplicate peer)
         while peer in self.peers:
-            print('while 34')
             if await self._should_drop_peer(peer):
                 self.peers.discard(peer)
                 break

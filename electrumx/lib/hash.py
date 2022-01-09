@@ -118,7 +118,6 @@ class Base58(object):
 
         txt = ''
         while value:
-            print('while 1')
             value, mod = divmod(value, 58)
             txt += Base58.chars[mod]
 
