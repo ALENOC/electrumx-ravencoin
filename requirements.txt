@@ -6,3 +6,4 @@ aiorpcx==0.22.1
 x16r_hash==1.0.1
 x16rv2_hash==1.0
 kawpow==0.9.4.4
+uvloop==0.16.0
