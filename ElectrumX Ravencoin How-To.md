@@ -67,7 +67,7 @@ It is assumed that you have basic knowledge of editing files on Linux (vi, vim, 
 
 - Make a symbolic link to the electrumx, e.g., **ln -s {name} electrumx** so the version can be found by the scripts in-system. 
 
-- Make sure Python 3.8.5 is installed by typing **python3 –version**
+- Make sure Python 3.8.5 or higher is installed by typing **python3 –version**
 
 - Now install pip3:  
 
