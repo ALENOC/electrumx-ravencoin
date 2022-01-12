@@ -107,91 +107,20 @@ class Daemon(object):
                 text = text.strip() or resp.reason
                 raise ServiceRefusedError(text)
 
-    async def _get_to_file(self, payload, filename):
-        #full_url = self.current_url() + rest_url
-
-        class ASYNC_HACK:
-            # LOLOLOLOLOLOL I HAVE NO IDEA WHAT IM DOING
-            # I want to try in minimize differences with the base bitcoin electrum server
-            result = 'result'
-            def __init__(self):
-                self.pointer = 0
-                self.first_pass = True
-                self.done = False
-                self.last_odd = ''
-
-            def check_against(self, bytez: bytes):
-                if self.done:
-                    return b''
-                #O(n) which isn't too bad
-                i1 = 0
-                i2 = len(bytez)
-                for i, b in enumerate(bytez):
-                    b = bytes([b])
-                    if self.pointer < len(self.result):
-                        if b == self.result[self.pointer].encode('ascii'):
-                            self.pointer += 1
-                        else:
-                            self.pointer = 0
-                    elif b in (b' ', b':', b'"'):
-                        # We don't want json structure, just the raw resp
-                        if self.first_pass:
-                            pass
-                        else:
-                            i2 = i
-                            self.done = True
-                            break
-                    elif self.first_pass:
-                            i1 = i
-                            self.first_pass = False
-
-                ret_check = bytez[i1:i2]
-
-                if self.last_odd:
-                    ret_check = self.last_odd + ret_check
-                    i2 += 1
-
-                if (i2 - i1) % 2 != 0:
-                    self.last_odd = ret_check[-1:]
-                    ret_check = ret_check[:-1]
-                else:
-                    self.last_odd = b''
-
-                s = ret_check.decode('ascii')
-                # Will raise if invalid hex
-                return bytes.fromhex(s)
-                
-
-        data = json.dumps(payload)
-        hack = ASYNC_HACK()
+    async def _get_to_file(self, rest_url, filename):
+        full_url = self.current_url() + rest_url
         async with self.block_semaphore:
-             with open_truncate(filename) as file:
-                #async with self.session.get(full_url) as resp:
-                #    kind = resp.headers.get('Content-Type', None)
-                #    if kind != 'application/octet-stream':
-                #        text = await resp.text()
-                #        text = text.strip() or resp.reason
-                #        raise ServiceRefusedError(text)
-                #    size = 0
-                #    async for part, _ in resp.content.iter_chunks():
-                #        size += await run_in_thread(file.write, part)
-                #    return size
-                async with self.session.post(self.current_url(), data=data) as resp:
+            with open_truncate(filename) as file:
+                async with self.session.get(full_url) as resp:
                     kind = resp.headers.get('Content-Type', None)
-                    if kind == 'application/json':
-                        size = 0
-                        async for part, _ in resp.content.iter_chunks():
-                            #print(f'Normal: {part}')
-                            #print(f'Hacked: {hack.check_against(part)}')
-                            h = hack.check_against(part)
-                            #print(f'({filename}): {h.hex()} vs {part.decode("ascii")}')
-                            if h:
-                                size += await run_in_thread(file.write, h)
-                        return size
-                    else:
+                    if kind != 'application/octet-stream':
                         text = await resp.text()
                         text = text.strip() or resp.reason
                         raise ServiceRefusedError(text)
+                    size = 0
+                    async for part, _ in resp.content.iter_chunks():
+                        size += await run_in_thread(file.write, part)
+                    return size
 
     async def _send(self, func, *args):
         '''Send a payload to be converted to JSON.
@@ -287,9 +216,8 @@ class Daemon(object):
         return await self._send_vector('getblockhash', params_iterable)
 
     async def get_block(self, hex_hash, filename):
-        #rest_url = f'rest/block/{hex_hash}.bin'
-        payload = {'method': 'getblock', 'id': next(self.id_counter), 'params': [hex_hash, 0]}
-        return await self._send(self._get_to_file, payload, filename)
+        rest_url = f'rest/block/{hex_hash}.bin'
+        return await self._send(self._get_to_file, rest_url, filename)
 
     async def mempool_hashes(self):
         '''Update our record of the daemon's mempool hashes.'''
