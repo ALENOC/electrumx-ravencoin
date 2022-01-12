@@ -142,3 +142,5 @@ Stopping the server with: **systemctl stop electrumx**
 The electrum server tends to eat up memory and CPU during the initial syncing. This is not a problem once the server has been synced.
 
 Once the electrumx database is fully synced the server will start servicing connections on port 50002, so you can try and connect your electrum-rvn wallet. Be aware that there can be significant data going out of the server, so make sure it is on an unlimited or large-enough data-plan or you regularly check the data usage.
+
+Consider also installing the tor daemon with **sudo apt install tor** to propogate hidden service electrumx servers.
