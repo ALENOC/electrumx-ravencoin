@@ -125,10 +125,6 @@ SSL\_CERTFILE = /home/electrumx/ssl\_cert/server.crt
 
 SSL\_KEYFILE = /home/electrumx/ssl\_cert/server.key 
 
-COST\_SOFT\_LIMIT = 0 
-
-COST\_HARD\_LIMIT = 0 
-
 BANDWIDTH\_UNIT\_COST = 1000
   
 EVENT_LOOP_POLICY=uvloop
