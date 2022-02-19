@@ -8,10 +8,9 @@ ADD https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/archive/v1.10.0.tar.
 RUN tar zxvf *.tar.gz
 
 RUN apt-get update && \
-        apt-get -y install cmake gcc libffi-dev build-essential python3.8 python3.8-dev python3-pip libleveldb-dev && \
-        python3.8 -m pip install aiohttp pylru aiorpcx kawpow
+        apt-get -y install cmake gcc libffi-dev build-essential python3.8 python3.8-dev python3-pip libleveldb-dev
 
-RUN cd /electrumx* && python3.8 setup.py install
+RUN cd /electrumx* && python3.8 -m pip install -r requirements.txt && python3.8 setup.py install
 
 ENV SERVICES="ssl://:50002,tcp://:50001,rpc://:8000"
 ENV COIN=Ravencoin
@@ -31,10 +30,9 @@ ENV SSL_KEYFILE = /electrumx_db/ssl_cert/server.crt
 # Example: 
 # env REPORT_SERVICES = ssl://rvn4lyfe.com:50002,tcp://rvn4lyfe.com:50001
 
-# Allow incoming connections
-# EXPOSE 8000
-# EXPOSE 50001
-# EXPOSE 50002
+EXPOSE 8000
+EXPOSE 50001
+EXPOSE 50002
 
 VOLUME /db
 
