@@ -10,6 +10,8 @@ RUN tar zxvf *.tar.gz
 RUN apt-get update && \
         apt-get -y install cmake gcc libffi-dev build-essential python3.8 python3.8-dev python3-pip libleveldb-dev
 
+RUN python3.8 -m pip install --upgrade pip
+
 RUN cd /electrumx* && python3.8 -m pip install -r requirements.txt && python3.8 setup.py install
 
 ENV SERVICES="ssl://:50002,tcp://:50001,rpc://:8000"
