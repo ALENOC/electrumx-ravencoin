@@ -8,10 +8,11 @@ ADD https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/archive/v1.10.0.tar.
 RUN tar zxvf *.tar.gz
 
 RUN apt-get update && \
-        apt-get -y install cmake gcc libffi-dev build-essential python3.8 python3.8-dev python3-pip libleveldb-dev
+        apt-get -y install cmake gcc libffi-dev build-essential python3.8 python3.8-dev python3-pip libleveldb-dev libssl-dev
 
 RUN python3.8 -m pip install --upgrade pip
 
+# Needed for MacOs
 RUN python3.8 -m pip install scikit-build
 
 RUN cd /electrumx* && python3.8 -m pip install -r requirements.txt && python3.8 setup.py install
