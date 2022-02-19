@@ -12,6 +12,8 @@ RUN apt-get update && \
 
 RUN python3.8 -m pip install --upgrade pip
 
+RUN python3.8 -m pip install scikit-build
+
 RUN cd /electrumx* && python3.8 -m pip install -r requirements.txt && python3.8 setup.py install
 
 ENV SERVICES="ssl://:50002,tcp://:50001,rpc://:8000"
