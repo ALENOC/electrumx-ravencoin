@@ -158,7 +158,7 @@ class Daemon(object):
                 log_error('connection problem - check your daemon is running')
                 on_good_message = 'connection restored'
             except aiohttp.ClientError as e:
-                log_error(f'reguest failed: {e}; your ravend might have gone down')
+                log_error(f'request failed: {e}; your ravend might have gone down')
                 on_good_message = None
             except ServiceRefusedError as e:
                 log_error(f'daemon service refused: {e}')
