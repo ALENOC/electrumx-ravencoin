@@ -624,7 +624,7 @@ class SessionManager:
             self.logger.info('stopping servers')
             await self._stop_servers(self.servers.keys())
             self.logger.info('closing connections...')
-            async with TaskGroup() as group:
+            async with util.OldTaskGroup() as group:
                 for session in list(self.sessions):
                     await group.spawn(session.close(force_after=1))
             self.logger.info('connections closed')
