@@ -1080,18 +1080,7 @@ class ElectrumX(SessionBase):
         return self.hashX_subs.pop(hashX, None)
 
     async def notify(self, touched, height_changed, assets):
-        '''Wrap _notify_inner; websockets raises exceptions for unclear reasons.'''
-        try:
-            async with timeout_after(30):
-                await self._notify_inner(touched, height_changed, assets)
-        except TaskTimeout:
-            self.logger.warning('timeout notifying client, closing...')
-            await self.close(force_after=1.0)
-        except Exception:
-            self.logger.exception('unexpected exception notifying client')
-
-    async def _notify_inner(self, touched, height_changed, assets):
-        '''Notify the client about changes to touched addresses (from mempool
+        '''Notify the client about changes to touched addresses and assets (from mempool
         updates or new blocks) and height.
         '''
         if height_changed and self.subscribe_headers:
@@ -1134,6 +1123,7 @@ class ElectrumX(SessionBase):
             if changed:
                 es = '' if len(changed) == 1 else 'es'
                 self.logger.info(f'notified of {len(changed):,d} address{es}')
+
 
     async def subscribe_headers_result(self):
         '''The result of a header subscription or notification.'''
