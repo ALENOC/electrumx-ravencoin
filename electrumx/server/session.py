@@ -846,7 +846,7 @@ class SessionManager:
                 del cache[hashX]
 
         for session in self.sessions:
-            await self._task_group.spawn(session.notify, touched, height_changed)
+            await self._task_group.spawn(session.notify, touched, height_changed, assets)
 
     def _ip_addr_group_name(self, session):
         host = session.remote_address().host
