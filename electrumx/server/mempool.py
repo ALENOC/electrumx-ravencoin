@@ -6,22 +6,21 @@
 # and warranty status of this software.
 
 '''Mempool handling.'''
-import hashlib
 import itertools
-import os
+import math
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from typing import Callable
+from typing import Callable, Dict, Sequence, Tuple
 
 import attr
-from aiorpcx import TaskGroup, run_in_thread, sleep
+from aiorpcx import run_in_thread, sleep
 
 from electrumx.lib.addresses import public_key_to_address
 from electrumx.lib.hash import hash_to_hex_str, hex_str_to_hash
 from electrumx.lib.script import OpCodes, ScriptError, Script
 from electrumx.lib.tx import read_tx
-from electrumx.lib.util import DataParser, class_logger, chunks
+from electrumx.lib.util import DataParser, class_logger, chunks, OldTaskGroup
 from electrumx.server.db import UTXO, ASSET
 
 
@@ -156,6 +155,7 @@ class MemPool(object):
         self.logger = class_logger(__name__, self.__class__.__name__)
         self.txs = {}
         self.hashXs = defaultdict(set)  # None can be a key
+        self.cached_compact_histogram = []
         self.refresh_secs = refresh_secs
         self.log_status_secs = log_status_secs
 
@@ -173,6 +173,67 @@ class MemPool(object):
                              f'touching {len(self.hashXs):,d} addresses')
             await sleep(self.log_status_secs)
             await synchronized_event.wait()
+
+    async def _refresh_histogram(self, synchronized_event):
+        while True:
+            await synchronized_event.wait()
+            async with self.lock:
+                # Threaded as can be expensive
+                await run_in_thread(self._update_histogram, 100_000)
+            await sleep(self.coin.MEMPOOL_HISTOGRAM_REFRESH_SECS)
+
+    def _update_histogram(self, bin_size):
+        # Build a histogram by fee rate
+        histogram = defaultdict(int)
+        for tx in self.txs.values():
+            fee_rate = tx.fee / tx.size
+            # use 0.1 sat/byte resolution
+            # note: rounding *down* is intentional. This ensures txs
+            #       with a given fee rate will end up counted in the expected
+            #       bucket/interval of the compact histogram.
+            fee_rate = math.floor(10 * fee_rate) / 10
+            histogram[fee_rate] += tx.size
+
+        compact = self._compress_histogram(histogram, bin_size=bin_size)
+        self.logger.info(f'compact fee histogram: {compact}')
+        self.cached_compact_histogram = compact
+
+
+    @classmethod
+    def _compress_histogram(
+            cls, histogram: Dict[float, int], *, bin_size: int
+    ) -> Sequence[Tuple[float, int]]:
+        '''Calculate and return a compact fee histogram as needed for
+        "mempool.get_fee_histogram" protocol request.
+        histogram: feerate (sat/byte) -> total size in bytes of txs that pay approx feerate
+        '''
+        # Now compact it.  For efficiency, get_fees returns a
+        # compact histogram with variable bin size.  The compact
+        # histogram is an array of (fee_rate, vsize) values.
+        # vsize_n is the cumulative virtual size of mempool
+        # transactions with a fee rate in the interval
+        # [rate_(n-1), rate_n)], and rate_(n-1) > rate_n.
+        # Intervals are chosen to create tranches containing at
+        # least 100kb of transactions
+        assert bin_size > 0
+        compact = []
+        cum_size = 0
+        prev_fee_rate = None
+        for fee_rate, size in sorted(histogram.items(), reverse=True):
+            # if there is a big lump of txns at this specific size,
+            # consider adding the previous item now (if not added already)
+            if size > 2 * bin_size and prev_fee_rate is not None and cum_size > 0:
+                compact.append((prev_fee_rate, cum_size))
+                cum_size = 0
+                bin_size *= 1.1
+            # now consider adding this item
+            cum_size += size
+            if cum_size > bin_size:
+                compact.append((fee_rate, cum_size))
+                cum_size = 0
+                bin_size *= 1.1
+            prev_fee_rate = fee_rate
+        return compact
 
     def _accept_transactions(self, tx_map, utxo_map, touched):
         '''Accept transactions in tx_map to the mempool if all their inputs
@@ -264,7 +325,7 @@ class MemPool(object):
         # Process new transactions
         new_hashes = list(all_hashes.difference(txs))
         if new_hashes:
-            group = TaskGroup()
+            group = OldTaskGroup()
             for hashes in chunks(new_hashes, 200):
                 coro = self._fetch_and_accept(hashes, all_hashes, touched)
                 await group.spawn(coro)
@@ -389,8 +450,9 @@ class MemPool(object):
     async def keep_synchronized(self, synchronized_event):
         '''Keep the mempool synchronized with the daemon.'''
 
-        async with TaskGroup() as group:
+        async with OldTaskGroup() as group:
             await group.spawn(self._refresh_hashes(synchronized_event))
+            await group.spawn(self._refresh_histogram(synchronized_event))
             await group.spawn(self._logging(synchronized_event))
 
             async for task in group:
@@ -429,6 +491,10 @@ class MemPool(object):
                 value -= sum(v for h168, v, is_asset, _ in tx.in_pairs if h168 == hashX and not is_asset)
                 value += sum(v for h168, v, is_asset, _ in tx.out_pairs if h168 == hashX and not is_asset)
         return value
+
+    async def compact_fee_histogram(self):
+        '''Return a compact fee histogram of the current mempool.'''
+        return self.cached_compact_histogram
 
     async def potential_spends(self, hashX):
         '''Return a set of (prev_hash, prev_idx) pairs from mempool

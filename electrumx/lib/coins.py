@@ -63,6 +63,7 @@ class Coin:
     BASIC_HEADER_SIZE = 80
     DEFAULT_MAX_SEND = 1000000
     DESERIALIZER = lib_tx.Deserializer
+    MEMPOOL_HISTOGRAM_REFRESH_SECS = 500
     P2PKH_VERBYTE = bytes.fromhex("00")
     P2SH_VERBYTES = [bytes.fromhex("05")]
     RPC_PORT = 8332
