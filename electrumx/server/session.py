@@ -1702,7 +1702,7 @@ class ElectrumX(SessionBase):
 
     async def compact_fee_histogram(self):
         self.bump_cost(1.0)
-        return []
+        return await self.mempool.compact_fee_histogram()
 
     async def get_session_stats(self):
         return {
