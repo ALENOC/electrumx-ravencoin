@@ -15,6 +15,7 @@ from typing import Callable, Dict, Sequence, Tuple
 
 import attr
 from aiorpcx import run_in_thread, sleep
+from asyncio import Lock
 
 from electrumx.lib.addresses import public_key_to_address
 from electrumx.lib.hash import hash_to_hex_str, hex_str_to_hash
@@ -158,6 +159,8 @@ class MemPool(object):
         self.cached_compact_histogram = []
         self.refresh_secs = refresh_secs
         self.log_status_secs = log_status_secs
+        # Prevents mempool refreshes during fee histogram calculation
+        self.lock = Lock()
 
     async def _logging(self, synchronized_event):
         '''Print regular logs of mempool stats.'''
@@ -291,7 +294,8 @@ class MemPool(object):
                 continue
             hashes = set(hex_str_to_hash(hh) for hh in hex_hashes)
             try:
-                await self._process_mempool(hashes, touched, height)
+                async with self.lock:
+                    await self._process_mempool(hashes, touched, height)
             except DBSyncError:
                 # The UTXO DB is not at the same height as the
                 # mempool; wait and try again
