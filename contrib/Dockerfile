@@ -28,7 +28,7 @@ ENV CACHE_MB=1000
 ENV EVENT_LOOP_POLICY=uvloop
 
 ENV SSL_CERTFILE = /db/ssl_cert/server.crt
-ENV SSL_KEYFILE = /db/ssl_cert/server.crt
+ENV SSL_KEYFILE = /db/ssl_cert/server.key
 
 # REQUIRED to connect with the larger electrumx ravencoin server network.
 # Full service://(IP/URL):PORT is REQUIRED
