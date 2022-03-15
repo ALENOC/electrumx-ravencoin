@@ -14,14 +14,14 @@ from collections import defaultdict
 from typing import Callable, Dict, Sequence, Tuple
 
 import attr
-from aiorpcx import run_in_thread, sleep
+from aiorpcx import TaskGroup, run_in_thread, sleep
 from asyncio import Lock
 
 from electrumx.lib.addresses import public_key_to_address
 from electrumx.lib.hash import hash_to_hex_str, hex_str_to_hash
 from electrumx.lib.script import OpCodes, ScriptError, Script
 from electrumx.lib.tx import read_tx
-from electrumx.lib.util import DataParser, class_logger, chunks, OldTaskGroup
+from electrumx.lib.util import DataParser, class_logger, chunks
 from electrumx.server.db import UTXO, ASSET
 
 
@@ -329,7 +329,7 @@ class MemPool(object):
         # Process new transactions
         new_hashes = list(all_hashes.difference(txs))
         if new_hashes:
-            group = OldTaskGroup()
+            group = TaskGroup()
             for hashes in chunks(new_hashes, 200):
                 coro = self._fetch_and_accept(hashes, all_hashes, touched)
                 await group.spawn(coro)
@@ -454,7 +454,7 @@ class MemPool(object):
     async def keep_synchronized(self, synchronized_event):
         '''Keep the mempool synchronized with the daemon.'''
 
-        async with OldTaskGroup() as group:
+        async with TaskGroup() as group:
             await group.spawn(self._refresh_hashes(synchronized_event))
             await group.spawn(self._refresh_histogram(synchronized_event))
             await group.spawn(self._logging(synchronized_event))

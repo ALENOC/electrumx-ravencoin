@@ -23,7 +23,7 @@ import pylru
 from aiorpcx import (Event, JSONRPCAutoDetect, JSONRPCConnection,
                      ReplyAndDisconnect, Request, RPCError, RPCSession,
                      handler_invocation, serve_rs, serve_ws, sleep,
-                     NewlineFramer)
+                     NewlineFramer, TaskGroup)
 
 import electrumx
 
@@ -141,7 +141,6 @@ class SessionManager:
         self.estimatefee_cache = pylru.lrucache(1000)
         self.notified_height = None
         self.hsub_results = None
-        self._task_group = util.OldTaskGroup()
         self._sslc = None
         # Event triggered when electrumx is listening for incoming requests.
         self.server_listening = Event()
@@ -242,8 +241,9 @@ class SessionManager:
         if sessions:
             session_ids = ', '.join(str(session.session_id) for session in sessions)
             self.logger.info(f'{reason} session ids {session_ids}')
-            for session in sessions:
-                await self._task_group.spawn(session.close(force_after=force_after))
+            async with TaskGroup() as group:
+                for session in sessions:
+                    await group.spawn(session.close(force_after=force_after))
 
     async def _clear_stale_sessions(self):
         '''Cut off sessions that haven't done anything for 10 minutes.'''
@@ -607,7 +607,7 @@ class SessionManager:
             await self._start_external_servers()
             # Peer discovery should start after the external servers
             # because we connect to ourself
-            async with self._task_group as group:                
+            async with TaskGroup() as group:                
                 await group.spawn(self.peer_mgr.discover_peers())
                 await group.spawn(self._clear_stale_sessions())
                 await group.spawn(self._handle_chain_reorgs())
@@ -624,7 +624,7 @@ class SessionManager:
             self.logger.info('stopping servers')
             await self._stop_servers(self.servers.keys())
             self.logger.info('closing connections...')
-            async with util.OldTaskGroup() as group:
+            async with TaskGroup() as group:
                 for session in list(self.sessions):
                     await group.spawn(session.close(force_after=1))
             self.logger.info('connections closed')
@@ -845,8 +845,9 @@ class SessionManager:
             for hashX in set(cache).intersection(touched):
                 del cache[hashX]
 
-        for session in self.sessions:
-            await self._task_group.spawn(session.notify, touched, height_changed, assets)
+        async with TaskGroup() as group:
+            for session in self.sessions:
+                await group.spawn(session.notify, touched, height_changed, assets)
 
     def _ip_addr_group_name(self, session):
         host = session.remote_address().host
