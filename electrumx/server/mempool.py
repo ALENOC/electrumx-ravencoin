@@ -21,7 +21,7 @@ from electrumx.lib.addresses import public_key_to_address
 from electrumx.lib.hash import hash_to_hex_str, hex_str_to_hash
 from electrumx.lib.script import OpCodes, ScriptError, Script
 from electrumx.lib.tx import read_tx
-from electrumx.lib.util import DataParser, class_logger, chunks
+from electrumx.lib.util import DataParser, class_logger, chunks, base_encode
 from electrumx.server.db import UTXO, ASSET
 
 
@@ -156,6 +156,10 @@ class MemPool(object):
         self.logger = class_logger(__name__, self.__class__.__name__)
         self.txs = {}
         self.hashXs = defaultdict(set)  # None can be a key
+        self.asset_creates = {}
+        self.tx_to_asset_create = {}
+        self.asset_reissues = {}
+        self.tx_to_asset_reissue = {}
         self.cached_compact_histogram = []
         self.refresh_secs = refresh_secs
         self.log_status_secs = log_status_secs
@@ -312,12 +316,26 @@ class MemPool(object):
         txs = self.txs
         hashXs = self.hashXs
 
+        tx_to_create = self.tx_to_asset_create
+        tx_to_reissue = self.tx_to_asset_reissue
+        creates = self.asset_creates
+        reissues = self.asset_reissues
+
         if mempool_height != self.api.db_height():
             raise DBSyncError
 
         # First handle txs that have disappeared
         for tx_hash in set(txs).difference(all_hashes):
             tx = txs.pop(tx_hash)
+
+            reissued_asset = tx_to_reissue.pop(tx, None)
+            if reissued_asset:
+                del reissues[reissued_asset]
+
+            created_asset = tx_to_create.pop(tx, None)
+            if created_asset:
+                del creates[created_asset]
+
             tx_hashXs = set(hashX for hashX, value, _, _ in tx.in_pairs)
             tx_hashXs.update(hashX for hashX, value, _, _ in tx.out_pairs)
             for hashX in tx_hashXs:
@@ -337,7 +355,9 @@ class MemPool(object):
             tx_map = {}
             utxo_map = {}
             async for task in group:
-                deferred, unspent = task.result()
+                (deferred, unspent), creates, reissues = task.result()
+                print(creates)
+                print(reissues)
                 tx_map.update(deferred)
                 utxo_map.update(unspent)
 
@@ -357,7 +377,8 @@ class MemPool(object):
         hex_hashes_iter = (hash_to_hex_str(hash) for hash in hashes)
         raw_txs = await self.api.raw_transactions(hex_hashes_iter)
 
-        # TODO: Newly created asset data will not be shown
+        asset_meta_creates = {}
+        asset_meta_reissues = {}
 
         def deserialize_txs():    # This function is pure
             to_hashX = self.coin.hashX_from_script
@@ -376,7 +397,7 @@ class MemPool(object):
                                    for txin in tx.inputs
                                    if not txin.is_generation())
                 txout_tuple_list = []
-                for txout in tx.outputs:
+                for i, txout in enumerate(tx.outputs):
                     value = txout.value
 
                     # Every vout needs to be added for other methods to work properly
@@ -413,6 +434,46 @@ class MemPool(object):
                             else:
                                 value = int.from_bytes(asset_deserializer.read_bytes(8), 'little', signed=False)
                                 txout_tuple_list.append((hashX, value, True, asset_name))
+                                # Asset reissue chaining is not allowed. There may only be
+                                # one reissue in the mempool per asset name
+                                if asset_type == b'r'[0]:
+                                    divisions = asset_deserializer.read_int()
+                                    reissuable = asset_deserializer.read_int()
+                                    if asset_deserializer.cursor + 34 <= asset_deserializer.length:
+                                        asset_data = asset_deserializer.read_bytes(34)
+                                    else:
+                                        asset_data = None
+                                    asset_meta_reissues[asset_name.decode('ascii')] = {
+                                        'sats_in_circulation': value,
+                                        'divisions': divisions,
+                                        'reissuable': reissuable,
+                                        'ipfs': base_encode(asset_data, 58) if asset_data else None,
+                                        'source': {
+                                            'tx_hash': hash_to_hex_str(tx_hash),
+                                            'tx_pos': i,
+                                            'height': -1
+                                        }
+                                    }
+                                elif asset_type == b'q'[0]:
+                                    divisions = asset_deserializer.read_byte()
+                                    reissuable = asset_deserializer.read_byte()
+                                    has_meta = asset_deserializer.read_byte()
+                                    if has_meta != b'\0':
+                                        asset_data = asset_deserializer.read_bytes(34)
+                                    else:
+                                        asset_data = None
+                                    asset_meta_creates[asset_name.decode('ascii')] = {
+                                        'sats_in_circulation': value,
+                                        'divisions': divisions,
+                                        'reissuable': reissuable,
+                                        'ipfs': base_encode(asset_data, 58) if asset_data else None,
+                                        'source': {
+                                            'tx_hash': hash_to_hex_str(tx_hash),
+                                            'tx_pos': i,
+                                            'height': -1
+                                        }
+                                    }
+
                         except:
                             txout_tuple_list.append((hashX, value, False, None))
                     else:
@@ -445,7 +506,7 @@ class MemPool(object):
 
         utxo_map = {prevout: utxo for prevout, utxo in zip(prevouts, utxos)}
 
-        return self._accept_transactions(tx_map, utxo_map, touched)
+        return self._accept_transactions(tx_map, utxo_map, touched), asset_meta_creates, asset_meta_reissues
 
     #
     # External interface
