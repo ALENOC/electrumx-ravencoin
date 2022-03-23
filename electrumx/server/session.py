@@ -1698,6 +1698,7 @@ class ElectrumX(SessionBase):
             
             if mempool_data['divisions'] == 0xff:
                 to_ret['source_prev'] = db_data['source_prev'] if 'source_prev' in db_data else db_data['source']
+            return to_ret
         else:
             return db_data
 
