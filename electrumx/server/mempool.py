@@ -357,14 +357,14 @@ class MemPool(object):
             tx_map = {}
             utxo_map = {}
             async for task in group:
-                (deferred, unspent), creates, reissues = task.result()
+                (deferred, unspent), internal_creates, internal_reissues = task.result()
 
                 # Store asset changes
-                for asset, stats in creates.items():
+                for asset, stats in internal_creates.items():
                     tx_to_create[hex_str_to_hash(stats['source']['tx_hash'])] = asset
                     creates[asset] = stats
 
-                for asset, stats in reissues.items():
+                for asset, stats in internal_reissues.items():
                     tx_to_reissue[hex_str_to_hash(stats['source']['tx_hash'])] = asset
                     reissues[asset] = stats
 
