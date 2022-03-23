@@ -1148,7 +1148,7 @@ class ElectrumX(SessionBase):
         return self.peer_mgr.on_peers_subscribe(self.is_tor())
 
     async def asset_status(self, asset):
-        asset_data = await self.session_mgr.db.lookup_asset_meta(asset.encode('ascii'))
+        asset_data = await self.session_mgr.asset_get_meta(asset)
         self.bump_cost(0.1 + len(asset_data) * 0.00002)
         ptuple = self.protocol_tuple
         if asset_data:
@@ -1663,6 +1663,8 @@ class ElectrumX(SessionBase):
 
         db_data = await self.db.lookup_asset_meta(name.encode('ascii'))
         mempool_data = await self.mempool.get_asset_reissues_if_any(name)
+        print(name)
+        print(mempool_data)
         if mempool_data:
             to_ret = {
                 'sats_in_circulation': db_data['sats_in_cirulation'] + mempool_data['sats_in_cirulation'],
