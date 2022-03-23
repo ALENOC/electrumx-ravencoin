@@ -1148,10 +1148,29 @@ class ElectrumX(SessionBase):
         return self.peer_mgr.on_peers_subscribe(self.is_tor())
 
     async def asset_status(self, asset):
-        asset_data = await self.session_mgr.asset_get_meta(asset)
-        self.bump_cost(0.1 + len(asset_data) * 0.00002)
+        check_asset(asset)
+        asset_data = await self.session_mgr.mempool.get_asset_creation_if_any(asset)
+        if not asset_data:
+            db_data = await self.session_mgr.db.lookup_asset_meta(asset.encode('ascii'))
+            mempool_data = await self.mempool.get_asset_reissues_if_any(asset)
+            if mempool_data:
+                asset_data = {
+                    'sats_in_circulation': db_data['sats_in_circulation'] + mempool_data['sats_in_circulation'],
+                    'divisions': mempool_data['divisions'] if mempool_data['divisions'] != 0xff else db_data['divisions'],
+                    'has_ipfs': mempool_data['has_ipfs'] if mempool_data['has_ipfs'] != 0 else db_data['has_ipfs'],
+                    'ipfs': mempool_data['ipfs'] if mempool_data['ipfs'] else db_data['ipfs'],
+                    'reissuable': mempool_data['reissuable'],
+                    'source': mempool_data['source'],
+                }
+                if mempool_data['divisions'] == 0xff:
+                    asset_data['source_prev'] = db_data['source_prev'] if 'source_prev' in db_data else db_data['source']
+            else:
+                asset_data = db_data
+
+
         ptuple = self.protocol_tuple
         if asset_data:
+            self.bump_cost(0.1 + len(asset_data) * 0.00002)
             sats = str(asset_data['sats_in_circulation']) if ptuple >= (1, 9) else ''
             div_amt = asset_data['divisions']
             reissuable = False if asset_data['reissuable'] == 0 else True
@@ -1163,6 +1182,7 @@ class ElectrumX(SessionBase):
 
             status = sha256(h.encode('ascii')).hex()
         else:
+            self.bump_cost(0.1)
             status = None
 
         return status
