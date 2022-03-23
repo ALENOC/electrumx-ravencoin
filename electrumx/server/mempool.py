@@ -321,6 +321,8 @@ class MemPool(object):
         creates = self.asset_creates
         reissues = self.asset_reissues
 
+        print(f'creates before:\n{creates}')
+
         if mempool_height != self.api.db_height():
             raise DBSyncError
 
@@ -356,8 +358,16 @@ class MemPool(object):
             utxo_map = {}
             async for task in group:
                 (deferred, unspent), creates, reissues = task.result()
-                print(creates)
-                print(reissues)
+
+                # Store asset changes
+                for asset, stats in creates.items():
+                    tx_to_create[hex_str_to_hash(stats['source']['tx_hash'])] = asset
+                    creates[asset] = stats
+
+                for asset, stats in reissues.items():
+                    tx_to_reissue[hex_str_to_hash(stats['source']['tx_hash'])] = asset
+                    reissues[asset] = stats
+
                 tx_map.update(deferred)
                 utxo_map.update(unspent)
 
@@ -369,6 +379,8 @@ class MemPool(object):
                                                              touched)
             if tx_map:
                 self.logger.error(f'{len(tx_map)} txs dropped')
+
+        print(f'creates after:\n{creates}')
 
         return touched
 
@@ -397,7 +409,7 @@ class MemPool(object):
                                    for txin in tx.inputs
                                    if not txin.is_generation())
                 txout_tuple_list = []
-                for i, txout in enumerate(tx.outputs):
+                for vout_n, txout in enumerate(tx.outputs):
                     value = txout.value
 
                     # Every vout needs to be added for other methods to work properly
@@ -450,13 +462,13 @@ class MemPool(object):
                                         'ipfs': base_encode(asset_data, 58) if asset_data else None,
                                         'source': {
                                             'tx_hash': hash_to_hex_str(tx_hash),
-                                            'tx_pos': i,
+                                            'tx_pos': vout_n,
                                             'height': -1
                                         }
                                     }
                                 elif asset_type == b'q'[0]:
-                                    divisions = asset_deserializer.read_byte()
-                                    reissuable = asset_deserializer.read_byte()
+                                    divisions = asset_deserializer.read_int()
+                                    reissuable = asset_deserializer.read_int()
                                     has_meta = asset_deserializer.read_byte()
                                     if has_meta != b'\0':
                                         asset_data = asset_deserializer.read_bytes(34)
@@ -469,7 +481,7 @@ class MemPool(object):
                                         'ipfs': base_encode(asset_data, 58) if asset_data else None,
                                         'source': {
                                             'tx_hash': hash_to_hex_str(tx_hash),
-                                            'tx_pos': i,
+                                            'tx_pos': vout_n,
                                             'height': -1
                                         }
                                     }
