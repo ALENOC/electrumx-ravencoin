@@ -1663,11 +1663,9 @@ class ElectrumX(SessionBase):
 
         db_data = await self.db.lookup_asset_meta(name.encode('ascii'))
         mempool_data = await self.mempool.get_asset_reissues_if_any(name)
-        print(name)
-        print(mempool_data)
         if mempool_data:
             to_ret = {
-                'sats_in_circulation': db_data['sats_in_cirulation'] + mempool_data['sats_in_cirulation'],
+                'sats_in_circulation': db_data['sats_in_circulation'] + mempool_data['sats_in_circulation'],
                 'divisions': mempool_data['divisions'] if mempool_data['divisions'] != 0xff else db_data['divisions'],
                 'has_ipfs': mempool_data['has_ipfs'] if mempool_data['has_ipfs'] != 0 else db_data['has_ipfs'],
                 'ipfs': mempool_data['ipfs'] if mempool_data['ipfs'] else db_data['ipfs'],
