@@ -321,8 +321,6 @@ class MemPool(object):
         creates = self.asset_creates
         reissues = self.asset_reissues
 
-        print(f'reissues before:\n{reissues}')
-
         if mempool_height != self.api.db_height():
             raise DBSyncError
 
@@ -379,8 +377,6 @@ class MemPool(object):
                                                              touched)
             if tx_map:
                 self.logger.error(f'{len(tx_map)} txs dropped')
-
-        print(f'reissues after:\n{reissues}')
 
         return touched
 
@@ -460,6 +456,7 @@ class MemPool(object):
                                         'divisions': divisions,
                                         'reissuable': reissuable,
                                         'ipfs': base_encode(asset_data, 58) if asset_data else None,
+                                        'has_ipfs': 1 if asset_data else 0,
                                         'source': {
                                             'tx_hash': hash_to_hex_str(tx_hash),
                                             'tx_pos': vout_n,
@@ -477,8 +474,9 @@ class MemPool(object):
                                     asset_meta_creates[asset_name.decode('ascii')] = {
                                         'sats_in_circulation': value,
                                         'divisions': divisions,
-                                        'reissuable': reissuable,
+                                        'has_ipfs': 1 if asset_data else 0,
                                         'ipfs': base_encode(asset_data, 58) if asset_data else None,
+                                        'reissuable': reissuable,
                                         'source': {
                                             'tx_hash': hash_to_hex_str(tx_hash),
                                             'tx_pos': vout_n,
@@ -618,3 +616,9 @@ class MemPool(object):
                 if hX == hashX and is_asset:
                     assets.append(ASSET(-1, pos, tx_hash, 0, name, value))
         return assets
+
+    async def get_asset_creation_if_any(self, asset: str):
+        return self.asset_creates.get(asset, None)
+
+    async def get_asset_reissues_if_any(self, asset: str):
+        return self.asset_reissues.get(asset, None)
