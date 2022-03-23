@@ -321,7 +321,7 @@ class MemPool(object):
         creates = self.asset_creates
         reissues = self.asset_reissues
 
-        print(f'creates before:\n{creates}')
+        print(f'reissues before:\n{reissues}')
 
         if mempool_height != self.api.db_height():
             raise DBSyncError
@@ -380,7 +380,7 @@ class MemPool(object):
             if tx_map:
                 self.logger.error(f'{len(tx_map)} txs dropped')
 
-        print(f'creates after:\n{creates}')
+        print(f'reissues after:\n{reissues}')
 
         return touched
 
