@@ -330,11 +330,11 @@ class MemPool(object):
         for tx_hash in set(txs).difference(all_hashes):
             tx = txs.pop(tx_hash)
 
-            reissued_asset = tx_to_reissue.pop(tx, None)
+            reissued_asset = tx_to_reissue.pop(tx_hash, None)
             if reissued_asset:
                 del reissues[reissued_asset]
 
-            created_asset = tx_to_create.pop(tx, None)
+            created_asset = tx_to_create.pop(tx_hash, None)
             if created_asset:
                 del creates[created_asset]
 
