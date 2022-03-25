@@ -1702,8 +1702,9 @@ class ElectrumX(SessionBase):
         else:
             return db_data
 
-    async def get_assets_with_prefix(self, prefix):
+    async def get_assets_with_prefix(self, prefix: str):
         check_asset(prefix)
+        prefix = prefix.upper()
         ret = await self.db.get_assets_with_prefix(prefix.encode('ascii'))
         self.bump_cost(1.0 + len(ret) / 10)
         return ret

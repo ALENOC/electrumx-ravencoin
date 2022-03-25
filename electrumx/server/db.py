@@ -674,6 +674,9 @@ class DB:
         '''Returns a height from which we should store undo info.'''
         return max_height - self.env.reorg_limit + 1
 
+    def undo_key_meta(self, height):
+        return b'u' + pack_be_uint32(height)
+
     def undo_key_broadcast(self, height):
         return b'B' + pack_be_uint32(height)
 
@@ -746,7 +749,7 @@ class DB:
     def flush_asset_meta_undos(self, batch_put, undo_infos):
         for undo_info, height in undo_infos:
             if len(undo_info) > 0:
-                batch_put(self.undo_key(height), b''.join(undo_info))
+                batch_put(self.undo_key_meta(height), b''.join(undo_info))
 
     
 
