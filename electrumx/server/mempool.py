@@ -438,10 +438,10 @@ class MemPool(object):
                             asset_type = asset_deserializer.read_int()
                             asset_name = asset_deserializer.read_var_bytes()
                             if asset_type == b'o'[0]:
-                                txout_tuple_list.append((hashX, 100_000_000, True, asset_name))
+                                txout_tuple_list.append((hashX, 100_000_000, True, asset_name.decode('ascii')))
                             else:
                                 value = int.from_bytes(asset_deserializer.read_bytes(8), 'little', signed=False)
-                                txout_tuple_list.append((hashX, value, True, asset_name))
+                                txout_tuple_list.append((hashX, value, True, asset_name.decode('ascii')))
                                 # Asset reissue chaining is not allowed. There may only be
                                 # one reissue in the mempool per asset name
                                 if asset_type == b'r'[0]:
