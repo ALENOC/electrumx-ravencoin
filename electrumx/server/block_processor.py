@@ -936,7 +936,7 @@ class BlockProcessor:
                             put_asset(tx_hash + to_le_uint32(idx),
                                     hashX + tx_numb + to_le_uint64(100_000_000) +
                                     asset_name_len + asset_name)
-                            put_asset_data_new(asset_name, to_le_uint64(100_000_000) + b'\0\0\0' + b'\x01\0' + to_le_uint32(idx) + tx_numb)
+                            put_asset_data_new(asset_name, to_le_uint64(100_000_000) + b'\0\0\0\x01\0' + to_le_uint32(idx) + tx_numb)
                             asset_meta_undo_info_append(  # Set previous meta to null in case of roll back
                                 asset_name_len + asset_name + b'\0')
                             self.asset_touched.add(asset_name.decode('ascii'))
@@ -965,10 +965,12 @@ class BlockProcessor:
                                 reissuable = asset_deserializer.read_byte()
 
                                 # Quicker check, but it's far more likely to be in the db
+                                print(asset_name)
+                                print(self.asset_data_new)
                                 old_data = self.asset_data_new.pop(asset_name, None)
-                                if old_data is None:
+                                if not old_data:
                                     old_data = self.asset_data_reissued.pop(asset_name, None)
-                                if old_data is None:
+                                if not old_data:
                                     old_data = self.db.asset_info_db.get(asset_name)
                                 assert old_data # If reissuing, we should have it
 
@@ -1069,9 +1071,6 @@ class BlockProcessor:
                                         this_data += (old_ipfs_outpoint)
                                     else:
                                         this_data += (old_outpoint)
-
-                                if asset_name == b'MOONTREE2':
-                                    print(this_data)
 
                                 # Put DB functions at the end to prevent them from pushing before any errors
                                 self.asset_touched.add(asset_name.decode('ascii'))
