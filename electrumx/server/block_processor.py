@@ -972,45 +972,107 @@ class BlockProcessor:
                                     old_data = self.db.asset_info_db.get(asset_name)
                                 assert old_data is not None  # If reissuing, we should have it
 
-                                asset_data = b''
+                                # old_data structure:
+                                # outpoint types:
+                                # 0: latest
+                                # 1: div loc
+                                # 2: ipfs loc
 
-                                old_sats = int.from_bytes(old_data[:8], 'little')
+
+                                # (total sats: 8) 
+                                # (div amt: 1)
+                                # (reissueable: 1)
+                                # (has ipfs: 1)
+                                # (ipfs: 34: conditional: has ipfs)
+                                # (outpoint count: 1)
+                                # (outpoint type: 1)
+                                # (outpoint 1 idx: 4)
+                                # (outpoint 1 numb: 5)
+                                # (outpoint type: 1)
+                                # (outpoint 2 idx: 4: conditional: div is 0xff)
+                                # (outpoint 2 numb: 5: conditional: div is 0xff)
+                                # (outpoint type: 1)
+                                # (outpoint 3 idx: 4: conditional: has ipfs but remains unchanged)
+                                # (outpoint 3 numb: 5: conditional: has ipfs but remains unchanged)
+
+
+                                old_data_parser = DataParser(old_data)
+                                old_sats = int.from_bytes(old_data_parser.read_bytes(8), 'little')
                                 new_sats = int.from_bytes(sats, 'little')
+
+                                # How many outpoints we need to save
+                                old_div = False
+                                old_ipfs = False
 
                                 total_sats = old_sats + new_sats
 
                                 if divisions == b'\xff':  # Unchanged division amount
-                                    asset_data += old_data[8].to_bytes(1, 'big')
-                                else:
-                                    asset_data += divisions
+                                    old_div = True
+                                    divisions = old_data_parser.read_byte()
+                                
+                                _old_reissue = old_data_parser.read_boolean()
 
-                                asset_data += reissuable
                                 if asset_deserializer.is_finished():
-                                    # No more data
-                                    asset_data += b'\0'
+                                    ipfs = None
                                 else:
                                     if second_loop:
                                         if asset_deserializer.cursor + 34 <= asset_deserializer.length:
-                                            asset_data += b'\x01'
-                                            asset_data += asset_deserializer.read_bytes(34)
+                                            ipfs = asset_deserializer.read_bytes(34)
                                         else:
-                                            asset_data += b'\0'
+                                            ipfs = None
                                     else:
-                                        asset_data += b'\x01'
-                                        asset_data += asset_deserializer.read_bytes(34)
+                                        ipfs = asset_deserializer.read_bytes(34)
 
-                                asset_data += to_le_uint32(idx) + tx_numb
-                                if divisions == b'\xff':
-                                    # We need to tell the client the original tx for reissues
-                                    asset_data += b'\x01' + old_data[-(4 + 5) - 1:-1] + b'\0'
-                                else:
-                                    asset_data += b'\0'
+                                old_boolean = old_data_parser.read_boolean()
+                                if not ipfs and old_boolean:
+                                    old_ipfs = True
+                                    ipfs = old_data_parser.read_bytes(34)
+
+                                old_outpoint = None
+                                old_ipfs_outpoint = None
+                                old_div_outpoint = None
+
+                                for _ in range(old_data_parser.read_int()):
+                                    outpoint_type = old_data_parser.read_int()
+                                    if outpoint_type == 0:
+                                        old_outpoint = old_data_parser.read_bytes(4+5)
+                                    elif outpoint_type == 1:
+                                        old_div_outpoint = old_data_parser.read_bytes(4+5)
+                                    elif outpoint_type == 2:
+                                        old_ipfs_outpoint = old_data_parser.read_bytes(4+5)
+                                    else:
+                                        raise ValueError(f'Unknown outpoint type: {outpoint_type}')
+
+                                assert old_outpoint
+
+                                this_outpoint = to_le_uint32(idx) + tx_numb
+                                
+                                this_data = bytearray()
+                                this_data.extend(total_sats.to_bytes(8, 'little'))
+                                this_data.extend(divisions)
+                                this_data.extend(reissuable)
+                                this_data.append(1 if ipfs else 0)
+                                if ipfs:
+                                    this_data.extend(ipfs)
+                                this_data.append(1 + (1 if old_div else 0) + (1 if old_ipfs else 0))
+                                this_data.append(0)
+                                this_data.extend(this_outpoint)
+                                if old_div:
+                                    this_data.append(1)
+                                    if old_div_outpoint:
+                                        this_data.extend(old_div_outpoint)
+                                    else:
+                                        this_data.extend(old_outpoint)
+                                if old_ipfs:
+                                    this_data.append(2)
+                                    if old_ipfs_outpoint:
+                                        this_data.extend(old_ipfs_outpoint)
+                                    else:
+                                        this_data.extend(old_outpoint)
 
                                 # Put DB functions at the end to prevent them from pushing before any errors
-
                                 self.asset_touched.add(asset_name.decode('ascii'))
-
-                                put_asset_data_reissued(asset_name, total_sats.to_bytes(8, 'little', signed=False) + asset_data)
+                                put_asset_data_reissued(asset_name, bytes(this_data))
                                 asset_meta_undo_info_append(
                                     asset_name_len + asset_name +
                                     bytes([len(old_data)]) + old_data)

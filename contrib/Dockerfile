@@ -4,7 +4,7 @@
 FROM ubuntu:18.04
 
 WORKDIR /
-ADD https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/archive/v1.10.0.tar.gz /
+ADD https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/archive/v1.10.3.tar.gz /
 RUN tar zxvf *.tar.gz
 
 RUN apt-get update && \

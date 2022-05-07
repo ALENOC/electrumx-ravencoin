@@ -1134,46 +1134,65 @@ class DB:
             b = self.asset_info_db.get(asset_name)
             if not b:
                 return {}
+
+            # outpoint types:
+            # 0: latest
+            # 1: div loc
+            # 2: ipfs loc
+
+            # (total sats: 8) 
+            # (div amt: 1)
+            # (reissueable: 1)
+            # (has ipfs: 1)
+            # (ipfs: 34: conditional: has ipfs)
+            # (outpoint count: 1)
+            # (outpoint type: 1)
+            # (outpoint 1 idx: 4)
+            # (outpoint 1 numb: 5)
+            # (outpoint type: 1)
+            # (outpoint 2 idx: 4: conditional: div is 0xff)
+            # (outpoint 2 numb: 5: conditional: div is 0xff)
+            # (outpoint type: 1)
+            # (outpoint 3 idx: 4: conditional: has ipfs but remains unchanged)
+            # (outpoint 3 numb: 5: conditional: has ipfs but remains unchanged)
+            
             data_parser = util.DataParser(b)
             sats_in_circulation = data_parser.read_bytes(8)
             div_amt = data_parser.read_int()
-            reissuable = data_parser.read_int()
-            has_ipfs = data_parser.read_int()
+            reissuable = data_parser.read_boolean()
+            has_ipfs = data_parser.read_boolean()
             to_ret = {
                 'sats_in_circulation': int.from_bytes(sats_in_circulation, 'little', signed=False),
                 'divisions': div_amt,
                 'reissuable': reissuable,
                 'has_ipfs': has_ipfs
             }
-            if has_ipfs != 0:
+            if has_ipfs:
                 ipfs_data = data_parser.read_bytes(34)
                 to_ret['ipfs'] = base_encode(ipfs_data, 58)
 
-            idx = data_parser.read_bytes(4)
-            tx_numb = data_parser.read_bytes(5)
+            for _ in range(data_parser.read_int()):
+                outpoint_type = data_parser.read_int()
+                idx = data_parser.read_bytes(4)
+                tx_numb = data_parser.read_bytes(5)
 
-            tx_pos, = unpack_le_uint32(idx)
-            tx_num, = unpack_le_uint64(tx_numb + bytes(3))
-            tx_hash, height = self.fs_tx_hash(tx_num)
-
-            to_ret['source'] = {
-                'tx_hash': hash_to_hex_str(tx_hash),
-                'tx_pos': tx_pos,
-                'height': height
-            }
-
-            if data_parser.read_boolean():
-                idx_prev = data_parser.read_bytes(4)
-                tx_numb_prev = data_parser.read_bytes(5)
-
-                tx_pos, = unpack_le_uint32(idx_prev)
-                tx_num_prev, = unpack_le_uint64(tx_numb_prev + bytes(3))
-                tx_hash, height = self.fs_tx_hash(tx_num_prev)
-                to_ret['source_prev'] = {
-                    'tx_hash': hash_to_hex_str(tx_hash),
-                    'tx_pos': tx_pos,
-                    'height': height
-                }
+                tx_pos, = unpack_le_uint32(idx)
+                tx_num, = unpack_le_uint64(tx_numb + bytes(3))
+                tx_hash, height = self.fs_tx_hash(tx_num)
+                
+                if outpoint_type == 0:
+                    key = 'source'
+                elif outpoint_type == 1:
+                    key = 'source_divisions'
+                elif outpoint_type == 2:
+                    key = 'source_ipfs'
+                else:
+                    key = 'unknown_outpoint'
+                to_ret[key] = {
+                        'tx_hash': hash_to_hex_str(tx_hash),
+                        'tx_pos': tx_pos,
+                        'height': height
+                    }
 
             return to_ret
         return await run_in_thread(read_assets_meta)

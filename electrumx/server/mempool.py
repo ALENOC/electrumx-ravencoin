@@ -451,18 +451,22 @@ class MemPool(object):
                                         asset_data = asset_deserializer.read_bytes(34)
                                     else:
                                         asset_data = None
-                                    asset_meta_reissues[asset_name.decode('ascii')] = {
+                                    d = {
                                         'sats_in_circulation': value,
                                         'divisions': divisions,
-                                        'reissuable': reissuable,
-                                        'ipfs': base_encode(asset_data, 58) if asset_data else None,
-                                        'has_ipfs': 1 if asset_data else 0,
-                                        'source': {
+                                        'reissuable': True if reissuable != 0 else False,
+                                        'has_ipfs': True if asset_data else False,
+                                    }
+                                    if asset_data:
+                                      d['ipfs'] = base_encode(asset_data, 58) if asset_data else None
+                                    
+                                    d['source'] = {
                                             'tx_hash': hash_to_hex_str(tx_hash),
                                             'tx_pos': vout_n,
                                             'height': -1
                                         }
-                                    }
+                                    asset_meta_reissues[asset_name.decode('ascii')] = d
+
                                 elif asset_type == b'q'[0]:
                                     divisions = asset_deserializer.read_int()
                                     reissuable = asset_deserializer.read_int()
@@ -471,19 +475,22 @@ class MemPool(object):
                                         asset_data = asset_deserializer.read_bytes(34)
                                     else:
                                         asset_data = None
-                                    asset_meta_creates[asset_name.decode('ascii')] = {
+
+                                    d = {
                                         'sats_in_circulation': value,
                                         'divisions': divisions,
-                                        'has_ipfs': 1 if asset_data else 0,
-                                        'ipfs': base_encode(asset_data, 58) if asset_data else None,
-                                        'reissuable': reissuable,
-                                        'source': {
+                                        'has_ipfs': True if asset_data else False,
+                                        'reissuable': True if reissuable != 0 else False,
+                                    }
+                                    if asset_data:
+                                        d['ipfs'] = base_encode(asset_data, 58) if asset_data else None
+                                    d['source'] = {
                                             'tx_hash': hash_to_hex_str(tx_hash),
                                             'tx_pos': vout_n,
                                             'height': -1
                                         }
-                                    }
 
+                                    asset_meta_creates[asset_name.decode('ascii')] = d
                         except:
                             txout_tuple_list.append((hashX, value, False, None))
                     else:
