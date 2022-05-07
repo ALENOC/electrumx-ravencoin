@@ -970,7 +970,7 @@ class BlockProcessor:
                                     old_data = self.asset_data_reissued.pop(asset_name, None)
                                 if old_data is None:
                                     old_data = self.db.asset_info_db.get(asset_name)
-                                assert old_data is not None  # If reissuing, we should have it
+                                assert old_data # If reissuing, we should have it
 
                                 # old_data structure:
                                 # outpoint types:
@@ -1047,32 +1047,35 @@ class BlockProcessor:
 
                                 this_outpoint = to_le_uint32(idx) + tx_numb
                                 
-                                this_data = bytearray()
-                                this_data.extend(total_sats.to_bytes(8, 'little'))
-                                this_data.extend(divisions)
-                                this_data.extend(reissuable)
-                                this_data.append(1 if ipfs else 0)
+                                this_data = b''
+                                this_data += (total_sats.to_bytes(8, 'little'))
+                                this_data += (divisions)
+                                this_data += (reissuable)
+                                this_data += (b'\x01' if ipfs else b'\0')
                                 if ipfs:
-                                    this_data.extend(ipfs)
-                                this_data.append(1 + (1 if old_div else 0) + (1 if old_ipfs else 0))
-                                this_data.append(0)
-                                this_data.extend(this_outpoint)
+                                    this_data += (ipfs)
+                                this_data += bytes([1 + (1 if old_div else 0) + (1 if old_ipfs else 0)])
+                                this_data += (b'\0')
+                                this_data += (this_outpoint)
                                 if old_div:
-                                    this_data.append(1)
+                                    this_data += (b'\x01')
                                     if old_div_outpoint:
-                                        this_data.extend(old_div_outpoint)
+                                        this_data += (old_div_outpoint)
                                     else:
-                                        this_data.extend(old_outpoint)
+                                        this_data += (old_outpoint)
                                 if old_ipfs:
-                                    this_data.append(2)
+                                    this_data += (b'\x02')
                                     if old_ipfs_outpoint:
-                                        this_data.extend(old_ipfs_outpoint)
+                                        this_data += (old_ipfs_outpoint)
                                     else:
-                                        this_data.extend(old_outpoint)
+                                        this_data += (old_outpoint)
+
+                                if asset_name == b'MOONTREE2':
+                                    print(this_data)
 
                                 # Put DB functions at the end to prevent them from pushing before any errors
                                 self.asset_touched.add(asset_name.decode('ascii'))
-                                put_asset_data_reissued(asset_name, bytes(this_data))
+                                put_asset_data_reissued(asset_name, this_data)
                                 asset_meta_undo_info_append(
                                     asset_name_len + asset_name +
                                     bytes([len(old_data)]) + old_data)
