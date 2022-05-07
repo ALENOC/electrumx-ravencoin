@@ -936,7 +936,7 @@ class BlockProcessor:
                             put_asset(tx_hash + to_le_uint32(idx),
                                     hashX + tx_numb + to_le_uint64(100_000_000) +
                                     asset_name_len + asset_name)
-                            put_asset_data_new(asset_name, to_le_uint64(100_000_000) + b'\0\0\0' + to_le_uint32(idx) + tx_numb + b'\0')
+                            put_asset_data_new(asset_name, to_le_uint64(100_000_000) + b'\0\0\0' + b'\x01\0' + to_le_uint32(idx) + tx_numb)
                             asset_meta_undo_info_append(  # Set previous meta to null in case of roll back
                                 asset_name_len + asset_name + b'\0')
                             self.asset_touched.add(asset_name.decode('ascii'))
