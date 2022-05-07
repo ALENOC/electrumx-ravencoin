@@ -950,7 +950,7 @@ class BlockProcessor:
                                     asset_data += asset_deserializer.read_bytes(34)
 
                                 # To tell the client where this data came from
-                                asset_data += to_le_uint32(idx) + tx_numb + b'\0'
+                                asset_data += b'\x01\0' + to_le_uint32(idx) + tx_numb
 
                                 # Put DB functions at the end to prevent them from pushing before any errors
                                 put_asset_data_new(asset_name, sats + asset_data)  # Add meta for this asset
