@@ -1027,14 +1027,14 @@ class BlockProcessor:
                                 new_sats = int.from_bytes(sats, 'little')
 
                                 # How many outpoints we need to save
-                                old_div = False
-                                old_ipfs = False
+                                have_old_div = False
+                                have_old_ipfs = False
 
                                 total_sats = old_sats + new_sats
 
                                 old_divisions = old_data_parser.read_byte()
                                 if divisions == b'\xff':  # Unchanged division amount
-                                    old_div = True
+                                    have_old_div = True
                                     divisions = old_divisions
                                 
                                 _old_reissue = old_data_parser.read_boolean()
@@ -1057,7 +1057,7 @@ class BlockProcessor:
                                     old_ipfs = old_data_parser.read_bytes(34)
 
                                 if not ipfs and old_boolean:
-                                    old_ipfs = True
+                                    have_old_ipfs = True
                                     ipfs = old_ipfs
 
                                 old_outpoint = None
@@ -1086,7 +1086,7 @@ class BlockProcessor:
                                 this_data += (b'\x01' if ipfs else b'\0')
                                 if ipfs:
                                     this_data += (ipfs)
-                                this_data += bytes([1 + (1 if old_div else 0) + (1 if old_ipfs else 0)])
+                                this_data += bytes([1 + (1 if have_old_div else 0) + (1 if have_old_ipfs else 0)])
                                 this_data += (b'\0')
                                 this_data += (this_outpoint)
                                 if old_div:
