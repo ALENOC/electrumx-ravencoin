@@ -986,10 +986,12 @@ class BlockProcessor:
 
                                 # Quicker check, but it's far more likely to be in the db
                                 print(f'name: {asset_name}')
-                                old_data = self.asset_data_new.pop(asset_name, None)
+                                popped_from_new = True
+                                old_data = self.asset_data_new.get(asset_name, None)
                                 print(f'old data from new: {old_data}')
                                 if not old_data:
-                                    old_data = self.asset_data_reissued.pop(asset_name, None)
+                                    popped_from_new = False
+                                    old_data = self.asset_data_reissued.get(asset_name, None)
                                     print(f'old data from reissue: {old_data}')
                                 if not old_data:
                                     old_data = self.db.asset_info_db.get(asset_name)
@@ -1052,7 +1054,7 @@ class BlockProcessor:
                                 old_boolean = old_data_parser.read_boolean()
                                 if old_boolean:
                                     old_ipfs = old_data_parser.read_bytes(34)
-                                    
+
                                 if not ipfs and old_boolean:
                                     old_ipfs = True
                                     ipfs = old_ipfs
@@ -1100,11 +1102,18 @@ class BlockProcessor:
                                         this_data += (old_outpoint)
 
                                 # Put DB functions at the end to prevent them from pushing before any errors
+
+                                if popped_from_new:
+                                    self.asset_data_new.pop(asset_name, None)
+                                else:
+                                    self.asset_data_reissued.pop(asset_name, None)
+
                                 self.asset_touched.add(asset_name.decode('ascii'))
                                 put_asset_data_reissued(asset_name, this_data)
                                 asset_meta_undo_info_append(
                                     asset_name_len + asset_name +
                                     bytes([len(old_data)]) + old_data)
+                                
                                 put_asset(tx_hash + to_le_uint32(idx),
                                         hashX + tx_numb + sats +
                                         asset_name_len + asset_name)
