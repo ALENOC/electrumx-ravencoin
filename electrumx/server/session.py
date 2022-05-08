@@ -1934,7 +1934,6 @@ class ElectrumX(SessionBase):
             handlers['blockchain.asset.list_addresses_by_asset'] = self.list_addresses_by_asset
 
         if ptuple >= (1, 10):
-            print('Setting get_meta to new version')
             handlers['blockchain.asset.get_meta'] = self.asset_get_meta
 
         self.request_handlers = handlers
