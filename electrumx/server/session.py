@@ -1809,10 +1809,13 @@ class ElectrumX(SessionBase):
             to_ret['source'] = mempool_data['source']
             
             if mempool_data['divisions'] == 0xff:
-                to_ret['source_divisions'] = db_data['source_divisions'] if 'source_divisions' in db_data else db_data['source']
+                to_ret['source_prev'] = db_data['source_divisions'] if 'source_divisions' in db_data else db_data['source']
             return to_ret
         else:
             db_data.pop('source_ipfs', None)
+            source_div = db_data.pop('source_divisions', None)
+            if source_div:
+                db_data['source_prev'] = source_div
             return db_data
 
     async def get_assets_with_prefix(self, prefix: str):
@@ -1931,6 +1934,7 @@ class ElectrumX(SessionBase):
             handlers['blockchain.asset.list_addresses_by_asset'] = self.list_addresses_by_asset
 
         if ptuple >= (1, 10):
+            print('Setting get_meta to new version')
             handlers['blockchain.asset.get_meta'] = self.asset_get_meta
 
         self.request_handlers = handlers
