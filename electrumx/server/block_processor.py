@@ -985,17 +985,13 @@ class BlockProcessor:
                                 reissuable = asset_deserializer.read_byte()
 
                                 # Quicker check, but it's far more likely to be in the db
-                                print(f'name: {asset_name}')
                                 popped_from_new = True
                                 old_data = self.asset_data_new.get(asset_name, None)
-                                print(f'old data from new: {old_data}')
                                 if not old_data:
                                     popped_from_new = False
                                     old_data = self.asset_data_reissued.get(asset_name, None)
-                                    print(f'old data from reissue: {old_data}')
                                 if not old_data:
                                     old_data = self.db.asset_info_db.get(asset_name)
-                                    print(f'old data from disk: {old_data}')
                                 assert old_data # If reissuing, we should have it
 
                                 # old_data structure:
