@@ -936,6 +936,16 @@ class BlockProcessor:
                             put_asset(tx_hash + to_le_uint32(idx),
                                     hashX + tx_numb + to_le_uint64(100_000_000) +
                                     asset_name_len + asset_name)
+
+                                # (total sats: 8) 
+                                # (div amt: 1)
+                                # (reissueable: 1)
+                                # (has ipfs: 1)
+                                # (outpoint count: 1)
+                                # (outpoint type: 1)
+                                # (outpoint 1 idx: 4)
+                                # (outpoint 1 numb: 5)
+
                             put_asset_data_new(asset_name, to_le_uint64(100_000_000) + b'\0\0\0\x01\0' + to_le_uint32(idx) + tx_numb)
                             asset_meta_undo_info_append(  # Set previous meta to null in case of roll back
                                 asset_name_len + asset_name + b'\0')
@@ -943,6 +953,16 @@ class BlockProcessor:
                         else:  # Not an owner asset; has a sat amount
                             sats = asset_deserializer.read_bytes(8)
                             if script_type == b'q':  # A new asset issuance
+
+                                # (total sats: 8) 
+                                # (div amt: 1)
+                                # (reissueable: 1)
+                                # (has ipfs: 1)
+                                # (outpoint count: 1)
+                                # (outpoint type: 1)
+                                # (outpoint 1 idx: 4)
+                                # (outpoint 1 numb: 5)
+
                                 asset_data = asset_deserializer.read_bytes(2)
                                 has_meta = asset_deserializer.read_byte()
                                 asset_data += has_meta
@@ -966,8 +986,6 @@ class BlockProcessor:
 
                                 # Quicker check, but it's far more likely to be in the db
                                 print(f'name: {asset_name}')
-                                print(f'pre new: {self.asset_data_new}')
-                                print(f'pre reissued: {self.asset_data_reissued}')
                                 old_data = self.asset_data_new.pop(asset_name, None)
                                 print(f'old data from new: {old_data}')
                                 if not old_data:
@@ -1017,6 +1035,8 @@ class BlockProcessor:
                                     divisions = old_data_parser.read_byte()
                                 
                                 _old_reissue = old_data_parser.read_boolean()
+                                if not _old_reissue:
+                                    raise ValueError('We are reissuing a non-reissuable asset!')
 
                                 if asset_deserializer.is_finished():
                                     ipfs = None
@@ -1030,9 +1050,12 @@ class BlockProcessor:
                                         ipfs = asset_deserializer.read_bytes(34)
 
                                 old_boolean = old_data_parser.read_boolean()
+                                if old_boolean:
+                                    old_ipfs = old_data_parser.read_bytes(34)
+                                    
                                 if not ipfs and old_boolean:
                                     old_ipfs = True
-                                    ipfs = old_data_parser.read_bytes(34)
+                                    ipfs = old_ipfs
 
                                 old_outpoint = None
                                 old_ipfs_outpoint = None
@@ -1079,10 +1102,6 @@ class BlockProcessor:
                                 # Put DB functions at the end to prevent them from pushing before any errors
                                 self.asset_touched.add(asset_name.decode('ascii'))
                                 put_asset_data_reissued(asset_name, this_data)
-                                print(f'data: {this_data}')
-                                print(f'post new: {self.asset_data_new}')
-                                print(f'post reissued: {self.asset_data_reissued}')
-
                                 asset_meta_undo_info_append(
                                     asset_name_len + asset_name +
                                     bytes([len(old_data)]) + old_data)
