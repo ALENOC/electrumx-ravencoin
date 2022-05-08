@@ -969,10 +969,13 @@ class BlockProcessor:
                                 print(f'pre new: {self.asset_data_new}')
                                 print(f'pre reissued: {self.asset_data_reissued}')
                                 old_data = self.asset_data_new.pop(asset_name, None)
+                                print(f'old data from new: {old_data}')
                                 if not old_data:
                                     old_data = self.asset_data_reissued.pop(asset_name, None)
+                                    print(f'old data from reissue: {old_data}')
                                 if not old_data:
                                     old_data = self.db.asset_info_db.get(asset_name)
+                                    print(f'old data from disk: {old_data}')
                                 assert old_data # If reissuing, we should have it
 
                                 # old_data structure:
