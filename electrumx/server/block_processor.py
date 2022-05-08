@@ -966,8 +966,8 @@ class BlockProcessor:
 
                                 # Quicker check, but it's far more likely to be in the db
                                 print(f'name: {asset_name}')
-                                print(f'new: {self.asset_data_new}')
-                                print(f'reissued: {self.asset_data_reissued}')
+                                print(f'pre new: {self.asset_data_new}')
+                                print(f'pre reissued: {self.asset_data_reissued}')
                                 old_data = self.asset_data_new.pop(asset_name, None)
                                 if not old_data:
                                     old_data = self.asset_data_reissued.pop(asset_name, None)
@@ -1076,6 +1076,10 @@ class BlockProcessor:
                                 # Put DB functions at the end to prevent them from pushing before any errors
                                 self.asset_touched.add(asset_name.decode('ascii'))
                                 put_asset_data_reissued(asset_name, this_data)
+                                print(f'data: {this_data}')
+                                print(f'post new: {self.asset_data_new}')
+                                print(f'post reissued: {self.asset_data_reissued}')
+
                                 asset_meta_undo_info_append(
                                     asset_name_len + asset_name +
                                     bytes([len(old_data)]) + old_data)
