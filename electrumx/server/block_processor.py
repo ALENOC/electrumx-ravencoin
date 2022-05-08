@@ -1089,13 +1089,13 @@ class BlockProcessor:
                                 this_data += bytes([1 + (1 if have_old_div else 0) + (1 if have_old_ipfs else 0)])
                                 this_data += (b'\0')
                                 this_data += (this_outpoint)
-                                if old_div:
+                                if have_old_div:
                                     this_data += (b'\x01')
                                     if old_div_outpoint:
                                         this_data += (old_div_outpoint)
                                     else:
                                         this_data += (old_outpoint)
-                                if old_ipfs:
+                                if have_old_ipfs:
                                     this_data += (b'\x02')
                                     if old_ipfs_outpoint:
                                         this_data += (old_ipfs_outpoint)
