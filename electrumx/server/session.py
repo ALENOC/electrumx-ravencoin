@@ -1765,7 +1765,7 @@ class ElectrumX(SessionBase):
                     'has_ipfs': mempool_data['has_ipfs'] if mempool_data['has_ipfs'] else saved_data['has_ipfs'],
                 }
                 if asset_data['has_ipfs']:
-                    asset_data['ipfs'] = mempool_data['ipfs'] or saved_data['ipfs']
+                    asset_data['ipfs'] = mempool_data.get('ipfs', None) or saved_data['ipfs']
                 asset_data['reissuable'] = mempool_data['reissuable']
                 asset_data['source'] = mempool_data['source']
 
@@ -1812,6 +1812,7 @@ class ElectrumX(SessionBase):
                 to_ret['source_divisions'] = db_data['source_divisions'] if 'source_divisions' in db_data else db_data['source']
             return to_ret
         else:
+            db_data.pop('source_ipfs', None)
             return db_data
 
     async def get_assets_with_prefix(self, prefix: str):

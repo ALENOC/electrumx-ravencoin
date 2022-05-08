@@ -385,7 +385,7 @@ Return metadata associated with a certain asset.
 **Signature**
 
   .. function:: blockchain.asset.get_meta(asset)
-  .. versionchanged:: 1.9
+  .. versionchanged:: 1.10
   .. versionadded:: 1.8
 
   *asset*
@@ -409,27 +409,31 @@ Return metadata associated with a certain asset.
 
   * *reissuable*
 
-    A number from 0-1.
+    A boolean.
     Whether the owner of this asset's ownership asset can change its
     metadata.
 
   * *has_ipfs*
 
-    A number from 0-1.
+    A boolean.
     Whether this asset has an associated IPFS hash.
 
   * *ipfs*
 
-    Only if *has_ipfs* is 1.
+    Only if *has_ipfs* is *true*.
     The base58 encoded IPFS hash associated with this asset.
 
   * *source*
 
     The source of this metadata on-chain.
 
-  * *source_prev*
+  * *source_divisions*
 
-    The previous source of this metadata on-chain. (Only if this asset has been reissued with an divisions value of 0xFF.)
+    The previous source of this metadata on-chain that has divisions. (Only if this asset has been reissued with an divisions value of 0xFF.)
+
+  * *source_ipfs*
+
+    The previous source of this metadata on-chain that has the ipfs. (Only if this asset has been reissued with no asset change.)
 
 **Result Example**
 
