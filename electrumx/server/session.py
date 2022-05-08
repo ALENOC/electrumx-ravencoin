@@ -1801,11 +1801,11 @@ class ElectrumX(SessionBase):
             to_ret = {
                 'sats_in_circulation': db_data['sats_in_circulation'] + mempool_data['sats_in_circulation'],
                 'divisions': mempool_data['divisions'] if mempool_data['divisions'] != 0xff else db_data['divisions'],
-                'has_ipfs': mempool_data['has_ipfs'] if mempool_data['has_ipfs'] != 0 else db_data['has_ipfs'],
+                'has_ipfs': 1 if (mempool_data['has_ipfs'] if mempool_data['has_ipfs'] != 0 else db_data['has_ipfs']) else 0,
             }
             if mempool_data['has_ipfs'] != 0 or db_data['has_ipfs'] != 0:
                 to_ret['ipfs'] = mempool_data['ipfs'] if mempool_data['ipfs'] else db_data['ipfs']
-            to_ret['reissuable'] = mempool_data['reissuable']
+            to_ret['reissuable'] = 1 if mempool_data['reissuable'] else 0
             to_ret['source'] = mempool_data['source']
             
             if mempool_data['divisions'] == 0xff:
@@ -1816,6 +1816,8 @@ class ElectrumX(SessionBase):
             source_div = db_data.pop('source_divisions', None)
             if source_div:
                 db_data['source_prev'] = source_div
+            db_data['has_ipfs'] = 1 if db_data['has_ipfs'] else 0
+            db_data['reissuable'] = 1 if db_data['reissuable'] else 0
             return db_data
 
     async def get_assets_with_prefix(self, prefix: str):
@@ -1933,8 +1935,8 @@ class ElectrumX(SessionBase):
             handlers['blockchain.asset.get_assets_with_prefix'] = self.get_assets_with_prefix
             handlers['blockchain.asset.list_addresses_by_asset'] = self.list_addresses_by_asset
 
-        if ptuple >= (1, 10):
-            handlers['blockchain.asset.get_meta'] = self.asset_get_meta
+        #if ptuple >= (1, 10):
+        #    handlers['blockchain.asset.get_meta'] = self.asset_get_meta
 
         self.request_handlers = handlers
 
