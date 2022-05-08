@@ -1935,8 +1935,8 @@ class ElectrumX(SessionBase):
             handlers['blockchain.asset.get_assets_with_prefix'] = self.get_assets_with_prefix
             handlers['blockchain.asset.list_addresses_by_asset'] = self.list_addresses_by_asset
 
-        #if ptuple >= (1, 10):
-        #    handlers['blockchain.asset.get_meta'] = self.asset_get_meta
+        if ptuple >= (1, 10):
+            handlers['blockchain.asset.get_meta'] = self.asset_get_meta
 
         self.request_handlers = handlers
 
