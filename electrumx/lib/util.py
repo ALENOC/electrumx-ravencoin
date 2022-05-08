@@ -422,10 +422,10 @@ class DataParser:
         return self.read_byte()[0]
 
     def read_boolean(self):
-        data = self.read_byte()
-        if data not in (b'\0', b'\x01'):
+        data = self.read_int()
+        if data not in (0, 1):
             raise self.ParserException(self, 'Not a boolean')
-        return False if data[0] == 0 else True
+        return True if data != 0 else False
 
     def read_bytes(self, length: int):
         self._assert_space(length)

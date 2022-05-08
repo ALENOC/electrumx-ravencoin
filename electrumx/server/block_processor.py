@@ -1032,9 +1032,10 @@ class BlockProcessor:
 
                                 total_sats = old_sats + new_sats
 
+                                old_divisions = old_data_parser.read_byte()
                                 if divisions == b'\xff':  # Unchanged division amount
                                     old_div = True
-                                    divisions = old_data_parser.read_byte()
+                                    divisions = old_divisions
                                 
                                 _old_reissue = old_data_parser.read_boolean()
                                 if not _old_reissue:
