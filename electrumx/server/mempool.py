@@ -339,12 +339,10 @@ class MemPool(object):
             reissued_asset = tx_to_reissue.pop(tx_hash, None)
             if reissued_asset:
                 reissues.pop(reissued_asset, None)
-                assets_touched.add(reissued_asset)
 
             created_asset = tx_to_create.pop(tx_hash, None)
             if created_asset:
                 creates.pop(created_asset, None)
-                assets_touched.add(created_asset)
 
             tx_hashXs = set(hashX for hashX, value, _, _ in tx.in_pairs)
             tx_hashXs.update(hashX for hashX, value, _, _ in tx.out_pairs)
