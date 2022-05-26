@@ -286,6 +286,7 @@ class MemPool(object):
                 touched.add(hashX)
                 hashXs[hashX].add(tx_hash)
             
+            print(tx_hash)
             if tx_hash in tx_to_create:
                 assets_touched.add(tx_to_create[tx_hash])
             if tx_hash in tx_to_reissue:

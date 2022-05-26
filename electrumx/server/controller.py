@@ -63,7 +63,7 @@ class Notifications(object):
             del tassetsmp[old]
         for old in [h for h in tassetsbp if h <= height]:
             touched_assets.update(tassetsbp.pop(old))
-            
+
         await self.notify(height, touched, touched_assets)
 
     async def notify(self, height, touched, assets):
@@ -75,6 +75,7 @@ class Notifications(object):
         await self.notify(height, set(), set())
 
     async def on_mempool(self, touched, height, reissued):
+        print(reissued)
         self._touched_mp[height] = touched
         self._reissued_assets_mp[height] = reissued
         await self._maybe_notify()
