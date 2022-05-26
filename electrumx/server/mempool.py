@@ -317,6 +317,7 @@ class MemPool(object):
                 synchronized_event.clear()
                 await self.api.on_mempool(touched, height, assets_touched)
                 touched = set()
+                assets_touched = set()
             await sleep(self.refresh_secs)
 
     async def _process_mempool(self, all_hashes, touched, assets_touched, mempool_height):
