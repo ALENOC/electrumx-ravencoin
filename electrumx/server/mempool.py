@@ -307,7 +307,7 @@ class MemPool(object):
             else:
                 synchronized_event.set()
                 synchronized_event.clear()
-                await self.api.on_mempool(touched, height, {self.asset_creates.keys() + self.asset_reissues.keys()})
+                await self.api.on_mempool(touched, height, {self.asset_creates.keys()} + {self.asset_reissues.keys()})
                 touched = set()
             await sleep(self.refresh_secs)
 
