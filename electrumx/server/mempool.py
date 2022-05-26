@@ -329,6 +329,13 @@ class MemPool(object):
         creates = self.asset_creates
         reissues = self.asset_reissues
 
+        print('===')
+        print(tx_to_create)
+        print(tx_to_reissue)
+        print(creates)
+        print(reissues)
+        print('===')
+
         if mempool_height != self.api.db_height():
             raise DBSyncError
 

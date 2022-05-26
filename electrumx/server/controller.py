@@ -70,13 +70,11 @@ class Notifications(object):
         await self.notify(height, set(), set())
 
     async def on_mempool(self, touched, height, reissued):
-        print(reissued)
         self._touched_mp[height] = touched
         self._reissued_assets[height] = reissued
         await self._maybe_notify()
 
     async def on_block(self, touched, height, reissued):
-        print(reissued)
         self._touched_bp[height] = touched
         self._reissued_assets[height] = reissued
         self._highest_block = height
