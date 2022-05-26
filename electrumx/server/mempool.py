@@ -242,7 +242,7 @@ class MemPool(object):
             prev_fee_rate = fee_rate
         return compact
 
-    def _accept_transactions(self, tx_map, utxo_map, touched):
+    def _accept_transactions(self, tx_map, utxo_map, touched, assets_touched):
         '''Accept transactions in tx_map to the mempool if all their inputs
         can be found in the existing mempool or a utxo_map from the
         DB.
@@ -251,6 +251,8 @@ class MemPool(object):
         '''
         hashXs = self.hashXs
         txs = self.txs
+        tx_to_create = self.tx_to_asset_create
+        tx_to_reissue = self.tx_to_asset_reissue
 
         deferred = {}
         unspent = set(utxo_map)
@@ -283,6 +285,11 @@ class MemPool(object):
             for hashX, _value, _, _ in itertools.chain(tx.in_pairs, tx.out_pairs):
                 touched.add(hashX)
                 hashXs[hashX].add(tx_hash)
+            
+            if tx_hash in tx_to_create:
+                assets_touched.add(tx_to_create[tx_hash])
+            if tx_hash in tx_to_reissue:
+                assets_touched.add(tx_to_reissue[tx_hash])
 
         return deferred, {prevout: utxo_map[prevout] for prevout in unspent}
 
@@ -453,7 +460,6 @@ class MemPool(object):
                                         'height': -1
                                     }
                                 }
-                                assets_touched.add(asset_name.decode('ascii'))
                             else:
                                 value = int.from_bytes(asset_deserializer.read_bytes(8), 'little', signed=False)
                                 txout_tuple_list.append((hashX, value, True, asset_name.decode('ascii')))
@@ -481,7 +487,6 @@ class MemPool(object):
                                             'height': -1
                                         }
                                     asset_meta_reissues[asset_name.decode('ascii')] = d
-                                    assets_touched.add(asset_name.decode('ascii'))
                                 elif asset_type == b'q'[0]:
                                     divisions = asset_deserializer.read_int()
                                     reissuable = asset_deserializer.read_int()
@@ -506,7 +511,6 @@ class MemPool(object):
                                         }
 
                                     asset_meta_creates[asset_name.decode('ascii')] = d
-                                    assets_touched.add(asset_name.decode('ascii'))
                         except:
                             txout_tuple_list.append((hashX, value, False, None))
                     else:
@@ -539,7 +543,7 @@ class MemPool(object):
 
         utxo_map = {prevout: utxo for prevout, utxo in zip(prevouts, utxos)}
 
-        return self._accept_transactions(tx_map, utxo_map, touched), asset_meta_creates, asset_meta_reissues
+        return self._accept_transactions(tx_map, utxo_map, touched, assets_touched), asset_meta_creates, asset_meta_reissues
 
     #
     # External interface
