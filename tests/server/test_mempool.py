@@ -230,11 +230,11 @@ class API(MemPoolAPI):
         await sleep(0)
         return [self.db_utxos.get(prevout) for prevout in prevouts]
 
-    async def on_mempool(self, touched, height):
+    async def on_mempool(self, touched, height, assets):
         '''Called each time the mempool is synchronized.  touched is a set of
         hashXs touched since the previous call.  height is the
         daemon's height at the time the mempool was obtained.'''
-        self.on_mempool_calls.append((touched, height))
+        self.on_mempool_calls.append((touched, height, assets))
         await sleep(0)
 
 

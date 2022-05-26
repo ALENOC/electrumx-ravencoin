@@ -129,7 +129,7 @@ class MemPoolAPI(ABC):
         pass
 
     @abstractmethod
-    async def on_mempool(self, touched, height):
+    async def on_mempool(self, touched, height, assets):
         '''Called each time the mempool is synchronized.  touched is a set of
         hashXs touched since the previous call.  height is the
         daemon's height at the time the mempool was obtained.'''
@@ -307,7 +307,7 @@ class MemPool(object):
             else:
                 synchronized_event.set()
                 synchronized_event.clear()
-                await self.api.on_mempool(touched, height)
+                await self.api.on_mempool(touched, height, {self.asset_creates.keys() + self.asset_reissues.keys()})
                 touched = set()
             await sleep(self.refresh_secs)
 
