@@ -76,6 +76,7 @@ class Notifications(object):
         await self._maybe_notify()
 
     async def on_block(self, touched, height, reissued):
+        print(reissued)
         self._touched_bp[height] = touched
         self._reissued_assets[height] = reissued
         self._highest_block = height

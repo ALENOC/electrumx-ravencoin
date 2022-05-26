@@ -291,6 +291,7 @@ class MemPool(object):
         # Touched accumulates between calls to on_mempool and each
         # call transfers ownership
         touched = set()
+        assets_touched = set()
         while True:
             height = self.api.cached_height()
             hex_hashes = await self.api.mempool_hashes()
@@ -299,7 +300,7 @@ class MemPool(object):
             hashes = set(hex_str_to_hash(hh) for hh in hex_hashes)
             try:
                 async with self.lock:
-                    await self._process_mempool(hashes, touched, height)
+                    await self._process_mempool(hashes, touched, assets_touched, height)
             except DBSyncError:
                 # The UTXO DB is not at the same height as the
                 # mempool; wait and try again
@@ -307,13 +308,11 @@ class MemPool(object):
             else:
                 synchronized_event.set()
                 synchronized_event.clear()
-                assets_touched = {x for x in self.asset_creates.keys()}
-                assets_touched.update({x for x in self.asset_reissues.keys()})
                 await self.api.on_mempool(touched, height, assets_touched)
                 touched = set()
             await sleep(self.refresh_secs)
 
-    async def _process_mempool(self, all_hashes, touched, mempool_height):
+    async def _process_mempool(self, all_hashes, touched, assets_touched, mempool_height):
         # Re-sync with the new set of hashes
         txs = self.txs
         hashXs = self.hashXs
@@ -333,10 +332,12 @@ class MemPool(object):
             reissued_asset = tx_to_reissue.pop(tx_hash, None)
             if reissued_asset:
                 reissues.pop(reissued_asset, None)
+                assets_touched.add(reissued_asset)
 
             created_asset = tx_to_create.pop(tx_hash, None)
             if created_asset:
                 creates.pop(created_asset, None)
+                assets_touched.add(created_asset)
 
             tx_hashXs = set(hashX for hashX, value, _, _ in tx.in_pairs)
             tx_hashXs.update(hashX for hashX, value, _, _ in tx.out_pairs)
@@ -351,7 +352,7 @@ class MemPool(object):
         if new_hashes:
             group = TaskGroup()
             for hashes in chunks(new_hashes, 200):
-                coro = self._fetch_and_accept(hashes, all_hashes, touched)
+                coro = self._fetch_and_accept(hashes, all_hashes, touched, assets_touched)
                 await group.spawn(coro)
 
             tx_map = {}
@@ -382,7 +383,7 @@ class MemPool(object):
 
         return touched
 
-    async def _fetch_and_accept(self, hashes, all_hashes, touched):
+    async def _fetch_and_accept(self, hashes, all_hashes, touched, assets_touched):
         '''Fetch a list of mempool transactions.'''
         hex_hashes_iter = (hash_to_hex_str(hash) for hash in hashes)
         raw_txs = await self.api.raw_transactions(hex_hashes_iter)
@@ -441,6 +442,18 @@ class MemPool(object):
                             asset_name = asset_deserializer.read_var_bytes()
                             if asset_type == b'o'[0]:
                                 txout_tuple_list.append((hashX, 100_000_000, True, asset_name.decode('ascii')))
+                                asset_meta_creates[asset_name.decode('ascii')] = {
+                                    'sats_in_circulation': 100_000_000,
+                                    'divisions': 0,
+                                    'reissuable': False,
+                                    'has_ipfs': False,
+                                    'source': {
+                                        'tx_hash': hash_to_hex_str(tx_hash),
+                                        'tx_pos': vout_n,
+                                        'height': -1
+                                    }
+                                }
+                                assets_touched.add(asset_name.decode('ascii'))
                             else:
                                 value = int.from_bytes(asset_deserializer.read_bytes(8), 'little', signed=False)
                                 txout_tuple_list.append((hashX, value, True, asset_name.decode('ascii')))
@@ -468,7 +481,7 @@ class MemPool(object):
                                             'height': -1
                                         }
                                     asset_meta_reissues[asset_name.decode('ascii')] = d
-
+                                    assets_touched.add(asset_name.decode('ascii'))
                                 elif asset_type == b'q'[0]:
                                     divisions = asset_deserializer.read_int()
                                     reissuable = asset_deserializer.read_int()
@@ -493,6 +506,7 @@ class MemPool(object):
                                         }
 
                                     asset_meta_creates[asset_name.decode('ascii')] = d
+                                    assets_touched.add(asset_name.decode('ascii'))
                         except:
                             txout_tuple_list.append((hashX, value, False, None))
                     else:
