@@ -286,7 +286,6 @@ class MemPool(object):
                 touched.add(hashX)
                 hashXs[hashX].add(tx_hash)
             
-            print(tx_hash)
             if tx_hash in tx_to_create:
                 assets_touched.add(tx_to_create[tx_hash])
             if tx_hash in tx_to_reissue:
@@ -330,13 +329,6 @@ class MemPool(object):
         tx_to_reissue = self.tx_to_asset_reissue
         creates = self.asset_creates
         reissues = self.asset_reissues
-
-        print('===')
-        print(tx_to_create)
-        print(tx_to_reissue)
-        print(creates)
-        print(reissues)
-        print('===')
 
         if mempool_height != self.api.db_height():
             raise DBSyncError
