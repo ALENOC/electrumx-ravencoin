@@ -364,16 +364,7 @@ class MemPool(object):
             tx_map = {}
             utxo_map = {}
             async for task in group:
-                (deferred, unspent), internal_creates, internal_reissues = task.result()
-
-                # Store asset changes
-                for asset, stats in internal_creates.items():
-                    tx_to_create[hex_str_to_hash(stats['source']['tx_hash'])] = asset
-                    creates[asset] = stats
-
-                for asset, stats in internal_reissues.items():
-                    tx_to_reissue[hex_str_to_hash(stats['source']['tx_hash'])] = asset
-                    reissues[asset] = stats
+                deferred, unspent = task.result()                
 
                 tx_map.update(deferred)
                 utxo_map.update(unspent)
@@ -394,13 +385,17 @@ class MemPool(object):
         hex_hashes_iter = (hash_to_hex_str(hash) for hash in hashes)
         raw_txs = await self.api.raw_transactions(hex_hashes_iter)
 
-        asset_meta_creates = {}
-        asset_meta_reissues = {}
+        creates = self.asset_creates
+        reissues = self.asset_reissues
+        tx_to_create = self.tx_to_asset_create
+        tx_to_reissue = self.tx_to_asset_reissue
 
         def deserialize_txs():    # This function is pure
             to_hashX = self.coin.hashX_from_script
             read_tx_and_size = read_tx
 
+            asset_meta_creates = {}
+            asset_meta_reissues = {}
             txs = {}
             for tx_hash, raw_tx in zip(hashes, raw_txs):
                 # The daemon may have evicted the tx from its
@@ -518,10 +513,18 @@ class MemPool(object):
                 txout_pairs = tuple(txout_tuple_list)
                 txs[tx_hash] = MemPoolTx(txin_pairs, None, txout_pairs,
                                          0, tx_size)
-            return txs
+            return txs, asset_meta_creates, asset_meta_reissues
 
         # Thread this potentially slow operation so as not to block
-        tx_map = await run_in_thread(deserialize_txs)
+        tx_map, internal_creates, internal_reissues = await run_in_thread(deserialize_txs)
+
+        for asset, stats in internal_creates.items():
+            tx_to_create[hex_str_to_hash(stats['source']['tx_hash'])] = asset
+            creates[asset] = stats
+
+        for asset, stats in internal_reissues.items():
+            tx_to_reissue[hex_str_to_hash(stats['source']['tx_hash'])] = asset
+            reissues[asset] = stats
 
         # Determine all prevouts not in the mempool, and fetch the
         # UTXO information from the database.  Failed prevout lookups
@@ -542,7 +545,7 @@ class MemPool(object):
 
         utxo_map = {prevout: utxo for prevout, utxo in zip(prevouts, utxos)}
 
-        return self._accept_transactions(tx_map, utxo_map, touched, assets_touched), asset_meta_creates, asset_meta_reissues
+        return self._accept_transactions(tx_map, utxo_map, touched, assets_touched)
 
     #
     # External interface
