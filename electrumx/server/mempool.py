@@ -381,7 +381,7 @@ class MemPool(object):
             while tx_map and len(tx_map) != prior_count:
                 prior_count = len(tx_map)
                 tx_map, utxo_map = self._accept_transactions(tx_map, utxo_map,
-                                                             touched)
+                                                             touched, assets_touched)
             if tx_map:
                 self.logger.error(f'{len(tx_map)} txs dropped')
 
