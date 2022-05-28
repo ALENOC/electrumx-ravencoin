@@ -520,16 +520,16 @@ class MemPool(object):
 
         for asset, stats in internal_creates.items():
             hash_b = hex_str_to_hash(stats['source']['tx_hash'])
-            if not hash_b in tx_to_create:
+            if hash_b not in tx_to_create:
                 tx_to_create[hash_b] = set()
             tx_to_create[hash_b].add(asset)
             creates[asset] = stats
 
         for asset, stats in internal_reissues.items():
             hash_b = hex_str_to_hash(stats['source']['tx_hash'])
-            if not hash_b in tx_to_reissue:
+            if hash_b not in tx_to_reissue:
                 tx_to_reissue[hash_b] = set()
-            tx_to_reissue[hash_b] = asset
+            tx_to_reissue[hash_b].add(asset)
             reissues[asset] = stats
 
         # Determine all prevouts not in the mempool, and fetch the
