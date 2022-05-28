@@ -75,7 +75,8 @@ class Notifications(object):
         await self.notify(height, set(), set())
 
     async def on_mempool(self, touched, height, reissued):
-        print(reissued)
+        print(f'Mempool assets touched: {reissued}')
+        print(f'Mempool scripthashes touched: {touched}')
         self._touched_mp[height] = touched
         self._reissued_assets_mp[height] = reissued
         await self._maybe_notify()
