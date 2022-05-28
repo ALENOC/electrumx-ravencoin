@@ -505,7 +505,7 @@ class MemPool(object):
                                         }
 
                                     asset_meta_creates[asset_name.decode('ascii')] = d
-                        except:
+                        except Exception:
                             txout_tuple_list.append((hashX, value, False, None))
                     else:
                         txout_tuple_list.append((hashX, value, False, None))
