@@ -333,6 +333,13 @@ class MemPool(object):
         if mempool_height != self.api.db_height():
             raise DBSyncError
 
+        print('======')
+        print(self.asset_creates)
+        print(self.asset_reissues)
+        print(self.tx_to_asset_create)
+        print(self.tx_to_asset_reissue)
+        print('========')
+
         # First handle txs that have disappeared
         for tx_hash in set(txs).difference(all_hashes):
             tx = txs.pop(tx_hash)
