@@ -11,7 +11,7 @@ import math
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from typing import Callable, Dict, Sequence, Tuple
+from typing import Callable, Dict, Sequence, Tuple, Set
 
 import attr
 from aiorpcx import TaskGroup, run_in_thread, sleep
@@ -157,9 +157,9 @@ class MemPool(object):
         self.txs = {}
         self.hashXs = defaultdict(set)  # None can be a key
         self.asset_creates = {}
-        self.tx_to_asset_create = {}
+        self.tx_to_asset_create: Dict[bytes, Set[str]] = {}
         self.asset_reissues = {}
-        self.tx_to_asset_reissue = {}
+        self.tx_to_asset_reissue: Dict[bytes, Set[str]] = {}
         self.cached_compact_histogram = []
         self.refresh_secs = refresh_secs
         self.log_status_secs = log_status_secs
@@ -242,7 +242,7 @@ class MemPool(object):
             prev_fee_rate = fee_rate
         return compact
 
-    def _accept_transactions(self, tx_map, utxo_map, touched, assets_touched):
+    def _accept_transactions(self, tx_map, utxo_map, touched, assets_touched: Set[str]):
         '''Accept transactions in tx_map to the mempool if all their inputs
         can be found in the existing mempool or a utxo_map from the
         DB.
@@ -287,9 +287,9 @@ class MemPool(object):
                 hashXs[hashX].add(tx_hash)
             
             if tx_hash in tx_to_create:
-                assets_touched.add(tx_to_create[tx_hash])
+                assets_touched.update(tx_to_create[tx_hash])
             if tx_hash in tx_to_reissue:
-                assets_touched.add(tx_to_reissue[tx_hash])
+                assets_touched.update(tx_to_reissue[tx_hash])
 
         return deferred, {prevout: utxo_map[prevout] for prevout in unspent}
 
@@ -333,23 +333,16 @@ class MemPool(object):
         if mempool_height != self.api.db_height():
             raise DBSyncError
 
-        print('======')
-        print(self.asset_creates)
-        print(self.asset_reissues)
-        print(self.tx_to_asset_create)
-        print(self.tx_to_asset_reissue)
-        print('========')
-
         # First handle txs that have disappeared
         for tx_hash in set(txs).difference(all_hashes):
             tx = txs.pop(tx_hash)
 
-            reissued_asset = tx_to_reissue.pop(tx_hash, None)
-            if reissued_asset:
+            reissued_assets = tx_to_reissue.pop(tx_hash, set())
+            for reissued_asset in reissued_assets:
                 reissues.pop(reissued_asset, None)
 
-            created_asset = tx_to_create.pop(tx_hash, None)
-            if created_asset:
+            created_assets = tx_to_create.pop(tx_hash, set())
+            for created_asset in created_assets:
                 creates.pop(created_asset, None)
 
             tx_hashXs = set(hashX for hashX, value, _, _ in tx.in_pairs)
@@ -526,11 +519,17 @@ class MemPool(object):
         tx_map, internal_creates, internal_reissues = await run_in_thread(deserialize_txs)
 
         for asset, stats in internal_creates.items():
-            tx_to_create[hex_str_to_hash(stats['source']['tx_hash'])] = asset
+            hash_b = hex_str_to_hash(stats['source']['tx_hash'])
+            if not hash_b in tx_to_create:
+                tx_to_create[hash_b] = set()
+            tx_to_create[hash_b].add(asset)
             creates[asset] = stats
 
         for asset, stats in internal_reissues.items():
-            tx_to_reissue[hex_str_to_hash(stats['source']['tx_hash'])] = asset
+            hash_b = hex_str_to_hash(stats['source']['tx_hash'])
+            if not hash_b in tx_to_reissue:
+                tx_to_reissue[hash_b] = set()
+            tx_to_reissue[hash_b] = asset
             reissues[asset] = stats
 
         # Determine all prevouts not in the mempool, and fetch the
