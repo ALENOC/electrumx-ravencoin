@@ -1088,7 +1088,6 @@ class ElectrumX(SessionBase):
             args = (await self.subscribe_headers_result(), )
             await self.send_notification('blockchain.headers.subscribe', args)
 
-        print(assets)
         touched_assets = assets.intersection(self.asset_subs)
         if touched_assets:
             method = 'blockchain.asset.subscribe'
