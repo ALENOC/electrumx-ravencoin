@@ -1085,13 +1085,11 @@ class ElectrumX(SessionBase):
         updates or new blocks) and height.
         '''
 
-        print(f'notifying of\n{touched}\n{assets}')
         if height_changed and self.subscribe_headers:
             args = (await self.subscribe_headers_result(), )
             await self.send_notification('blockchain.headers.subscribe', args)
 
         touched_assets = assets.intersection(self.asset_subs)
-        print(f'touched assets {touched_assets}')
         if touched_assets:
             method = 'blockchain.asset.subscribe'
             for asset in touched_assets:

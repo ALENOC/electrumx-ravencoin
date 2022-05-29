@@ -315,8 +315,6 @@ class MemPool(object):
             else:
                 synchronized_event.set()
                 synchronized_event.clear()
-                print(f'pre mempool:\ntouched: {touched}\nassets touched: {assets_touched}')
-                print(height)
                 await self.api.on_mempool(touched, height, assets_touched)
                 touched = set()
                 assets_touched = set()
