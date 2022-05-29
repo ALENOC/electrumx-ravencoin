@@ -51,7 +51,6 @@ class Notifications(object):
             # Either we are processing a block and waiting for it to
             # come in, or we have not yet had a mempool update for the
             # new block height
-            print('Quick return from _maybe_notify')
             return
         touched = tmp.pop(height)
         for old in [h for h in tmp if h <= height]:

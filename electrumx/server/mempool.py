@@ -315,8 +315,6 @@ class MemPool(object):
             else:
                 synchronized_event.set()
                 synchronized_event.clear()
-                print(touched)
-                print(assets_touched)
                 await self.api.on_mempool(touched, height, assets_touched)
                 touched = set()
                 assets_touched = set()
@@ -519,10 +517,6 @@ class MemPool(object):
 
         # Thread this potentially slow operation so as not to block
         tx_map, internal_creates, internal_reissues = await run_in_thread(deserialize_txs)
-
-        print(tx_map)
-        print(internal_creates)
-        print(internal_reissues)
 
         for asset, stats in internal_creates.items():
             hash_b = hex_str_to_hash(stats['source']['tx_hash'])

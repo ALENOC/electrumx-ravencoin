@@ -996,8 +996,9 @@ class DB:
                     # getting the hashXs and getting the UTXOs
                     return None
                 value, = unpack_le_uint64(db_value)
-                if value == 0:
-                    return None
+                # possible for assets
+                #if value == 0:
+                #    return None
                 return hashX, value
             return [lookup_utxo(*hashX_pair) for hashX_pair in hashX_pairs]
 
