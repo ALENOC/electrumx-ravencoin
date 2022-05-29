@@ -1084,6 +1084,9 @@ class ElectrumX(SessionBase):
         '''Notify the client about changes to touched addresses and assets (from mempool
         updates or new blocks) and height.
         '''
+
+        print(f'notifying of\n{touched}\n{assets}')
+
         if height_changed and self.subscribe_headers:
             args = (await self.subscribe_headers_result(), )
             await self.send_notification('blockchain.headers.subscribe', args)
