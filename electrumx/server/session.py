@@ -1093,8 +1093,7 @@ class ElectrumX(SessionBase):
         if touched_assets:
             method = 'blockchain.asset.subscribe'
             for asset in touched_assets:
-                status_calc = self.asset_status if self.protocol_tuple >= (1, 10,) else self.asset_status_1_9
-                status = await status_calc(asset)
+                status = await self.asset_status(asset)
                 await self.send_notification(method, (asset, status))
             es = '' if len(touched_assets) == 1 else 's'
             self.logger.info(f'notified of {len(touched_assets):,d} reissued asset{es}')
@@ -1150,6 +1149,11 @@ class ElectrumX(SessionBase):
         return self.peer_mgr.on_peers_subscribe(self.is_tor())
 
     async def asset_status(self, asset):
+
+        if self.protocol_tuple < (1, 10):
+            print(f'Using 1.9 status for {asset}')
+            return await self.asset_status_1_9(asset)
+
         check_asset(asset)
         # There may only be one type at a time in the mempool
         '''
@@ -1344,8 +1348,7 @@ class ElectrumX(SessionBase):
             raise RPCError(
                 BAD_REQUEST, f'asset name greater than 31 characters'
             ) from None
-        status_calc = self.asset_status if self.protocol_tuple >= (1, 10,) else self.asset_status_1_9
-        result = await status_calc(asset)
+        result = await self.asset_status(asset)
         self.asset_subs.add(asset)
         return result
 
@@ -1922,6 +1925,7 @@ class ElectrumX(SessionBase):
         if ptuple >= (1, 8):
             handlers['blockchain.scripthash.get_asset_balance'] = self.scripthash_get_asset_balance
             handlers['blockchain.scripthash.listassets'] = self.scripthash_listassets
+            print('Setting asset meta 1.9')
             handlers['blockchain.asset.get_meta'] = self.asset_get_meta_1_9
             handlers['blockchain.asset.subscribe'] = self.asset_subscribe
             handlers['blockchain.asset.unsubscribe'] = self.asset_unsubscribe
@@ -1937,6 +1941,7 @@ class ElectrumX(SessionBase):
             handlers['blockchain.asset.list_addresses_by_asset'] = self.list_addresses_by_asset
 
         if ptuple >= (1, 10):
+            print('Setting asset meta 1.10')
             handlers['blockchain.asset.get_meta'] = self.asset_get_meta
 
         self.request_handlers = handlers
