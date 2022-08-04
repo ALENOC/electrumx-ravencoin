@@ -1172,6 +1172,7 @@ class ElectrumX(SessionBase):
         '''
         mempool_data = await self.session_mgr.mempool.get_asset_creation_if_any(asset)
         if not mempool_data:
+            print(f'No mempool creations for {asset}')
             saved_data = await self.session_mgr.db.lookup_asset_meta(asset.encode('ascii'))
             mempool_data = await self.session_mgr.mempool.get_asset_reissues_if_any(asset)
             if mempool_data:
@@ -1200,9 +1201,12 @@ class ElectrumX(SessionBase):
                         asset_data['source_ipfs'] = saved_data['source']
 
             else:
+                print(f'No mempool reissues for {asset}')
                 asset_data = saved_data
         else:
             asset_data = mempool_data
+
+        print(asset_data)
 
         if asset_data:
             # We don't need to worry about sources because a source change implies that this changes
