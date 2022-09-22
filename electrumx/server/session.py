@@ -1149,59 +1149,11 @@ class ElectrumX(SessionBase):
         return self.peer_mgr.on_peers_subscribe(self.is_tor())
 
     async def asset_status(self, asset):
-        check_asset(asset)
-        # There may only be one type at a time in the mempool
-        '''
-        Mempool struct:
-
-        'sats_in_circulation': value,
-        'divisions': divisions,
-        'reissuable': reissuable,
-        'ipfs': base_encode(asset_data, 58) if asset_data else None,
-        'has_ipfs': 1 if asset_data else 0,
-        'source': {
-            'tx_hash': hash_to_hex_str(tx_hash),
-            'tx_pos': vout_n,
-            'height': -1
-        }
-        '''
-        mempool_data = await self.session_mgr.mempool.get_asset_creation_if_any(asset)
-        if not mempool_data:
-            saved_data = await self.session_mgr.db.lookup_asset_meta(asset.encode('ascii'))
-            mempool_data = await self.session_mgr.mempool.get_asset_reissues_if_any(asset)
-            if mempool_data:
-                asset_data = {
-                    'sats_in_circulation': saved_data['sats_in_circulation'] + mempool_data['sats_in_circulation'],
-                    'divisions': mempool_data['divisions'] if mempool_data['divisions'] != 0xff else saved_data['divisions'],
-                    'has_ipfs': mempool_data['has_ipfs'] if mempool_data['has_ipfs'] else saved_data['has_ipfs'],
-                }
-                if asset_data['has_ipfs']:
-                    asset_data['ipfs'] = mempool_data.get('ipfs', None) or saved_data['ipfs']
-                asset_data['reissuable'] = mempool_data['reissuable']
-                asset_data['source'] = mempool_data['source']
-
-                if mempool_data['divisions'] == 0xff:
-                    old_source_div = saved_data.get('source_divisions', None)
-                    if old_source_div:
-                        asset_data['source_divisions'] = old_source_div
-                    else:
-                        asset_data['source_divisions'] = saved_data['source']
-
-                if not mempool_data['has_ipfs'] and saved_data['has_ipfs']:
-                    old_source_ipfs = saved_data.get('source_ipfs', None)
-                    if old_source_ipfs:
-                        asset_data['source_ipfs'] = old_source_ipfs
-                    else:
-                        asset_data['source_ipfs'] = saved_data['source']
-
-            else:
-                asset_data = saved_data
-        else:
-            asset_data = mempool_data
+        asset_data = self.asset_get_meta(asset)
 
         if asset_data:
             # We don't need to worry about sources because a source change implies that this changes
-            self.bump_cost(0.1 + len(asset_data) * 0.00002)
+            self.bump_cost(0.1 + len(asset_data) * 0.0002)
             sats = asset_data['sats_in_circulation']
             div_amt = asset_data['divisions']
             reissuable = asset_data['reissuable']
@@ -1707,8 +1659,8 @@ class ElectrumX(SessionBase):
             return hash_to_hex_str(tx_hash)
 
     async def asset_get_meta(self, name: str):
-        check_asset(name)
         self.bump_cost(1.0)
+        check_asset(name)
         mempool_data = await self.session_mgr.mempool.get_asset_creation_if_any(name)
         if mempool_data:
             return mempool_data
