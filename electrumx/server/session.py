@@ -1011,7 +1011,7 @@ def check_h160(h160):
 class ElectrumX(SessionBase):
     '''A TCP server that handles incoming Electrum connections.'''
 
-    PROTOCOL_MIN = (1, 4)
+    PROTOCOL_MIN = (1, 10)
     PROTOCOL_MAX = (1, 10)
 
     def __init__(self, *args, **kwargs):
@@ -1149,11 +1149,6 @@ class ElectrumX(SessionBase):
         return self.peer_mgr.on_peers_subscribe(self.is_tor())
 
     async def asset_status(self, asset):
-
-        if self.protocol_tuple < (1, 10):
-            print(f'Using 1.9 status for {asset}')
-            return await self.asset_status_1_9(asset)
-
         check_asset(asset)
         # There may only be one type at a time in the mempool
         '''
@@ -1172,7 +1167,6 @@ class ElectrumX(SessionBase):
         '''
         mempool_data = await self.session_mgr.mempool.get_asset_creation_if_any(asset)
         if not mempool_data:
-            print(f'No mempool creations for {asset}')
             saved_data = await self.session_mgr.db.lookup_asset_meta(asset.encode('ascii'))
             mempool_data = await self.session_mgr.mempool.get_asset_reissues_if_any(asset)
             if mempool_data:
@@ -1201,12 +1195,9 @@ class ElectrumX(SessionBase):
                         asset_data['source_ipfs'] = saved_data['source']
 
             else:
-                print(f'No mempool reissues for {asset}')
                 asset_data = saved_data
         else:
             asset_data = mempool_data
-
-        print(asset_data)
 
         if asset_data:
             # We don't need to worry about sources because a source change implies that this changes
@@ -1227,48 +1218,6 @@ class ElectrumX(SessionBase):
 
         return status
 
-
-    async def asset_status_1_9(self, asset):
-        check_asset(asset)
-        asset_data = await self.session_mgr.mempool.get_asset_creation_if_any(asset)
-        if not asset_data:
-            db_data = await self.session_mgr.db.lookup_asset_meta(asset.encode('ascii'))
-            mempool_data = await self.mempool.get_asset_reissues_if_any(asset)
-            if mempool_data:
-                asset_data = {
-                    'sats_in_circulation': db_data['sats_in_circulation'] + mempool_data['sats_in_circulation'],
-                    'divisions': mempool_data['divisions'] if mempool_data['divisions'] != 0xff else db_data['divisions'],
-                    'has_ipfs': mempool_data['has_ipfs'] if mempool_data['has_ipfs'] != 0 else db_data['has_ipfs'],
-                }
-                if mempool_data['has_ipfs'] != 0 or db_data['has_ipfs'] != 0:
-                    asset_data['ipfs'] = mempool_data['ipfs'] if mempool_data.get('ipfs', None) else db_data['ipfs']
-                asset_data['reissuable'] = mempool_data['reissuable']
-                asset_data['source'] = mempool_data['source']
-                
-                if mempool_data['divisions'] == 0xff:
-                    asset_data['source_divisions'] = db_data['source_divisions'] if 'source_divisions' in db_data else db_data['source']
-            else:
-                asset_data = db_data
-
-
-        ptuple = self.protocol_tuple
-        if asset_data:
-            self.bump_cost(0.1 + len(asset_data) * 0.00002)
-            sats = str(asset_data['sats_in_circulation']) if ptuple >= (1, 9) else ''
-            div_amt = asset_data['divisions']
-            reissuable = False if asset_data['reissuable'] == 0 else True
-            has_ipfs = False if asset_data['has_ipfs'] == 0 else True
-
-            h = ''.join([sats, str(div_amt), str(reissuable), str(has_ipfs)])
-            if has_ipfs:
-                h += asset_data['ipfs']
-
-            status = sha256(h.encode('ascii')).hex()
-        else:
-            self.bump_cost(0.1)
-            status = None
-
-        return status
 
     async def address_status(self, hashX):
         '''Returns an address status.
@@ -1796,38 +1745,7 @@ class ElectrumX(SessionBase):
         
             return asset_data
 
-    async def asset_get_meta_1_9(self, name: str):
-        check_asset(name)
-        self.bump_cost(1.0)
-        mempool_data = await self.mempool.get_asset_creation_if_any(name)
-        if mempool_data:
-            return mempool_data
-
-        db_data = await self.db.lookup_asset_meta(name.encode('ascii'))
-        mempool_data = await self.mempool.get_asset_reissues_if_any(name)
-        if mempool_data:
-            to_ret = {
-                'sats_in_circulation': db_data['sats_in_circulation'] + mempool_data['sats_in_circulation'],
-                'divisions': mempool_data['divisions'] if mempool_data['divisions'] != 0xff else db_data['divisions'],
-                'has_ipfs': 1 if (mempool_data['has_ipfs'] if mempool_data['has_ipfs'] != 0 else db_data['has_ipfs']) else 0,
-            }
-            if mempool_data['has_ipfs'] != 0 or db_data['has_ipfs'] != 0:
-                to_ret['ipfs'] = mempool_data['ipfs'] if mempool_data['ipfs'] else db_data['ipfs']
-            to_ret['reissuable'] = 1 if mempool_data['reissuable'] else 0
-            to_ret['source'] = mempool_data['source']
-            
-            if mempool_data['divisions'] == 0xff:
-                to_ret['source_prev'] = db_data['source_divisions'] if 'source_divisions' in db_data else db_data['source']
-            return to_ret
-        else:
-            db_data.pop('source_ipfs', None)
-            source_div = db_data.pop('source_divisions', None)
-            if source_div:
-                db_data['source_prev'] = source_div
-            db_data['has_ipfs'] = 1 if db_data['has_ipfs'] else 0
-            db_data['reissuable'] = 1 if db_data['reissuable'] else 0
-            return db_data
-
+    
     async def get_assets_with_prefix(self, prefix: str):
         check_asset(prefix)
         prefix = prefix.upper()
@@ -1922,31 +1840,20 @@ class ElectrumX(SessionBase):
         # TESTING
         handlers['server.our_stats'] = self.get_session_stats
         # END TESTING
-
-        if ptuple >= (1, 4, 2):
-            handlers['blockchain.scripthash.unsubscribe'] = self.scripthash_unsubscribe
-
-        if ptuple >= (1, 8):
-            handlers['blockchain.scripthash.get_asset_balance'] = self.scripthash_get_asset_balance
-            handlers['blockchain.scripthash.listassets'] = self.scripthash_listassets
-            print('Setting asset meta 1.9')
-            handlers['blockchain.asset.get_meta'] = self.asset_get_meta_1_9
-            handlers['blockchain.asset.subscribe'] = self.asset_subscribe
-            handlers['blockchain.asset.unsubscribe'] = self.asset_unsubscribe
-
-        if ptuple >= (1, 9):
-            handlers['blockchain.asset.check_tag'] = self.is_qualified
-            handlers['blockchain.asset.all_tags'] = self.qualifications_for_h160
-            handlers['blockchain.asset.is_frozen'] = self.is_restricted_frozen
-            handlers['blockchain.asset.validator_string'] = self.get_restricted_string
-            handlers['blockchain.asset.restricted_associations'] = self.lookup_qualifier_associations
-            handlers['blockchain.asset.broadcasts'] = self.get_messages
-            handlers['blockchain.asset.get_assets_with_prefix'] = self.get_assets_with_prefix
-            handlers['blockchain.asset.list_addresses_by_asset'] = self.list_addresses_by_asset
-
-        if ptuple >= (1, 10):
-            print('Setting asset meta 1.10')
-            handlers['blockchain.asset.get_meta'] = self.asset_get_meta
+        handlers['blockchain.scripthash.unsubscribe'] = self.scripthash_unsubscribe
+        handlers['blockchain.scripthash.get_asset_balance'] = self.scripthash_get_asset_balance
+        handlers['blockchain.scripthash.listassets'] = self.scripthash_listassets
+        handlers['blockchain.asset.subscribe'] = self.asset_subscribe
+        handlers['blockchain.asset.unsubscribe'] = self.asset_unsubscribe
+        handlers['blockchain.asset.check_tag'] = self.is_qualified
+        handlers['blockchain.asset.all_tags'] = self.qualifications_for_h160
+        handlers['blockchain.asset.is_frozen'] = self.is_restricted_frozen
+        handlers['blockchain.asset.validator_string'] = self.get_restricted_string
+        handlers['blockchain.asset.restricted_associations'] = self.lookup_qualifier_associations
+        handlers['blockchain.asset.broadcasts'] = self.get_messages
+        handlers['blockchain.asset.get_assets_with_prefix'] = self.get_assets_with_prefix
+        handlers['blockchain.asset.list_addresses_by_asset'] = self.list_addresses_by_asset
+        handlers['blockchain.asset.get_meta'] = self.asset_get_meta
 
         self.request_handlers = handlers
 
