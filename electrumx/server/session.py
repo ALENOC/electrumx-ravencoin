@@ -1149,7 +1149,7 @@ class ElectrumX(SessionBase):
         return self.peer_mgr.on_peers_subscribe(self.is_tor())
 
     async def asset_status(self, asset):
-        asset_data = self.asset_get_meta(asset)
+        asset_data = await self.asset_get_meta(asset)
 
         if asset_data:
             # We don't need to worry about sources because a source change implies that this changes
