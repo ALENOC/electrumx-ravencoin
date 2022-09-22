@@ -4,8 +4,6 @@
 FROM ubuntu:18.04
 
 WORKDIR /
-ADD https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/archive/v1.10.6.tar.gz /
-RUN tar zxvf *.tar.gz
 
 RUN apt-get update && \
         apt-get -y install cmake gcc libffi-dev build-essential python3.8 python3.8-dev python3-pip libleveldb-dev libssl-dev
@@ -13,7 +11,10 @@ RUN apt-get update && \
 RUN python3.8 -m pip install --upgrade pip
 
 # Needed for MacOs
-RUN python3.8 -m pip install scikit-build
+RUN python3.8 -m pip install scikit-build 
+
+ADD https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/archive/v1.10.6.tar.gz /
+RUN tar zxvf *.tar.gz
 
 RUN cd /electrumx* && python3.8 -m pip install -r requirements.txt && python3.8 setup.py install
 
