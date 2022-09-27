@@ -237,13 +237,9 @@ class Ravencoin(Coin):
     RPC_PORT = 8766
     REORG_LIMIT = 100
     PEERS = [
-        'rvn4lyfe.com s50002',
-        'aethyn.com t s',
-        'electrum1.rvn.rocks s50002',
-        'electrum2.rvn.rocks s50002',
-        'electrum3.rvn.rocks s50002',
-        'electrum.ravencoin.foundation s50002',
-        'aq7vuqykup2voklcrpqljf6jnjkzrouowsjfrmybdou5kdhrpr6sjjid.onion t s'
+        'rvn4lyfe.com t s',
+        'rvn-dashboard.com s',
+        'aq7vuqykup2voklcrpqljf6jnjkzrouowsjfrmybdou5kdhrpr6sjjid.onion t s',
     ]
 
     @classmethod
@@ -303,10 +299,7 @@ class RavencoinTestnet(Ravencoin):
     AVG_BLOCK_SIZE = 294
 
     RPC_PORT = 18766
-    PEER_DEFAULT_PORTS = {'t': '50003', 's': '50004'}
     REORG_LIMIT = 100
     PEERS = [
-        "testnet.rvn.rocks s50002",
-        "electrum.ravencoin.foundation s50012",
-        "rvn4lyfe.com s50003"
+        "rvn4lyfe.com t50011 s50012",
     ]
