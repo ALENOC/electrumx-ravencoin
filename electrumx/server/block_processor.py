@@ -789,7 +789,7 @@ class BlockProcessor:
 
                         # Get the address bytes.
                         addr_bytes = ops[0][2]
-                        addr = public_key_to_address(addr_bytes, self.coin.P2PKH_VERBYTE)
+                        addr = public_key_to_address(bytes(addr_bytes), self.coin.P2PKH_VERBYTE)
                         hashX = self.coin.address_to_hashX(addr)
                     else:
                         invalid_script = False
