@@ -776,7 +776,7 @@ class DB:
             self.logger.info(f'deleted {len(keys):,d} stale undo entries')
 
         keys = []
-        for key, _hist in self.asset_info_db.iterator(prefix=prefix):
+        for key, _hist in self.asset_info_db.iterator(prefix=b'u'):
             height, = unpack_be_uint32(key[-4:])
             if height >= min_height:
                 break
