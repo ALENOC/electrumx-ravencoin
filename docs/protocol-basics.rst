@@ -195,6 +195,93 @@ otherwise, do nothing.
 expressed as a hexadecimal string, or :const:`null` if the
 asset does not exist.
 
+.. _qualifier_tags_status:
+
+Qualifier Tags Status
+---------------------
+
+To calculate the `status` of the set of `h160`s tagged by a qualifier
+
+1. Sort the tagged `h160`s lexographically based on their hex string equivalent.
+
+2. For each `h160`, concatenate the following: the height the qualification occurred as a string, the
+transaction hash the qualification occurred as a hex string, the transaction position
+as a string, a boolean where :const:`True` is a qualification as a string where
+true -> "True", false -> "False" (The default python implementation). For example:
+1, 000000, 1, True -> "10000001True".
+
+3. For each `h160` concatenate the `h160` as a hex string, ":" (colon), and the result of step `2`.
+
+4. For each result from step `3`, concatenate the values with ";" (semicolon) between them.
+
+5. The `status` of the qualifier tags is the :func:`sha256` hash of this byte array
+expressed as a hexadecimal string, or :const:`null` if the
+asset has not made any tags.
+
+.. _h160_tags_status:
+
+H160 Tags Status
+---------------------
+
+To calculate the `status` of the set of qualifier assets that tagged this `h160`
+
+1. Sort the assets that tagged this `h160` lexographically.
+
+2. For each asset, concatenate the following: the height the qualification occurred as a string, the
+transaction hash the qualification occurred as a hex string, the transaction position
+as a string, a boolean where :const:`True` is a qualification as a string where
+true -> "True", false -> "False" (The default python implementation). For example:
+1, 000000, 1, True -> "10000001True".
+
+3. For each asset concatenate the asset, ":" (colon), and the result of step `2`.
+
+4. For each result from step `3`, concatenate the values with ";" (semicolon) between them.
+
+5. The `status` of the `h160` tags is the :func:`sha256` hash of this byte array
+expressed as a hexadecimal string, or :const:`null` if the `h160` has no tags.
+
+.. _broadcast_messages_status:
+
+Broadcast Messages Status
+---------------------
+
+To calculate the `status` of the set of messages that have been broadcast by this asset.
+
+1. Sort the messages ordered by height, tie-breaking with transaction hash, tie-breaking with transaction position.
+
+2. For each message, concatenate the following: the height, and the transaction position,
+the associated data encoded in base58, and the expiration time or 0 if there is none.
+
+3. For each message concatenate the txid, ":" (colon), and the result of step `2`.
+
+4. For each result from step `3`, concatenate the values with ";" (semicolon) between them.
+
+5. The `status` of the `h160` tags is the :func:`sha256` hash of this byte array
+expressed as a hexadecimal string, or :const:`null` if the asset has no broadcasts.
+
+.. _qualifier_restricted_status:
+
+Qualifier-Restricted Association Status
+---------------------
+
+To calculate the `status` of the set of restricted assets that have this qualifier in their verification strings.
+
+1. Sort the associations, ordered by the restricted asset.
+
+2. For each asset, concatenate the following: the height the qualification occurred as a string, the
+transaction hash the qualification occurred as a hex string, the transaction position
+of the restricted asset as a string, the transaction position of the verifier string,
+and a boolean where :const:`True` is the qualifier is newly associated as a string where
+true -> "True", false -> "False" (The default python implementation). For example:
+1, 000000, 1, True -> "10000001True".
+
+3. For each asset concatenate the asset, ":" (colon), and the result of step `2`.
+
+4. For each result from step `3`, concatenate the values with ";" (semicolon) between them.
+
+5. The `status` of the `h160` tags is the :func:`sha256` hash of this byte array
+expressed as a hexadecimal string, or :const:`null` if the qualifier is not associated
+with any restricted assets.
 
 Block Headers
 -------------

@@ -384,7 +384,18 @@ class BlockProcessor:
 
         # To notify clients about reissuances
         self.asset_touched = set()
-
+        # To notify when a qualifier has tagged/revoked a h160
+        self.qualifier_touched = set()
+        # To notify when a h160 has been tagged/revoked by a qualifier
+        self.h160_touched = set()
+        # To notify when a broadcast has been made
+        self.broadcast_touched = set()
+        # To notify when a restricted asset has been frozen
+        self.frozen_touched = set()
+        # To notify when a validator string has been changed
+        self.validator_touched = set()
+        # To notify when a qualifier has become a part/removed from a validator string
+        self.qualifier_association_touched = set()
         
         # h160 qualifications
         # h160 + asset : idx + txnumb + flag
@@ -409,12 +420,6 @@ class BlockProcessor:
         self.qualifier_associations = {}
         self.qualifier_associations_undo_infos = []
         self.qualifier_associations_deletes = []
-
-        self.current_restricted_asset = None  # type: Optional[bytes]
-        self.restricted_idx = b''
-        self.current_qualifiers = None  # type: Optional[bytes]
-        self.current_restricted_string = ''
-        self.qualifiers_idx = b''
 
         # Asset broadcasts
         self.asset_broadcast = {}
@@ -635,6 +640,13 @@ class BlockProcessor:
         if not self.caught_up:
             self.touched = set()
             self.asset_touched = set()
+            self.qualifier_touched = set()
+            self.h160_touched = set()
+            self.broadcast_touched = set()
+            self.frozen_touched = set()
+            self.validator_touched = set()
+            self.qualifier_association_touched = set()
+        
 
     def advance_block(self, block):
         '''Advance once block.  It is already verified they correctly connect onto our tip.'''
@@ -728,9 +740,11 @@ class BlockProcessor:
                 append_hashX = hashXs.append
                 tx_numb = to_le_uint64(tx_num)[:5]
                 is_asset = False
-                self.current_restricted_asset = None
-                self.current_qualifiers = None
-                self.current_restricted_string = ''
+                current_restricted_asset = None
+                current_qualifiers = []
+                current_restricted_string = None
+                qualifiers_idx = None
+                restricted_idx = None
                 # Spend the inputs
                 for txin in tx.inputs:
                     if txin.is_generation():  # Don't spend block rewards
@@ -855,15 +869,16 @@ class BlockProcessor:
                                         h160_qualified_undo_infos_append(current_key + idx + tx_numb + b'\xff')
 
                                     put_h160_qualified(current_key, idx + tx_numb + flag)
-
+                                    self.qualifier_touched.add(asset_name.decode())
+                                    self.h160_touched.add(h160)
                                 elif match_script_against_template(ops, ASSET_NULL_VERIFIER_TEMPLATE) > -1:
                                     # This associates a restricted asset with qualifier tags in a boolean logic string
                                     qualifiers_b = ops[2][2]
                                     qualifiers_deserializer = DataParser(qualifiers_b)
                                     asset_names = qualifiers_deserializer.read_var_bytes_as_ascii()
-                                    self.current_restricted_string = asset_names
-                                    self.current_qualifiers = re.findall(r'([A-Z0-9_.]+)', asset_names)
-                                    self.qualifiers_idx = idx
+                                    current_restricted_string = asset_names
+                                    current_qualifiers = re.findall(r'([A-Z0-9_.]+)', asset_names)
+                                    qualifiers_idx = idx
                                 elif match_script_against_template(ops, ASSET_GLOBAL_RESTRICTION_TEMPLATE) > -1:
                                     # This globally freezes a restricted asset
                                     asset_portion = ops[3][2]
@@ -886,7 +901,7 @@ class BlockProcessor:
                                         restricted_freezes_undo_infos_append(current_key + idx + tx_numb + b'\xff')
 
                                     put_restricted_freezes(current_key, idx + tx_numb + flag)
-
+                                    self.frozen_touched.add(asset_name.decode())
                                 else:
                                     raise Exception('Bad null asset script ops')
                             except Exception as e:
@@ -922,14 +937,15 @@ class BlockProcessor:
 
                     # Now try and add asset info
                     def try_parse_asset(asset_deserializer: DataParser, second_loop=False):
+                        nonlocal current_restricted_asset, restricted_idx
                         op = asset_deserializer.read_bytes(3)
                         if op != b'rvn':
                             raise Exception("Expected {}, was {}".format(b'rvn', op))
                         script_type = asset_deserializer.read_byte()
                         asset_name_len, asset_name = asset_deserializer.read_var_bytes_tuple_bytes()
                         if asset_name[0] == b'$'[0]:
-                            self.current_restricted_asset = asset_name
-                            self.restricted_idx = to_le_uint32(idx)
+                            current_restricted_asset = asset_name
+                            restricted_idx = to_le_uint32(idx)
                         if script_type == b'o':
                             # This is an ownership asset. It does not have any metadata.
                             # Just assign it with a value of 1
@@ -1126,13 +1142,14 @@ class BlockProcessor:
                                             if asset_deserializer.cursor + 34 <= asset_deserializer.length:
                                                 data = asset_deserializer.read_bytes(34)
                                                 timestamp = b'\0\0\0\0\0\0\0\0'
-                                                if not asset_deserializer.is_finished():
+                                                if asset_deserializer.cursor + 8 <= asset_deserializer.length:
                                                     timestamp = asset_deserializer.read_bytes(8)
                                                 # This is a message broadcast
                                                 put_asset_broadcast(
                                                     asset_name_len + asset_name + to_le_uint32(idx) + tx_numb, data + timestamp)
                                                 asset_broadcast_undo_info.append(
                                                     asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
+                                                self.broadcast_touched.add(asset_name.decode())
                                         else:
                                             data = asset_deserializer.read_bytes(34)
                                             timestamp = b'\0\0\0\0\0\0\0\0'
@@ -1143,6 +1160,7 @@ class BlockProcessor:
                                                                 data + timestamp)
                                             asset_broadcast_undo_info.append(
                                                 asset_name_len + asset_name + to_le_uint32(idx) + tx_numb)
+                                            self.broadcast_touched.add(asset_name.decode())
                             else:
                                 raise Exception('Unknown asset type: {}'.format(script_type))
 
@@ -1178,8 +1196,7 @@ class BlockProcessor:
                             asset_deserializer = DataParser(asset_script)
                             try_parse_asset(asset_deserializer)
                             is_asset = True
-
-                        except:
+                        except Exception:
                             try:
                                 try_parse_asset_iterative(txout.pk_script[ops[op_ptr][1]:])
                                 is_asset = True
@@ -1197,8 +1214,8 @@ class BlockProcessor:
                                         f.write('Exception : {}\n'.format(repr(e)))
                                         f.write('Traceback : {}\n'.format(traceback.format_exc()))
 
-                if self.current_restricted_asset and self.current_restricted_string:
-                    res = self.current_restricted_asset  # type: bytes
+                if current_restricted_asset and current_restricted_string:
+                    res = current_restricted_asset  # type: bytes
 
                     res_to_string_key = bytes([len(res)]) + res
 
@@ -1211,9 +1228,10 @@ class BlockProcessor:
                         restricted_strings_undo_infos_append(res_to_string_key + old_data)
                     else:
                         # We don't previous data; set to delete
-                        restricted_strings_undo_infos_append(res_to_string_key + self.restricted_idx + self.qualifiers_idx + tx_numb + b'\0')
+                        restricted_strings_undo_infos_append(res_to_string_key + restricted_idx + qualifiers_idx + tx_numb + b'\0')
 
-                    put_restricted_strings(res_to_string_key, self.restricted_idx + self.qualifiers_idx + tx_numb + bytes([len(self.current_restricted_string)]) + self.current_restricted_string.encode('ascii'))
+                    put_restricted_strings(res_to_string_key, restricted_idx + qualifiers_idx + tx_numb + bytes([len(current_restricted_string)]) + current_restricted_string.encode('ascii'))
+                    self.validator_touched.add(res.decode())
 
                     old_associated_qualifiers = []
                     if old_data:
@@ -1225,7 +1243,7 @@ class BlockProcessor:
 
                     for old_qual in old_associated_qualifiers:
                         # If a qualifier was previously associated and is now not
-                        if old_qual not in self.current_qualifiers:
+                        if old_qual not in current_qualifiers:
                             qual_association_key = bytes([len(old_qual)]) + old_qual.encode('ascii') + bytes([len(res)]) + res
 
                             old_data = pop_qualifier_associations(qual_association_key)
@@ -1235,11 +1253,12 @@ class BlockProcessor:
                             if old_data:
                                 qualifier_associations_undo_infos_append(qual_association_key + old_data)
                             else:
-                                qualifier_associations_undo_infos_append(qual_association_key + self.restricted_idx + self.qualifiers_idx + tx_numb + b'\xff')
+                                qualifier_associations_undo_infos_append(qual_association_key + restricted_idx + qualifiers_idx + tx_numb + b'\xff')
 
-                            put_qualifier_associations(qual_association_key, self.restricted_idx + self.qualifiers_idx + tx_numb + b'\0')
+                            put_qualifier_associations(qual_association_key, restricted_idx + qualifiers_idx + tx_numb + b'\0')
+                            self.qualifier_association_touched.add(old_qual)
 
-                    for new_qual in self.current_qualifiers:
+                    for new_qual in current_qualifiers:
                         # If a qualifier was not previously associated, update
                         if new_qual not in old_associated_qualifiers:
                             qual_association_key = bytes([len(new_qual)]) + new_qual.encode('ascii') + bytes([len(res)]) + res
@@ -1251,10 +1270,10 @@ class BlockProcessor:
                             if old_data:
                                 qualifier_associations_undo_infos_append(qual_association_key + old_data)
                             else:
-                                qualifier_associations_undo_infos_append(qual_association_key + self.restricted_idx + self.qualifiers_idx + tx_numb + b'\xff')
+                                qualifier_associations_undo_infos_append(qual_association_key + restricted_idx + qualifiers_idx + tx_numb + b'\xff')
 
-                            put_qualifier_associations(qual_association_key, self.restricted_idx + self.qualifiers_idx + tx_numb + b'x\01')
-
+                            put_qualifier_associations(qual_association_key, restricted_idx + qualifiers_idx + tx_numb + b'x\01')
+                            self.qualifier_association_touched.add(new_qual)
 
                 append_hashXs(hashXs)
                 update_touched(hashXs)
@@ -1262,9 +1281,6 @@ class BlockProcessor:
                 tx_num += 1
                 if is_asset:
                     asset_num += 1
-                self.current_restricted_asset = None
-                self.current_qualifiers = []
-                self.current_restricted_string = ''
 
          # Do this first - it uses the prior state
         self.tx_hashes.append(b''.join(tx_hashes))
@@ -1605,9 +1621,17 @@ class BlockProcessor:
         await self.flush(True)
         if self.caught_up:
             # Flush everything before notifying as client queries are performed on the DB
-            await self.notifications.on_block(self.touched, self.state.height, self.asset_touched)
+            await self.notifications.on_block(self.touched, self.state.height, self.asset_touched,
+                                              self.qualifier_touched, self.h160_touched, self.broadcast_touched,
+                                              self.frozen_touched, self.validator_touched, self.qualifier_association_touched)
             self.touched = set()
             self.asset_touched = set()
+            self.qualifier_touched = set()
+            self.h160_touched = set()
+            self.broadcast_touched = set()
+            self.frozen_touched = set()
+            self.validator_touched = set()
+            self.qualifier_association_touched = set()
         else:
             self.caught_up = True
             if was_first_sync:

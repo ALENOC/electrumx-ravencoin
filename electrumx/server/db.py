@@ -16,6 +16,7 @@ import time
 from array import array
 from bisect import bisect_right
 from collections import namedtuple
+from typing import Iterable
 
 import attr
 from aiorpcx import run_in_thread, sleep
@@ -367,6 +368,7 @@ class DB:
         reissues = len(flush_data.asset_meta_reissues)
 
         with self.asset_info_db.write_batch() as batch:
+            # Assets will be upper case so undo key b'u' is ok; we don't need to prefix normal entries with anything
             batch_delete = batch.delete
             for key in flush_data.asset_meta_deletes:
                 batch_delete(key)
@@ -412,6 +414,8 @@ class DB:
             # Qualifiers
             for key in sorted(flush_data.h160_qualifier_deletes):
                 batch_delete(b't' + key)
+                h160_len = key[0]
+                batch_delete(b'1' + key[h160_len+1:] + key[:h160_len+1])            
             flush_data.h160_qualifier_deletes.clear()
 
             for key in sorted(flush_data.restricted_freezes_deletes):
@@ -451,6 +455,8 @@ class DB:
                 # key: h160 + asset
                 # value: idx + txnumb + flag
                 batch_put(b't' + key, value)
+                h160_len = key[0]
+                batch_put(b'1' + key[h160_len+1:] + key[:h160_len+1], bytes([value[-1]]))
             flush_data.h160_qualifier.clear()
             self.flush_asset_h160_tag_undos(batch_put, flush_data.h160_qualifier_undos)
             flush_data.h160_qualifier_undos.clear()
@@ -906,7 +912,13 @@ class DB:
         self.state.flush_count = count
         self.write_utxo_state(self.utxo_db)
 
-    async def all_assets(self, hashX):
+    async def all_assets(self, hashX, asset):
+        def is_asset_valid(db_asset):
+            if asset is None: return True
+            if isinstance(asset, Iterable):
+                return db_asset in asset
+            return db_asset == asset
+
         def read_assets():
             assets = []
             assets_append = assets.append
@@ -917,6 +929,8 @@ class DB:
                 tx_hash, height = self.fs_tx_hash(tx_num)
                 value, = unpack_le_uint64(db_value[:8])
                 name = db_value[9:].decode('ascii')
+                if not is_asset_valid(name):
+                    continue
                 assets_append(ASSET(tx_num, tx_pos, tx_hash, height, name, value))
             return assets
 
@@ -1043,6 +1057,31 @@ class DB:
                     'tx_hash': hash_to_hex_str(tx_hash),
                     'tx_pos': tx_pos
                 }
+            return ret_val
+        return await run_in_thread(lookup_quals)
+
+    async def qualifications_for_qualifier(self, asset: str):
+        def lookup_quals():
+            prefix = b'1' + bytes([len(asset)]) + asset.encode()
+            prefix_len = len(prefix)
+            h160_keys = []
+            for db_key, _ in self.asset_db.iterator(prefix=prefix):
+                h160_keys.append(db_key[prefix_len:])
+            ret_val = {}
+            for h160_key in h160_keys:
+                key = b't' + h160_key + bytes([len(asset)]) + asset.encode()
+                db_ret = self.asset_db.get(key, None)
+                assert db_ret
+                tx_pos, = unpack_le_uint32(db_ret[:4])
+                tx_num, = unpack_le_uint64(db_ret[4:9] + bytes(3))
+                tx_hash, height = self.fs_tx_hash(tx_num)
+                flag = db_ret[-1]
+                ret_val_i = {}
+                ret_val_i['flag'] = True if flag != 0 else False
+                ret_val_i['height'] = height
+                ret_val_i['tx_hash'] = hash_to_hex_str(tx_hash)
+                ret_val_i['tx_pos'] = tx_pos
+                ret_val[h160_key[1:].hex()] = ret_val_i
             return ret_val
         return await run_in_thread(lookup_quals)
 

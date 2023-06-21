@@ -227,3 +227,39 @@ Removed methods
   * :func:`blockchain.asset.get_h160_for_asset_history`
   * :func:`blockchain.asset.frozen_status_current`
   * :func:`blockchain.asset.frozen_status_history`
+
+Version 1.11.0
+==============
+
+New methods
+-----------
+
+  * :func:`blockchain.tag.qualifier.list`
+  * :func:`blockchain.tag.qualifier.subscribe`
+  * :func:`blockchain.tag.h160.subscribe`
+  * :func:`blockchain.asset.broadcasts.subscribe`
+  * :func:`blockchain.asset.is_frozen.subscribe`
+  * :func:`blockchain.asset.verifier_string.subscribe`
+  * :func:`blockchain.asset.restricted_associations.subscribe`
+  * :func:`blockchain.tag.qualifier.unsubscribe`
+  * :func:`blockchain.tag.h160.unsubscribe`
+  * :func:`blockchain.asset.broadcasts.unsubscribe`
+  * :func:`blockchain.asset.is_frozen.unsubscribe`
+  * :func:`blockchain.asset.verifier_string.unsubscribe`
+  * :func:`blockchain.asset.restricted_associations.unsubscribe`
+
+Changes
+-------
+
+  * :func:`blockchain.scripthash.listassets` and :func:`blockchain.scripthash.get_asset_balance` now
+    include an optional parameter to filter assets
+
+  * :func:`blockchain.scripthash.listassets` renamed to :func:`blockchain.scripthash.listassetunspents`
+
+  * :func:`blockchain.asset.check_tag` renamed to :func:`blockchain.tag.check`
+
+  * :func:`blockchain.asset.all_tags` renamed to :func:`blockchain.tag.h160.list`
+
+  * :func:`blockchain.asset.validator_string` renamed to :func:`blockchain.asset.verifier_string`
+
+  * :func:`server.features` now includes a unsupported protocol version list

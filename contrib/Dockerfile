@@ -1,4 +1,4 @@
-# example of Dockerfile that builds release of electrumx-ravencoin-1.10.0
+# example of Dockerfile that builds release of electrumx-ravencoin-1.11.0
 # ENV variables can be overrided on the `docker run` command
 
 FROM ubuntu:18.04
@@ -13,7 +13,7 @@ RUN python3.8 -m pip install --upgrade pip
 # Needed for MacOs
 RUN python3.8 -m pip install scikit-build 
 
-ADD https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/archive/v1.10.6.tar.gz /
+ADD https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/archive/v1.11.0.tar.gz /
 RUN tar zxvf *.tar.gz
 
 RUN cd /electrumx* && python3.8 -m pip install -r requirements.txt && python3.8 setup.py install

@@ -11,7 +11,8 @@ import math
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from typing import Callable, Dict, Sequence, Tuple, Set
+from typing import Callable, Dict, Sequence, Tuple, Set, Iterable
+import re
 
 import attr
 from aiorpcx import TaskGroup, run_in_thread, sleep
@@ -44,6 +45,13 @@ class OPPushDataGeneric:
 
 
 SCRIPTPUBKEY_TEMPLATE_P2PK = [OPPushDataGeneric(lambda x: x in (33, 65)), OpCodes.OP_CHECKSIG]
+# Marks an address as valid for restricted assets via qualifier or restricted itself.
+ASSET_NULL_TEMPLATE = [OpCodes.OP_RVN_ASSET, OPPushDataGeneric(lambda x: x == 20), OPPushDataGeneric()]
+# Used with creating restricted assets. Dictates the qualifier assets associated.
+ASSET_NULL_VERIFIER_TEMPLATE = [OpCodes.OP_RVN_ASSET, OpCodes.OP_RESERVED, OPPushDataGeneric()]
+# Stop all movements of a restricted asset.
+ASSET_GLOBAL_RESTRICTION_TEMPLATE = [OpCodes.OP_RVN_ASSET, OpCodes.OP_RESERVED, OpCodes.OP_RESERVED,
+                                     OPPushDataGeneric()]
 
 
 # -1 if doesn't match, positive if does. Indicates index in script
@@ -129,7 +137,9 @@ class MemPoolAPI(ABC):
         pass
 
     @abstractmethod
-    async def on_mempool(self, touched, height, assets):
+    async def on_mempool(self, touched, height, assets,
+                         tag_qualifiers_touched, tag_h160_touched, broadcasts_asset_touched,
+                         freezes_asset_touched, verifier_string_asset_touched, restricted_qualifier_touched):
         '''Called each time the mempool is synchronized.  touched is a set of
         hashXs touched since the previous call.  height is the
         daemon's height at the time the mempool was obtained.'''
@@ -157,9 +167,34 @@ class MemPool(object):
         self.txs = {}
         self.hashXs = defaultdict(set)  # None can be a key
         self.asset_creates = {}
-        self.tx_to_asset_create: Dict[bytes, Set[str]] = {}
+        self.tx_to_asset_create: Dict[bytes, Set[str]] = defaultdict(set)
         self.asset_reissues = {}
-        self.tx_to_asset_reissue: Dict[bytes, Set[str]] = {}
+        self.tx_to_asset_reissue: Dict[bytes, Set[str]] = defaultdict(set)
+
+        # qualifier -> dict[ txid, (h160, tx_pos, flag) ]
+        self.qualifier_tags: Dict[str, Dict[bytes, Tuple[bytes, int, bool]]] = defaultdict(dict)
+        self.tx_to_qualifier_tags: Dict[bytes, Set[str]] = defaultdict(set)
+
+        # h160 -> dict[ txid, (qualifier, tx_pos, flag) ]
+        self.h160_tags: Dict[bytes, Dict[bytes, Tuple[str, int, bool]]] = defaultdict(dict)
+        self.tx_to_h160_tags: Dict[bytes, Set[bytes]] = defaultdict(set)
+
+        # asset -> dict [ txid, (data, expr, tx_pos) ]
+        self.broadcasts: Dict[str, Dict[bytes, Tuple[bytes, int, int]]] = defaultdict(dict)
+        self.tx_to_broadcast: Dict[bytes, Set[str]] = defaultdict(set)
+
+        # asset -> dict [ txid, (tx_pox, flag) ]
+        self.freezes: Dict[str, Dict[bytes, Tuple[int, bool]]] = defaultdict(dict)
+        self.tx_to_freeze: Dict[bytes, Set[str]] = defaultdict(set)
+
+        # asset -> dict [ txid, (qual_pos, res_pos, verifier) ]
+        self.verifiers: Dict[str, Dict[bytes, Tuple[int, int, str]]] = defaultdict(dict)
+        self.tx_to_verifier: Dict[bytes, Set[str]] = defaultdict(set)
+
+        # asset -> dict [txid, qual_pos, res_pos, res) ]
+        self.qualifier_associations: Dict[str, Dict[bytes, Tuple[int, int, str]]] = defaultdict(dict)
+        self.tx_to_qualifier_associations: Dict[bytes, Set[str]] = defaultdict(set)
+
         self.cached_compact_histogram = []
         self.refresh_secs = refresh_secs
         self.log_status_secs = log_status_secs
@@ -177,7 +212,16 @@ class MemPool(object):
         while True:
             mempool_size = sum(tx.size for tx in self.txs.values()) / 1_000_000
             self.logger.info(f'{len(self.txs):,d} txs {mempool_size:.2f} MB '
-                             f'touching {len(self.hashXs):,d} addresses')
+                             f'touching {len(self.hashXs):,d} addresses, '
+                             f'{len(self.asset_creates):,d} asset creations, '
+                             f'{len(self.asset_reissues):,d} asset reissues, '
+                             f'{len(self.qualifier_tags):,d} qualifier tags, '
+                             f'{len(self.h160_tags):,d} h160s tagged, '
+                             f'{len(self.broadcasts):,d} broadcasts, '
+                             f'{len(self.freezes):,d} freezes, '
+                             f'{len(self.verifiers):,d} verifier string updates, '
+                             f'{len(self.qualifier_associations):,d} qualifier associations'
+                             )
             await sleep(self.log_status_secs)
             await synchronized_event.wait()
 
@@ -242,7 +286,9 @@ class MemPool(object):
             prev_fee_rate = fee_rate
         return compact
 
-    def _accept_transactions(self, tx_map, utxo_map, touched, assets_touched: Set[str]):
+    def _accept_transactions(self, tx_map, utxo_map, touched, assets_touched: Set[str],
+                             tag_qualifiers_touched, tag_h160_touched, broadcasts_asset_touched,
+                             freezes_asset_touched, verifier_string_asset_touched, restricted_qualifier_touched):
         '''Accept transactions in tx_map to the mempool if all their inputs
         can be found in the existing mempool or a utxo_map from the
         DB.
@@ -253,6 +299,12 @@ class MemPool(object):
         txs = self.txs
         tx_to_create = self.tx_to_asset_create
         tx_to_reissue = self.tx_to_asset_reissue
+        tx_to_qualifier_tags = self.tx_to_qualifier_tags
+        tx_to_h160_tags = self.tx_to_h160_tags
+        tx_to_broadcast = self.tx_to_broadcast
+        tx_to_freeze = self.tx_to_freeze
+        tx_to_verifier = self.tx_to_verifier
+        tx_to_qualifier_associations = self.tx_to_qualifier_associations
 
         deferred = {}
         unspent = set(utxo_map)
@@ -290,6 +342,18 @@ class MemPool(object):
                 assets_touched.update(tx_to_create[tx_hash])
             if tx_hash in tx_to_reissue:
                 assets_touched.update(tx_to_reissue[tx_hash])
+            if tx_hash in tx_to_qualifier_tags:
+                tag_qualifiers_touched.update(tx_to_qualifier_tags[tx_hash])
+            if tx_hash in tx_to_h160_tags:
+                tag_h160_touched.update(tx_to_h160_tags[tx_hash])
+            if tx_hash in tx_to_broadcast:
+                broadcasts_asset_touched.update(tx_to_broadcast[tx_hash])
+            if tx_hash in tx_to_freeze:
+                freezes_asset_touched.update(tx_to_freeze[tx_hash])
+            if tx_hash in tx_to_verifier:
+                verifier_string_asset_touched.update(tx_to_verifier[tx_hash])
+            if tx_hash in tx_to_qualifier_associations:
+                restricted_qualifier_touched.update(tx_to_qualifier_associations[tx_hash])
 
         return deferred, {prevout: utxo_map[prevout] for prevout in unspent}
 
@@ -299,6 +363,13 @@ class MemPool(object):
         # call transfers ownership
         touched = set()
         assets_touched = set()
+        tag_qualifiers_touched = set()
+        tag_h160_touched = set()
+        broadcasts_asset_touched = set() 
+        freezes_asset_touched = set()
+        verifier_string_asset_touched = set()
+        restricted_qualifier_touched = set()
+
         while True:
             height = self.api.cached_height()
             hex_hashes = await self.api.mempool_hashes()
@@ -307,7 +378,10 @@ class MemPool(object):
             hashes = set(hex_str_to_hash(hh) for hh in hex_hashes)
             try:
                 async with self.lock:
-                    await self._process_mempool(hashes, touched, assets_touched, height)
+                    await self._process_mempool(hashes, touched, assets_touched, 
+                                                tag_qualifiers_touched, tag_h160_touched, broadcasts_asset_touched,
+                                                freezes_asset_touched, verifier_string_asset_touched, restricted_qualifier_touched,
+                                                height)
             except DBSyncError:
                 # The UTXO DB is not at the same height as the
                 # mempool; wait and try again
@@ -315,20 +389,44 @@ class MemPool(object):
             else:
                 synchronized_event.set()
                 synchronized_event.clear()
-                await self.api.on_mempool(touched, height, assets_touched)
+                await self.api.on_mempool(touched, height, assets_touched,
+                                          tag_qualifiers_touched, tag_h160_touched, broadcasts_asset_touched,
+                                          freezes_asset_touched, verifier_string_asset_touched, restricted_qualifier_touched)
                 touched = set()
                 assets_touched = set()
             await sleep(self.refresh_secs)
 
-    async def _process_mempool(self, all_hashes, touched, assets_touched, mempool_height):
+    async def _process_mempool(self, all_hashes, touched, assets_touched, 
+                               tag_qualifiers_touched, tag_h160_touched, broadcasts_asset_touched,
+                               freezes_asset_touched, verifier_string_asset_touched, restricted_qualifier_touched,
+                               mempool_height):
         # Re-sync with the new set of hashes
         txs = self.txs
         hashXs = self.hashXs
 
         tx_to_create = self.tx_to_asset_create
-        tx_to_reissue = self.tx_to_asset_reissue
         creates = self.asset_creates
+
         reissues = self.asset_reissues
+        tx_to_reissue = self.tx_to_asset_reissue
+
+        qualifier_tags = self.qualifier_tags
+        tx_to_qualifier_tags = self.tx_to_qualifier_tags
+
+        h160_tags = self.h160_tags
+        tx_to_h160_tags = self.tx_to_h160_tags
+
+        broadcasts = self.broadcasts
+        tx_to_broadcast = self.tx_to_broadcast
+
+        freezes = self.freezes
+        tx_to_freeze = self.tx_to_freeze
+
+        verifiers = self.verifiers
+        tx_to_verifier = self.tx_to_verifier
+
+        qualifier_associations = self.qualifier_associations
+        tx_to_qualifier_associations = self.tx_to_qualifier_associations
 
         if mempool_height != self.api.db_height():
             raise DBSyncError
@@ -345,6 +443,42 @@ class MemPool(object):
             for created_asset in created_assets:
                 creates.pop(created_asset, None)
 
+            quals = tx_to_qualifier_tags.pop(tx_hash, set())
+            for qual in quals:
+                qualifier_tags[qual].pop(tx_hash)
+                if not qualifier_tags[qual]:
+                    qualifier_tags.pop(qual)
+
+            h160s = tx_to_h160_tags.pop(tx_hash, set())
+            for h160 in h160s:
+                h160_tags[h160].pop(tx_hash)
+                if not h160_tags[h160]:
+                    h160_tags.pop(h160)
+
+            broadcast = tx_to_broadcast.pop(tx_hash, set())
+            for b in broadcast:
+                broadcasts[b].pop(tx_hash)
+                if not broadcasts[b]:
+                    broadcasts.pop(b, None)
+
+            freeze = tx_to_freeze.pop(tx_hash, set())
+            for f in freeze:
+                freezes[f].pop(tx_hash)
+                if not freezes[f]:
+                    freezes.pop(f, None)
+
+            verifier = tx_to_verifier.pop(tx_hash, set())
+            for v in verifier:
+                verifiers[v].pop(tx_hash)
+                if not verifiers[v]:
+                    verifiers.pop(v, None)
+
+            qualifier_association = tx_to_qualifier_associations.pop(tx_hash, set())
+            for qa in qualifier_association:
+                qualifier_associations[qa].pop(tx_hash)
+                if not qualifier_associations[qa]:
+                    qualifier_associations.pop(qa, None)
+
             tx_hashXs = set(hashX for hashX, value, _, _ in tx.in_pairs)
             tx_hashXs.update(hashX for hashX, value, _, _ in tx.out_pairs)
             for hashX in tx_hashXs:
@@ -358,7 +492,9 @@ class MemPool(object):
         if new_hashes:
             group = TaskGroup()
             for hashes in chunks(new_hashes, 200):
-                coro = self._fetch_and_accept(hashes, all_hashes, touched, assets_touched)
+                coro = self._fetch_and_accept(hashes, all_hashes, touched, assets_touched,
+                                              tag_qualifiers_touched, tag_h160_touched, broadcasts_asset_touched,
+                                              freezes_asset_touched, verifier_string_asset_touched, restricted_qualifier_touched)
                 await group.spawn(coro)
 
             tx_map = {}
@@ -374,28 +510,54 @@ class MemPool(object):
             while tx_map and len(tx_map) != prior_count:
                 prior_count = len(tx_map)
                 tx_map, utxo_map = self._accept_transactions(tx_map, utxo_map,
-                                                             touched, assets_touched)
+                                                             touched, assets_touched,
+                                                             tag_qualifiers_touched, tag_h160_touched, broadcasts_asset_touched,
+                                                             freezes_asset_touched, verifier_string_asset_touched, restricted_qualifier_touched)
             if tx_map:
                 self.logger.error(f'{len(tx_map)} txs dropped')
 
         return touched
 
-    async def _fetch_and_accept(self, hashes, all_hashes, touched, assets_touched):
+    async def _fetch_and_accept(self, hashes, all_hashes, touched, assets_touched,
+                                tag_qualifiers_touched, tag_h160_touched, broadcasts_asset_touched,
+                                freezes_asset_touched, verifier_string_asset_touched, restricted_qualifier_touched):
         '''Fetch a list of mempool transactions.'''
         hex_hashes_iter = (hash_to_hex_str(hash) for hash in hashes)
         raw_txs = await self.api.raw_transactions(hex_hashes_iter)
 
         creates = self.asset_creates
-        reissues = self.asset_reissues
         tx_to_create = self.tx_to_asset_create
+
+        reissues = self.asset_reissues
         tx_to_reissue = self.tx_to_asset_reissue
+
+        qualifier_tags = self.qualifier_tags
+        tx_to_qualifier_tags = self.tx_to_qualifier_tags
+
+        h160_tags = self.h160_tags
+        tx_to_h160_tags = self.tx_to_h160_tags
+
+        broadcasts = self.broadcasts
+        tx_to_broadcast = self.tx_to_broadcast
+
+        freezes = self.freezes
+        tx_to_freeze = self.tx_to_freeze
+
+        verifiers = self.verifiers
+        tx_to_verifier = self.tx_to_verifier
+
+        qualifier_associations = self.qualifier_associations
+        tx_to_qualifier_associations = self.tx_to_qualifier_associations
 
         def deserialize_txs():    # This function is pure
             to_hashX = self.coin.hashX_from_script
             read_tx_and_size = read_tx
-
-            asset_meta_creates = {}
-            asset_meta_reissues = {}
+            # hashx -> txid -> txpos -> (data, expirey)
+            maybe_broadcast = defaultdict(defaultdict(dict))  # type: Dict[bytes, Dict[bytes, Dict[int, Tuple[str, bytes, int]]]]
+            verifier_string = None
+            verifier_string_pos = None
+            restricted_asset = None
+            restricted_asset_pos = None
             txs = {}
             for tx_hash, raw_tx in zip(hashes, raw_txs):
                 # The daemon may have evicted the tx from its
@@ -433,17 +595,43 @@ class MemPool(object):
                         hashX = to_hashX(txout.pk_script)
 
                     # Best effort for standard asset portions
-                    if 0 < op_ptr < len(ops):
+                    if op_ptr == 0:
+                        if match_script_against_template(ops, ASSET_NULL_TEMPLATE) > -1:
+                            h160 = ops[1][2]
+                            asset_portion = ops[2][2]
+                            asset_portion_deserializer = DataParser(asset_portion)
+                            asset_name = asset_portion_deserializer.read_var_bytes_as_ascii()
+                            flag = asset_portion_deserializer.read_boolean()
+                            qualifier_tags[asset_name][tx_hash] = (h160, vout_n, flag)
+                            tx_to_qualifier_tags[tx_hash].add(asset_name)
+                            h160_tags[h160][tx_hash] = (asset_name, vout_n, flag)
+                            tx_to_h160_tags[tx_hash].add(h160)
+                        elif match_script_against_template(ops, ASSET_NULL_VERIFIER_TEMPLATE) > -1:
+                            qualifiers_b = ops[2][2]
+                            qualifiers_deserializer = DataParser(qualifiers_b)
+                            verifier_string = qualifiers_deserializer.read_var_bytes_as_ascii()
+                            verifier_string_pos = vout_n     
+                        elif match_script_against_template(ops, ASSET_GLOBAL_RESTRICTION_TEMPLATE) > -1:
+                            asset_portion = ops[3][2]
+                            asset_portion_deserializer = DataParser(asset_portion)
+                            asset_name = asset_portion_deserializer.read_var_bytes_as_ascii()
+                            flag = asset_portion_deserializer.read_boolean()
+                            freezes[asset_name][tx_hash] = (vout_n, flag)
+                            tx_to_freeze[tx_hash].add(asset_name)
+                    elif op_ptr < len(ops):
                         try:
                             next_op = ops[op_ptr + 1]
                             asset_script = next_op[2]
                             asset_deserializer = DataParser(asset_script)
                             asset_deserializer.read_bytes(3)
                             asset_type = asset_deserializer.read_int()
-                            asset_name = asset_deserializer.read_var_bytes()
+                            asset_name = asset_deserializer.read_var_bytes_as_ascii()
+                            if asset_name[0] == '$':
+                                restricted_asset = asset_name
+                                restricted_asset_pos = vout_n
                             if asset_type == b'o'[0]:
-                                txout_tuple_list.append((hashX, 100_000_000, True, asset_name.decode('ascii')))
-                                asset_meta_creates[asset_name.decode('ascii')] = {
+                                txout_tuple_list.append((hashX, 100_000_000, True, asset_name))
+                                creates[asset_name] = {
                                     'sats_in_circulation': 100_000_000,
                                     'divisions': 0,
                                     'reissuable': False,
@@ -454,9 +642,10 @@ class MemPool(object):
                                         'height': -1
                                     }
                                 }
+                                tx_to_create[tx_hash].add(asset_name)
                             else:
                                 value = int.from_bytes(asset_deserializer.read_bytes(8), 'little', signed=False)
-                                txout_tuple_list.append((hashX, value, True, asset_name.decode('ascii')))
+                                txout_tuple_list.append((hashX, value, True, asset_name))
                                 # Asset reissue chaining is not allowed. There may only be
                                 # one reissue in the mempool per asset name
                                 if asset_type == b'r'[0]:
@@ -480,7 +669,9 @@ class MemPool(object):
                                             'tx_pos': vout_n,
                                             'height': -1
                                         }
-                                    asset_meta_reissues[asset_name.decode('ascii')] = d
+                                    
+                                    reissues[asset_name] = d
+                                    tx_to_reissue[tx_hash].add(asset_name)
                                 elif asset_type == b'q'[0]:
                                     divisions = asset_deserializer.read_int()
                                     reissuable = asset_deserializer.read_int()
@@ -504,33 +695,33 @@ class MemPool(object):
                                             'height': -1
                                         }
 
-                                    asset_meta_creates[asset_name.decode('ascii')] = d
+                                    creates[asset_name] = d
+                                    tx_to_create[tx_hash].add(asset_name)
+                                elif asset_type == b't'[0]:
+                                    if not asset_deserializer.is_finished():
+                                        data = asset_deserializer.read_bytes(34)
+                                        if not asset_deserializer.is_finished():
+                                            expire_bytes = asset_deserializer.read_bytes(8)
+                                        maybe_broadcast[hashX][tx_hash][vout_n] = (asset_name, data, int.from_bytes(expire_bytes, 'little'))
                         except Exception:
                             txout_tuple_list.append((hashX, value, False, None))
                     else:
                         txout_tuple_list.append((hashX, value, False, None))
 
+                if restricted_asset and verifier_string:
+                    verifiers[restricted_asset][tx_hash] = (verifier_string_pos, restricted_asset_pos, verifier_string)
+                    tx_to_verifier[tx_hash].add(restricted_asset)
+                    qualifiers = re.findall(r'([A-Z0-9_.]+)', verifier_string)
+                    for qualifier in qualifiers:
+                        qualifier_associations[qualifier][tx_hash] = (verifier_string_pos, restricted_asset_pos, restricted_asset)
+                        tx_to_qualifier_associations[tx_hash].add(qualifier)
                 txout_pairs = tuple(txout_tuple_list)
                 txs[tx_hash] = MemPoolTx(txin_pairs, None, txout_pairs,
                                          0, tx_size)
-            return txs, asset_meta_creates, asset_meta_reissues
+            return txs, maybe_broadcast
 
         # Thread this potentially slow operation so as not to block
-        tx_map, internal_creates, internal_reissues = await run_in_thread(deserialize_txs)
-
-        for asset, stats in internal_creates.items():
-            hash_b = hex_str_to_hash(stats['source']['tx_hash'])
-            if hash_b not in tx_to_create:
-                tx_to_create[hash_b] = set()
-            tx_to_create[hash_b].add(asset)
-            creates[asset] = stats
-
-        for asset, stats in internal_reissues.items():
-            hash_b = hex_str_to_hash(stats['source']['tx_hash'])
-            if hash_b not in tx_to_reissue:
-                tx_to_reissue[hash_b] = set()
-            tx_to_reissue[hash_b].add(asset)
-            reissues[asset] = stats
+        tx_map, possible_broadcasts = await run_in_thread(deserialize_txs)
 
         # Determine all prevouts not in the mempool, and fetch the
         # UTXO information from the database.  Failed prevout lookups
@@ -548,10 +739,16 @@ class MemPool(object):
 
         for hX, v, name in await self.api.lookup_assets(prevouts):
             utxos.append((hX, v, True, name))
+            for txid, d in possible_broadcasts[hX].items():
+                for tx_pos, (asset, data, expiry) in d.items():
+                    broadcasts[asset][txid] = (data, expiry, tx_pos)
+                    tx_to_broadcast[txid].add(asset)
 
         utxo_map = {prevout: utxo for prevout, utxo in zip(prevouts, utxos)}
 
-        return self._accept_transactions(tx_map, utxo_map, touched, assets_touched)
+        return self._accept_transactions(tx_map, utxo_map, touched, assets_touched,
+                                         tag_qualifiers_touched, tag_h160_touched, broadcasts_asset_touched,
+                                         freezes_asset_touched, verifier_string_asset_touched, restricted_qualifier_touched)
 
     #
     # External interface
@@ -569,23 +766,23 @@ class MemPool(object):
                 if not task.cancelled():
                     task.result()
 
-    async def asset_balance_delta(self, hashX):
-        ret = {}
+    async def asset_balance_delta(self, hashX, asset):
+        def is_asset_valid(db_asset):
+            if asset is None: return True
+            if isinstance(asset, Iterable):
+                return db_asset in asset
+            return db_asset == asset
+        
+        ret = defaultdict(int)
         if hashX in self.hashXs:
             for hash_ in self.hashXs[hashX]:
                 tx = self.txs[hash_]
                 for hX, v, is_asset, name in tx.in_pairs:
-                    if hX == hashX and is_asset:
-                        if name not in ret:
-                            ret[name] = -v
-                        else:
-                            ret[name] -= v
+                    if hX == hashX and is_asset and is_asset_valid(name):
+                        ret[name] -= v
                 for hX, v, is_asset, name in tx.out_pairs:
-                    if hX == hashX and is_asset:
-                        if name not in ret:
-                            ret[name] = v
-                        else:
-                            ret[name] += v
+                    if hX == hashX and is_asset and is_asset_valid(name):
+                        ret[name] += v
 
         return ret
 
@@ -643,14 +840,19 @@ class MemPool(object):
                     utxos.append(UTXO(-1, pos, tx_hash, 0, value))
         return utxos
 
-    async def unordered_ASSETs(self, hashX):
-        assets = []
+    async def unordered_ASSETs(self, hashX, asset):
+        def is_asset_valid(db_asset):
+            if asset is None: return True
+            if isinstance(asset, Iterable):
+                return db_asset in asset
+            return db_asset == asset
+        asset_outpints = []
         for tx_hash in self.hashXs.get(hashX, ()):
             tx = self.txs.get(tx_hash)
             for pos, (hX, value, is_asset, name) in enumerate(tx.out_pairs):
-                if hX == hashX and is_asset:
-                    assets.append(ASSET(-1, pos, tx_hash, 0, name, value))
-        return assets
+                if hX == hashX and is_asset and is_asset_valid(name):
+                    asset_outpints.append(ASSET(-1, pos, tx_hash, 0, name, value))
+        return asset_outpints
 
     async def get_asset_creation_if_any(self, asset: str):
         return self.asset_creates.get(asset, None)

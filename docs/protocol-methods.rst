@@ -2,14 +2,335 @@
  Protocol Methods
 ==================
 
-blockchain.asset.check_tag
+blockchain.tag.qualifier.list
+========================================
+
+Returns a dictionary with information regarding all of the tags associated with a qualifier.
+
+**Signature**
+
+    .. function:: blockchain.tag.qualifier.list(asset)
+    .. versionadded:: 1.11
+
+    *asset*
+
+      The name of the asset as an ascii compliant string.
+
+**Result**
+
+    A dictionary of tags and chain location information.
+
+**Example Results**
+
+    {
+      "3baebe536ebb14776b456c68425fea8ce06e9732": {
+          "flag": true,
+          "height": 361894,
+          "tx_hash": "57c6ff965de70d51c5f4235f7adcee96e872ab3b5ca64497f655260e49a62b15",
+          "tx_pos": 2
+      },
+      "4dfab22bfc28d7f9849512161c020e834897fbda": {
+          "flag": false,
+          "height": 361944,
+          "tx_hash": "cd8c9477688e4215edaf0560e06adf07bc794d4c18d83a23dc0e7581d95e59bb",
+          "tx_pos": 1
+      }
+    }
+
+
+blockchain.tag.qualifier.subscribe
+===============================
+
+Subscribe a qualifier asset's tags
+
+**Signature**
+
+  .. function:: blockchain.tag.qualifier.subscribe(asset)
+  .. versionadded:: 1.11
+
+  *asset*
+
+    The name of the asset as an ascii compliant string.
+
+**Result**
+
+  The :ref:`status <qualifier_tags_status>` of the qualifier asset.
+
+**Notifications**
+
+  The client will receive a notification when the :ref:`status <qualifier_tags_status>` of the asset
+  changes.  Its signature is
+
+    .. function:: blockchain.asset.broadcasts.subscribe(asset, status)
+       :noindex:
+
+blockchain.tag.h160.subscribe
+===============================
+
+Subscribe an `h160`'s qualifications
+
+**Signature**
+
+  .. function:: blockchain.tag.h160.subscribe(h160)
+  .. versionadded:: 1.11
+
+  *h160*
+
+    The h160 of a public key as a hex string
+
+**Result**
+
+  The :ref:`status <h160_tags_status>` of the `h160`.
+
+**Notifications**
+
+  The client will receive a notification when the :ref:`status <h160_tags_status>` of the `h160`
+  changes.  Its signature is
+
+    .. function:: blockchain.tag.h160.subscribe(h160, status)
+       :noindex:
+
+blockchain.asset.broadcasts.subscribe
+===============================
+
+Subscribe an asset's broadcasts
+
+**Signature**
+
+  .. function:: blockchain.asset.broadcasts.subscribe(asset)
+  .. versionadded:: 1.11
+
+  *asset*
+
+    The name of the asset as an ascii compliant string.
+
+**Result**
+
+  The :ref:`status <broadcast_messages_status>` of the qualifier asset.
+
+**Notifications**
+
+  The client will receive a notification when the :ref:`status <broadcast_messages_status>` of the asset
+  changes.  Its signature is
+
+    .. function:: blockchain.asset.broadcasts.subscribe(asset, status)
+       :noindex:
+
+blockchain.asset.is_frozen.subscribe
+===============================
+
+Subscribe to a restricted asset's frozen status
+
+**Signature**
+
+  .. function:: blockchain.asset.is_frozen.subscribe(asset)
+  .. versionadded:: 1.11
+
+  *asset*
+
+    The name of the restricted asset as an ascii compliant string.
+
+**Result**
+
+  The same as `blockchain.asset.is_frozen`
+
+**Notifications**
+
+  The client will receive a notification when the result of `blockchain.asset.is_frozen` changes.
+  Its signature is
+
+    .. function:: blockchain.asset.is_frozen.subscribe(asset, result)
+       :noindex:
+
+blockchain.asset.verifier_string.subscribe
+===============================
+
+Subscribe to a restricted asset's verifier string
+
+**Signature**
+
+  .. function:: blockchain.asset.verifier_string.subscribe(asset)
+  .. versionadded:: 1.11
+
+  *asset*
+
+    The name of the restricted asset as an ascii compliant string.
+
+**Result**
+
+  The same as `blockchain.asset.verifier_string`
+
+**Notifications**
+
+  The client will receive a notification when the result of `blockchain.asset.verifier_string` changes.
+  Its signature is
+
+    .. function:: blockchain.asset.verifier_string.subscribe(asset, result)
+       :noindex:
+
+blockchain.asset.restricted_associations.subscribe
+===============================
+
+Subscribe to restricted assets that have this qualifier in their
+verifier string.
+
+**Signature**
+
+  .. function:: blockchain.asset.restricted_associations.subscribe(asset)
+  .. versionadded:: 1.11
+
+  *asset*
+
+    The name of the qualifier asset as an ascii compliant string.
+
+**Result**
+
+  The :ref:`status <qualifier_restricted_status>` of the qualifier asset.
+
+**Notifications**
+
+  The client will receive a notification when the :ref:`status <qualifier_restricted_status>` of the qualifier
+  changes.  Its signature is
+
+    .. function:: blockchain.asset.restricted_associations.subscribe(asset, status)
+       :noindex:
+
+blockchain.tag.qualifier.unsubscribe
+=================================
+
+Unsubscribe from a qualifier asset, preventing future notifications if its :ref:`status
+<qualifier_tags_status>` changes.
+
+**Signature**
+
+  .. function:: blockchain.tag.qualifier.unsubscribe(asset)
+  .. versionadded:: 1.11
+
+  *asset*
+
+    The name of the asset as an ascii compliant string.
+
+**Result**
+
+  Returns :const:`True` if the asset was subscribed to, otherwise :const:`False`.
+  Note that :const:`False` might be returned even for something subscribed to earlier,
+  because the server can drop subscriptions in rare circumstances.
+
+blockchain.tag.h160.unsubscribe
+=================================
+
+Unsubscribe from an `h160`, preventing future notifications if its :ref:`status
+<h160_tags_status>` changes.
+
+**Signature**
+
+  .. function:: blockchain.tag.h160.unsubscribe(h160)
+  .. versionadded:: 1.11
+
+  *h160*
+
+    The h160 of a public key as a hex string
+
+**Result**
+
+  Returns :const:`True` if the `h160` was subscribed to, otherwise :const:`False`.
+  Note that :const:`False` might be returned even for something subscribed to earlier,
+  because the server can drop subscriptions in rare circumstances.
+
+blockchain.asset.broadcasts.unsubscribe
+=================================
+
+Unsubscribe from an asset, preventing future notifications if its :ref:`status
+<broadcast_messages_status>` changes.
+
+**Signature**
+
+  .. function:: blockchain.asset.broadcasts.unsubscribe(asset)
+  .. versionadded:: 1.11
+
+  *asset*
+
+    The name of the asset as an ascii compliant string.
+
+**Result**
+
+  Returns :const:`True` if the asset was subscribed to, otherwise :const:`False`.
+  Note that :const:`False` might be returned even for something subscribed to earlier,
+  because the server can drop subscriptions in rare circumstances.
+
+blockchain.asset.is_frozen.unsubscribe
+=================================
+
+Unsubscribe from a restricted asset, preventing future notifications if its 
+frozen status changes.
+
+**Signature**
+
+  .. function:: blockchain.asset.is_frozen.unsubscribe(asset)
+  .. versionadded:: 1.11
+
+  *asset*
+
+    The name of the restricted asset as an ascii compliant string.
+
+**Result**
+
+  Returns :const:`True` if the asset was subscribed to, otherwise :const:`False`.
+  Note that :const:`False` might be returned even for something subscribed to earlier,
+  because the server can drop subscriptions in rare circumstances.
+
+blockchain.asset.verifier_string.unsubscribe
+=================================
+
+Unsubscribe from a restricted asset, preventing future notifications if its 
+verifier string changes.
+
+**Signature**
+
+  .. function:: blockchain.asset.verifier_string.unsubscribe(asset)
+  .. versionadded:: 1.11
+
+  *asset*
+
+    The name of the restricted asset as an ascii compliant string.
+
+**Result**
+
+  Returns :const:`True` if the asset was subscribed to, otherwise :const:`False`.
+  Note that :const:`False` might be returned even for something subscribed to earlier,
+  because the server can drop subscriptions in rare circumstances.
+
+blockchain.asset.restricted_associations.unsubscribe
+=================================
+
+Unsubscribe from a qualifier asset, preventing future notifications if its :ref:`status
+<qualifier_restricted_status>` changes.
+
+**Signature**
+
+  .. function:: blockchain.asset.restricted_associations.unsubscribe(asset)
+  .. versionadded:: 1.11
+
+  *asset*
+
+    The name of the qualifier asset as an ascii compliant string.
+
+**Result**
+
+  Returns :const:`True` if the asset was subscribed to, otherwise :const:`False`.
+  Note that :const:`False` might be returned even for something subscribed to earlier,
+  because the server can drop subscriptions in rare circumstances.
+
+blockchain.tag.check
 ========================================
 
 Returns a dictionary with information regarding a tagged address's h160.
 
 **Signature**
 
-    .. function:: blockchain.asset.check_tag(h160, asset)
+    .. function:: blockchain.tag.check(h160, asset)
+    .. versionchanged:: 1.11
+      renamed function
     .. versionadded:: 1.10
 
     *h160*
@@ -37,14 +358,16 @@ Returns a dictionary with information regarding a tagged address's h160.
       "tx_pos": 1
     }
 
-blockchain.asset.all_tags
+blockchain.tag.h160.list
 ========================================
 
 Returns a dictionary with information regarding all of the tags associated with a h160.
 
 **Signature**
 
-    .. function:: blockchain.asset.all_tags(h160)
+    .. function:: blockchain.tag.h160.list(h160)
+    .. versionchanged:: 1.11
+      renamed function
     .. versionadded:: 1.10
 
     *h160*
@@ -99,14 +422,16 @@ Returns a dictionary with information regarding whether a restricted asset is gl
       "tx_pos": 1
     }
 
-blockchain.asset.validator_string
+blockchain.asset.verifier_string
 ========================================
 
 Returns a dictionary with information about a restricted asset's qualifications
 
 **Signature**
 
-    .. function:: blockchain.asset.validator_string(asset)
+    .. function:: blockchain.asset.verifier_string(asset)
+    .. versionchanged:: 1.11
+      renamed function
     .. versionadded:: 1.10
 
     *asset*
@@ -285,12 +610,18 @@ Return the confirmed and unconfirmed asset balances of a :ref:`script hash
 
 **Signature**
 
-  .. function:: blockchain.scripthash.get_asset_balance(scripthash)
+  .. function:: blockchain.scripthash.get_asset_balance(scripthash, asset=None)
+  .. versionchanged:: 1.11
+     *asset* parameter added
   .. versionadded:: 1.8
 
   *scripthash*
 
     The script hash as a hexadecimal string.
+
+  *asset*
+
+    An asset name or list of asset names to filter the result
 
 **Result**
 
@@ -312,19 +643,26 @@ Return the confirmed and unconfirmed asset balances of a :ref:`script hash
     }
   }
 
-blockchain.scripthash.listassets
+blockchain.scripthash.listassetunspents
 =================================
 
 Return an ordered list of asset UTXOs sent to a script hash.
 
 **Signature**
 
-  .. function:: blockchain.scripthash.listassets(scripthash)
+  .. function:: blockchain.scripthash.listassetunspents(scripthash, asset=None)
+  .. versionchanged:: 1.11
+     *asset* parameter added
+     function renamed
   .. versionadded:: 1.8
 
   *scripthash*
 
     The script hash as a hexadecimal string.
+
+  *asset*
+
+    An asset name or list of asset names to filter the result
 
 **Result**
 
@@ -459,8 +797,6 @@ Return metadata associated with a certain asset.
         }
   }
 
-.. _subscribed:
-
 blockchain.asset.subscribe
 ===============================
 
@@ -491,7 +827,7 @@ blockchain.asset.unsubscribe
 =================================
 
 Unsubscribe from an asset, preventing future notifications if its :ref:`status
-<status>` changes.
+<asset_status>` changes.
 
 **Signature**
 
@@ -1484,6 +1820,10 @@ Return a list of features and services supported by the server.
 
     Strings that are the minimum and maximum Electrum protocol
     versions this server speaks.  Example: "1.1".
+
+  * *protocol_bad*
+
+    A list of protocol version strings that are not supported
 
   * *pruning*
 

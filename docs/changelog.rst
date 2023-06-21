@@ -13,6 +13,10 @@
    If you see messages in your logs about truncated messages whilst syncing, you may need to
    increase the timeout (in seconds) further.
 
+Version 1.11.0 RVN (20 JUN 2023)
+
+* Added subscriptions to various asset events
+
 Version 1.10.0 RVN (12 JAN 2021)
 ============================
 
