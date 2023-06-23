@@ -23,7 +23,7 @@ from electrumx.lib.hash import hash_to_hex_str, hex_str_to_hash
 from electrumx.lib.script import OpCodes, ScriptError, Script
 from electrumx.lib.tx import read_tx
 from electrumx.lib.util import DataParser, class_logger, chunks, base_encode
-from electrumx.server.db import UTXO, ASSET
+from electrumx.server.db import UTXO
 
 
 class OPPushDataGeneric:
@@ -133,10 +133,6 @@ class MemPoolAPI(ABC):
         '''
 
     @abstractmethod
-    async def lookup_assets(self, prevouts):
-        pass
-
-    @abstractmethod
     async def on_mempool(self, touched, height, assets,
                          tag_qualifiers_touched, tag_h160_touched, broadcasts_asset_touched,
                          freezes_asset_touched, verifier_string_asset_touched, restricted_qualifier_touched):
@@ -180,7 +176,7 @@ class MemPool(object):
         self.tx_to_h160_tags: Dict[bytes, Set[bytes]] = defaultdict(set)
 
         # asset -> dict [ txid, (data, expr, tx_pos) ]
-        self.broadcasts: Dict[str, Dict[bytes, Tuple[bytes, int, int]]] = defaultdict(dict)
+        self.broadcasts: Dict[str, Dict[bytes, Tuple[bytes, int | None, int]]] = defaultdict(dict)
         self.tx_to_broadcast: Dict[bytes, Set[str]] = defaultdict(set)
 
         # asset -> dict [ txid, (tx_pox, flag) ]
@@ -212,15 +208,15 @@ class MemPool(object):
         while True:
             mempool_size = sum(tx.size for tx in self.txs.values()) / 1_000_000
             self.logger.info(f'{len(self.txs):,d} txs {mempool_size:.2f} MB '
-                             f'touching {len(self.hashXs):,d} addresses, '
-                             f'{len(self.asset_creates):,d} asset creations, '
-                             f'{len(self.asset_reissues):,d} asset reissues, '
-                             f'{len(self.qualifier_tags):,d} qualifier tags, '
-                             f'{len(self.h160_tags):,d} h160s tagged, '
-                             f'{len(self.broadcasts):,d} broadcasts, '
-                             f'{len(self.freezes):,d} freezes, '
-                             f'{len(self.verifiers):,d} verifier string updates, '
-                             f'{len(self.qualifier_associations):,d} qualifier associations'
+                             f'touching {len(self.hashXs):,d} addresses'
+                             #f'{len(self.asset_creates):,d} asset creations, '
+                             #f'{len(self.asset_reissues):,d} asset reissues, '
+                             #f'{len(self.qualifier_tags):,d} qualifier tags, '
+                             #f'{len(self.h160_tags):,d} h160s tagged, '
+                             #f'{len(self.broadcasts):,d} broadcasts, '
+                             #f'{len(self.freezes):,d} freezes, '
+                             #f'{len(self.verifiers):,d} verifier string updates, '
+                             #f'{len(self.qualifier_associations):,d} qualifier associations'
                              )
             await sleep(self.log_status_secs)
             await synchronized_event.wait()
@@ -330,11 +326,11 @@ class MemPool(object):
             tx.in_pairs = tuple(in_pairs)
             # Avoid negative fees if dealing with generation-like transactions
             # because some in_parts would be missing
-            tx.fee = max(0, (sum((v if not is_asset else 0) for _, v, is_asset, _ in tx.in_pairs) -
-                             sum((v if not is_asset else 0) for _, v, is_asset, _ in tx.out_pairs)))
+            tx.fee = max(0, (sum((v if not asset else 0) for _, v, asset in tx.in_pairs) -
+                             sum((v if not asset else 0) for _, v, asset in tx.out_pairs)))
             txs[tx_hash] = tx
 
-            for hashX, _value, _, _ in itertools.chain(tx.in_pairs, tx.out_pairs):
+            for hashX, _value, _ in itertools.chain(tx.in_pairs, tx.out_pairs):
                 touched.add(hashX)
                 hashXs[hashX].add(tx_hash)
             
@@ -479,8 +475,8 @@ class MemPool(object):
                 if not qualifier_associations[qa]:
                     qualifier_associations.pop(qa, None)
 
-            tx_hashXs = set(hashX for hashX, value, _, _ in tx.in_pairs)
-            tx_hashXs.update(hashX for hashX, value, _, _ in tx.out_pairs)
+            tx_hashXs = set(hashX for hashX, value, _ in tx.in_pairs)
+            tx_hashXs.update(hashX for hashX, value, _ in tx.out_pairs)
             for hashX in tx_hashXs:
                 hashXs[hashX].remove(tx_hash)
                 if not hashXs[hashX]:
@@ -553,7 +549,7 @@ class MemPool(object):
             to_hashX = self.coin.hashX_from_script
             read_tx_and_size = read_tx
             # hashx -> txid -> txpos -> (data, expirey)
-            maybe_broadcast = defaultdict(defaultdict(dict))  # type: Dict[bytes, Dict[bytes, Dict[int, Tuple[str, bytes, int]]]]
+            maybe_broadcast = defaultdict(lambda: defaultdict(dict))  # type: Dict[bytes, Dict[bytes, Dict[int, Tuple[str, bytes, int]]]]
             verifier_string = None
             verifier_string_pos = None
             restricted_asset = None
@@ -630,7 +626,7 @@ class MemPool(object):
                                 restricted_asset = asset_name
                                 restricted_asset_pos = vout_n
                             if asset_type == b'o'[0]:
-                                txout_tuple_list.append((hashX, 100_000_000, True, asset_name))
+                                txout_tuple_list.append((hashX, 100_000_000, asset_name))
                                 creates[asset_name] = {
                                     'sats_in_circulation': 100_000_000,
                                     'divisions': 0,
@@ -645,7 +641,7 @@ class MemPool(object):
                                 tx_to_create[tx_hash].add(asset_name)
                             else:
                                 value = int.from_bytes(asset_deserializer.read_bytes(8), 'little', signed=False)
-                                txout_tuple_list.append((hashX, value, True, asset_name))
+                                txout_tuple_list.append((hashX, value, asset_name))
                                 # Asset reissue chaining is not allowed. There may only be
                                 # one reissue in the mempool per asset name
                                 if asset_type == b'r'[0]:
@@ -700,13 +696,14 @@ class MemPool(object):
                                 elif asset_type == b't'[0]:
                                     if not asset_deserializer.is_finished():
                                         data = asset_deserializer.read_bytes(34)
+                                        expire_bytes = None
                                         if not asset_deserializer.is_finished():
                                             expire_bytes = asset_deserializer.read_bytes(8)
-                                        maybe_broadcast[hashX][tx_hash][vout_n] = (asset_name, data, int.from_bytes(expire_bytes, 'little'))
+                                        maybe_broadcast[hashX][tx_hash][vout_n] = (asset_name, data, int.from_bytes(expire_bytes, 'little') if expire_bytes else None)
                         except Exception:
-                            txout_tuple_list.append((hashX, value, False, None))
+                            txout_tuple_list.append((hashX, value, None))
                     else:
-                        txout_tuple_list.append((hashX, value, False, None))
+                        txout_tuple_list.append((hashX, value, None))
 
                 if restricted_asset and verifier_string:
                     verifiers[restricted_asset][tx_hash] = (verifier_string_pos, restricted_asset_pos, verifier_string)
@@ -734,16 +731,14 @@ class MemPool(object):
 
         utxos = []
 
-        for hX, v in await self.api.lookup_utxos(prevouts):
-            utxos.append((hX, v, False, None))
-
-        for hX, v, name in await self.api.lookup_assets(prevouts):
-            utxos.append((hX, v, True, name))
+        for hX, asset, v in await self.api.lookup_utxos(prevouts):
+            utxos.append((hX, v, asset))
             for txid, d in possible_broadcasts[hX].items():
-                for tx_pos, (asset, data, expiry) in d.items():
-                    broadcasts[asset][txid] = (data, expiry, tx_pos)
-                    tx_to_broadcast[txid].add(asset)
-
+                for tx_pos, (broadcast_asset, data, expiry) in d.items():
+                    if broadcast_asset == asset:
+                        broadcasts[asset][txid] = (data, expiry, tx_pos)
+                        tx_to_broadcast[txid].add(asset)
+            
         utxo_map = {prevout: utxo for prevout, utxo in zip(prevouts, utxos)}
 
         return self._accept_transactions(tx_map, utxo_map, touched, assets_touched,
@@ -766,37 +761,29 @@ class MemPool(object):
                 if not task.cancelled():
                     task.result()
 
-    async def asset_balance_delta(self, hashX, asset):
-        def is_asset_valid(db_asset):
-            if asset is None: return True
-            if isinstance(asset, Iterable):
-                return db_asset in asset
-            return db_asset == asset
-        
-        ret = defaultdict(int)
-        if hashX in self.hashXs:
-            for hash_ in self.hashXs[hashX]:
-                tx = self.txs[hash_]
-                for hX, v, is_asset, name in tx.in_pairs:
-                    if hX == hashX and is_asset and is_asset_valid(name):
-                        ret[name] -= v
-                for hX, v, is_asset, name in tx.out_pairs:
-                    if hX == hashX and is_asset and is_asset_valid(name):
-                        ret[name] += v
-
-        return ret
-
-    async def balance_delta(self, hashX):
+    async def balance_delta(self, hashX, asset) -> Dict[str | None, int]:
         '''Return the unconfirmed amount in the mempool for hashX.
 
         Can be positive or negative.
         '''
-        value = 0
+
+        def is_asset_valid(db_asset):
+            if asset is None or asset is False: return db_asset is None
+            elif asset is True: return True
+            if isinstance(asset, Iterable):
+                return db_asset in asset
+            return db_asset == asset
+        
+        value = defaultdict(int)
         if hashX in self.hashXs:
             for hash_ in self.hashXs[hashX]:
                 tx = self.txs[hash_]
-                value -= sum(v for h168, v, is_asset, _ in tx.in_pairs if h168 == hashX and not is_asset)
-                value += sum(v for h168, v, is_asset, _ in tx.out_pairs if h168 == hashX and not is_asset)
+                for h168, v, asset in tx.in_pairs:
+                    if h168 == hashX and is_asset_valid(asset):
+                        value[asset] -= v
+                for h168, v, asset in tx.out_pairs:
+                    if h168 == hashX and is_asset_valid(asset):
+                        value[asset] += v
         return value
 
     async def compact_fee_histogram(self):
@@ -825,37 +812,98 @@ class MemPool(object):
             result.append(MemPoolTxSummary(tx_hash, tx.fee, has_ui))
         return result
 
-    async def unordered_UTXOs(self, hashX):
+    async def unordered_UTXOs(self, hashX, asset):
         '''Return an unordered list of UTXO named tuples from mempool
         transactions that pay to hashX.
 
         This does not consider if any other mempool transactions spend
         the outputs.
         '''
-        utxos = []
-        for tx_hash in self.hashXs.get(hashX, ()):
-            tx = self.txs.get(tx_hash)
-            for pos, (hX, value, is_asset, _) in enumerate(tx.out_pairs):
-                if hX == hashX and not is_asset:
-                    utxos.append(UTXO(-1, pos, tx_hash, 0, value))
-        return utxos
 
-    async def unordered_ASSETs(self, hashX, asset):
         def is_asset_valid(db_asset):
-            if asset is None: return True
+            if asset is None or asset is False: return db_asset is None
+            elif asset is True: return True
             if isinstance(asset, Iterable):
                 return db_asset in asset
             return db_asset == asset
-        asset_outpints = []
+
+        utxos = []
         for tx_hash in self.hashXs.get(hashX, ()):
             tx = self.txs.get(tx_hash)
-            for pos, (hX, value, is_asset, name) in enumerate(tx.out_pairs):
-                if hX == hashX and is_asset and is_asset_valid(name):
-                    asset_outpints.append(ASSET(-1, pos, tx_hash, 0, name, value))
-        return asset_outpints
+            for pos, (hX, value, asset) in enumerate(tx.out_pairs):
+                if hX == hashX and is_asset_valid(asset):
+                    utxos.append(UTXO(-1, pos, tx_hash, 0, asset, value))
+        return utxos
 
     async def get_asset_creation_if_any(self, asset: str):
         return self.asset_creates.get(asset, None)
 
     async def get_asset_reissues_if_any(self, asset: str):
         return self.asset_reissues.get(asset, None)
+    
+    async def get_qualifier_tags(self, asset: str):
+        ret = {}
+        for txid, (h160, tx_pos, flag) in self.qualifier_tags[asset].items():
+            ret[h160.hex()] = {
+                'flag': flag,
+                'height': -1,
+                'tx_hash': hash_to_hex_str(txid),
+                'tx_pos': tx_pos
+            }
+        return ret
+    
+    async def get_h160_tags(self, h160: str):
+        ret = {}
+        for txid, (asset, tx_pos, flag) in self.h160_tags[h160].items():
+            ret[asset] = {
+                'flag': flag,
+                'height': -1,
+                'tx_hash': hash_to_hex_str(txid),
+                'tx_pos': tx_pos
+            }
+        return ret
+
+    async def get_broadcasts(self, asset: str):
+        ret = []
+        for txid, (data, expiry, tx_pos) in self.broadcasts[asset].items():
+            ret.append({
+                'tx_hash': hash_to_hex_str(txid),
+                'data': base_encode(data, 58),
+                'expiration': expiry,
+                'height': -1,
+                'tx_pos': tx_pos,
+            })
+        return ret
+    
+    async def is_frozen(self, asset: str):
+        for txid, (tx_pos, flag) in self.freezes[asset].items():
+            return {
+                'frozen': flag,
+                'height': -1,
+                'tx_hash': hash_to_hex_str(txid),
+                'tx_pos': tx_pos
+            }
+        return None
+
+    async def restricted_verifier(self, asset: str):
+        for txid, (qual_pos, res_pos, string) in self.verifiers[asset].items():
+            return {
+                'string': string,
+                'height': -1,
+                'tx_hash': hash_to_hex_str(txid),
+                'restricted_tx_pos': res_pos,
+                'qualifying_tx_pos': qual_pos
+            }
+        return None
+
+    async def restricted_assets_associated_with_qualifier(self, asset: str):
+        ret_val = {}
+        for txid, (qual_pos, res_pos, restricted_asset) in self.qualifier_associations[asset].items():
+            ret_val[restricted_asset] = {
+                'associated': True,
+                'height': -1,
+                'tx_hash': hash_to_hex_str(txid),
+                'restricted_tx_pos': res_pos,
+                'qualifying_tx_pos': qual_pos
+            }
+        return ret_val

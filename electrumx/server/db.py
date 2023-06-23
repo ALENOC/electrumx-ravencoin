@@ -16,7 +16,7 @@ import time
 from array import array
 from bisect import bisect_right
 from collections import namedtuple
-from typing import Iterable
+from typing import Iterable, Set
 
 import attr
 from aiorpcx import run_in_thread, sleep
@@ -31,8 +31,7 @@ from electrumx.lib.util import (
 from electrumx.server.history import History
 from electrumx.server.storage import db_class
 
-ASSET = namedtuple("ASSET", "tx_num tx_pos tx_hash height name value")
-UTXO = namedtuple("UTXO", "tx_num tx_pos tx_hash height value")
+UTXO = namedtuple("UTXO", "tx_num tx_pos tx_hash height name value")
 
 
 @attr.s(slots=True)
@@ -44,12 +43,13 @@ class FlushData(object):
     undo_infos = attr.ib()
     adds = attr.ib()
     deletes = attr.ib()
+    # Asset Ids
+    asset_to_id = attr.ib()
+    outpoint_to_asset_id = attr.ib()
+    asset_id_deletes = attr.ib()
     # Assets
-    asset_adds = attr.ib()
-    asset_deletes = attr.ib()
     asset_meta_adds = attr.ib()
     asset_meta_reissues = attr.ib()
-    asset_undo_infos = attr.ib()
     asset_meta_undos = attr.ib()
     asset_meta_deletes = attr.ib()
 
@@ -100,7 +100,7 @@ class DB:
     it was shutdown uncleanly.
     '''
 
-    DB_VERSIONS = [8]
+    DB_VERSIONS = [0]
 
     class DBError(Exception):
         '''Raised on general DB errors generally indicating corruption.'''
@@ -171,11 +171,12 @@ class DB:
                         f'{self.coin.NAME} {self.coin.NET}'.encode())
         else:
             self.logger.info(f'opened UTXO DB (for sync: {for_sync})')
-        self.read_utxo_state()
 
         # Asset DB
         self.asset_db = self.db_class('asset', for_sync)
         self.asset_info_db = self.db_class('asset_info', for_sync)
+
+        self.read_utxo_state()
 
         # Then history DB
         self.state.flush_count = self.history.open_db(self.db_class, for_sync,
@@ -239,9 +240,9 @@ class DB:
         assert not flush_data.deletes
         assert not flush_data.undo_infos
 
-        assert not flush_data.asset_adds
-        assert not flush_data.asset_deletes
-        assert not flush_data.asset_undo_infos
+        assert not flush_data.asset_to_id
+        assert not flush_data.outpoint_to_asset_id
+        assert not flush_data.asset_id_deletes
 
         assert not flush_data.asset_meta_adds
         assert not flush_data.asset_meta_reissues
@@ -364,23 +365,22 @@ class DB:
 
     def flush_asset_info_db(self, flush_data: FlushData):
         start_time = time.monotonic()
-        adds = len(flush_data.asset_meta_adds)
+        adds = len(flush_data.asset_meta_adds) // 2
         reissues = len(flush_data.asset_meta_reissues)
 
         with self.asset_info_db.write_batch() as batch:
-            # Assets will be upper case so undo key b'u' is ok; we don't need to prefix normal entries with anything
             batch_delete = batch.delete
             for key in flush_data.asset_meta_deletes:
-                batch_delete(key)
+                batch_delete(b'm'+key)
             flush_data.asset_meta_deletes.clear()
 
             batch_put = batch.put
             for key, value in flush_data.asset_meta_reissues.items():
-                batch_put(key, value)
+                batch_put(b'm'+key, value)
             flush_data.asset_meta_reissues.clear()
 
             for key, value in flush_data.asset_meta_adds.items():
-                batch_put(key, value)
+                batch_put(b'm'+key, value)
             flush_data.asset_meta_adds.clear()
 
             self.flush_asset_meta_undos(batch_put, flush_data.asset_meta_undos)
@@ -394,24 +394,15 @@ class DB:
 
     def flush_asset_db(self, flush_data: FlushData):
         start_time = time.monotonic()
-        add_count = len(flush_data.asset_adds)
-        spend_count = len(flush_data.asset_deletes) // 2
-
         restricted_assets = len(flush_data.restricted_strings)
         freezes = len(flush_data.restricted_freezes)
         tags = len(flush_data.h160_qualifier)
         quals = len(flush_data.qualifier_associations)
-
         broadcasts = len(flush_data.asset_broadcasts)
+        asset_ids = len(flush_data.asset_to_id)
 
         with self.asset_db.write_batch() as batch:
-            # Spends
             batch_delete = batch.delete
-            for key in sorted(flush_data.asset_deletes):
-                batch_delete(key)
-            flush_data.asset_deletes.clear()
-
-            # Qualifiers
             for key in sorted(flush_data.h160_qualifier_deletes):
                 batch_delete(b't' + key)
                 h160_len = key[0]
@@ -434,21 +425,12 @@ class DB:
                 batch_delete(b'b' + key)
             flush_data.asset_broadcasts_del.clear()
 
+            for key in sorted(flush_data.asset_id_deletes):
+                batch_delete(key)
+            flush_data.asset_id_deletes.clear()
+
             # New Assets
             batch_put = batch.put
-            for key, value in flush_data.asset_adds.items():
-                # suffix = tx_idx + tx_num
-                # key tx_hash (32), tx_idx (4)
-                # value = hashx (11) + tx_num (5) + u64 sat val(8)+ namelen(1) + asset name
-                hashX = value[:HASHX_LEN]
-                suffix = key[-4:] + value[HASHX_LEN:5+HASHX_LEN]
-                batch_put(b'h' + key[:4] + suffix, hashX)
-                batch_put(b'u' + hashX + suffix, value[5+HASHX_LEN:])
-            flush_data.asset_adds.clear()
-
-            # New undo information
-            self.flush_undo_infos(batch_put, flush_data.asset_undo_infos)
-            flush_data.asset_undo_infos.clear()
 
             # New h160 tags
             for key, value in flush_data.h160_qualifier.items():
@@ -490,17 +472,25 @@ class DB:
             self.flush_asset_broadcast_undos(batch_put, flush_data.asset_broadcasts_undo)
             flush_data.asset_broadcasts_undo.clear()
 
+            for key, value in flush_data.outpoint_to_asset_id.items():
+                tx_numb = value[:5]
+                asset = value[5:]
+                idb = flush_data.asset_to_id.pop(asset)
+                assert idb
+                batch_put(b'I' + key[:4] + key[-4:] + tx_numb, asset)
+                batch_put(b'i' + asset, idb)
+                batch_put(b'a' + idb, asset)
+            flush_data.outpoint_to_asset_id.clear()
+
         if self.asset_db.for_sync:
             elapsed = time.monotonic() - start_time
-            self.logger.info(f'{add_count:,d} Asset adds, '
-                             f'{spend_count:,d} spends in, '
-                             f'{restricted_assets:,d} restricted assets modified, '
+            self.logger.info(f'{restricted_assets:,d} restricted assets modified, '
                              f'{freezes:,d} retricted asset freezes, '
                              f'{tags:,d} addresses tagged, '
                              f'{quals:,d} qualifier associations changed, '
                              f'{broadcasts:,d} messages broadcast, '
+                             f'{asset_ids:,d} asset ids created, '
                              f'{elapsed:.1f}s, committing...')
-
 
     def flush_utxo_db(self, flush_data):
         '''Flush the cached DB writes and UTXO set to the batch.'''
@@ -521,10 +511,13 @@ class DB:
             batch_put = batch.put
             for key, value in flush_data.adds.items():
                 # suffix = tx_idx + tx_num
-                hashX = value[:-13]
-                suffix = key[-4:] + value[-13:-8]
-                batch_put(b'h' + key[:4] + suffix, hashX)
-                batch_put(b'u' + hashX + suffix, value[-8:])
+                hashX = value[:-17]
+                suffix = key[-4:] + value[-17:-12]
+                asset_id = value[-4:]
+                assert len(hashX) == HASHX_LEN
+                assert len(asset_id) == 4
+                batch_put(b'h' + key[:4] + suffix, hashX + asset_id)
+                batch_put(b'u' + hashX + asset_id + suffix, value[-12:-4])
             flush_data.adds.clear()
 
             # New undo information
@@ -703,7 +696,7 @@ class DB:
         return b'U' + pack_be_uint32(height)
 
     def read_asset_broadcast_undo_info(self, height):
-        return self.asset_info_db.get(self.undo_key_broadcast(height))
+        return self.asset_db.get(self.undo_key_broadcast(height))
 
     def read_h160_tag_undo_info(self, height):
         return self.asset_db.get(self.undo_key_tag(height))
@@ -878,6 +871,9 @@ class DB:
         self.fs_tx_count = state.tx_count
         self.fs_asset_count = state.asset_count
 
+        last_asset_id = pack_le_uint32(state.asset_count)
+        assert self.asset_db.get(b'a' + last_asset_id) is None, 'asset id counter corrupted'
+
         # Log some stats
         self.logger.info('UTXO DB version: {:d}'.format(state.db_version))
         self.logger.info('coin: {}'.format(self.coin.NAME))
@@ -912,52 +908,57 @@ class DB:
         self.state.flush_count = count
         self.write_utxo_state(self.utxo_db)
 
-    async def all_assets(self, hashX, asset):
-        def is_asset_valid(db_asset):
-            if asset is None: return True
-            if isinstance(asset, Iterable):
-                return db_asset in asset
-            return db_asset == asset
-
-        def read_assets():
-            assets = []
-            assets_append = assets.append
-            prefix = b'u' + hashX
-            for db_key, db_value in self.asset_db.iterator(prefix=prefix):
-                tx_pos, = unpack_le_uint32(db_key[-9:-5])
-                tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
-                tx_hash, height = self.fs_tx_hash(tx_num)
-                value, = unpack_le_uint64(db_value[:8])
-                name = db_value[9:].decode('ascii')
-                if not is_asset_valid(name):
-                    continue
-                assets_append(ASSET(tx_num, tx_pos, tx_hash, height, name, value))
-            return assets
-
-        while True:
-            assets = await run_in_thread(read_assets)
-            if all(asset.tx_hash is not None for asset in assets):
-                return assets
-            self.logger.warning('all_assets: tx hash not found (reorg?), retrying...')
-            await sleep(0.25)
-
-    async def all_utxos(self, hashX):
+    async def all_utxos(self, hashX, asset):
         '''Return all UTXOs for an address sorted in no particular order.'''
+
+        if asset is False or asset is None:
+            asset_ids = [b'\xff\xff\xff\xff']
+        elif asset is True:
+            asset_ids = [b'']
+        elif isinstance(asset, str):
+            asset_id = self.asset_db.get(b'i' + asset.encode())
+            if not asset_id:
+                return []
+            asset_ids = [asset_id]
+        else:
+            asset_name_to_id = dict()
+            for asset_name in asset:
+                if asset_name is None:
+                    asset_name_to_id[None] = b'\xff\xff\xff\xff'
+                    continue
+                if asset_name in asset_name_to_id: continue
+                idb = self.asset_db.get(b'i' + asset_name.encode())
+                if not idb: continue
+                asset_name_to_id[asset_name] = idb
+            asset_ids = asset_name_to_id.values()
+
+        _looked_up_ids = dict()
+        def get_asset_from_id(asset_id: bytes) -> str | None:
+            if asset_id == b'\xff\xff\xff\xff': return None
+            asset = _looked_up_ids.get(asset_id)
+            if asset:
+                return asset
+            asset_b: bytes = self.asset_db.get(b'a' + asset_id)
+            assert asset_b
+            _looked_up_ids[asset_id] = asset_b.decode()
+            return _looked_up_ids[asset_id]
+
         def read_utxos():
             utxos = []
             utxos_append = utxos.append
-            # Key: b'u' + address_hashX + tx_idx + tx_num
+            # Key: b'u' + address_hashX + asset_id + tx_idx + tx_num
             # Value: the UTXO value as a 64-bit unsigned integer
-            prefix = b'u' + hashX
-            for db_key, db_value in self.utxo_db.iterator(prefix=prefix):
-                value, = unpack_le_uint64(db_value)
-                if value > 0:
-                    # Values of 0 will only be assets.
-                    # Get them from all_assets
-                    tx_pos, = unpack_le_uint32(db_key[-9:-5])
-                    tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
-                    tx_hash, height = self.fs_tx_hash(tx_num)
-                    utxos_append(UTXO(tx_num, tx_pos, tx_hash, height, value))
+            for asset_id in asset_ids:
+                prefix = b'u' + hashX + asset_id
+                for db_key, db_value in self.utxo_db.iterator(prefix=prefix):
+                    value, = unpack_le_uint64(db_value)
+                    if value > 0:
+                        tx_pos, = unpack_le_uint32(db_key[-9:-5])
+                        tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
+                        tx_hash, height = self.fs_tx_hash(tx_num)
+                        asset_id = db_key[-13:-9]
+                        asset_str = get_asset_from_id(asset_id)
+                        utxos_append(UTXO(tx_num, tx_pos, tx_hash, height, asset_str, value))
             return utxos
 
         while True:
@@ -968,11 +969,22 @@ class DB:
             await sleep(0.25)
 
     async def lookup_utxos(self, prevouts):
-        '''For each prevout, lookup it up in the DB and return a (hashX,
-        value) pair or None if not found.
+        '''For each prevout, lookup it up in the DB and return a (hashX, asset, value) pair or None if not found.
 
         Used by the mempool code.
         '''
+
+        _looked_up_ids = dict()
+        def get_asset_from_id(asset_id: bytes) -> str | None:
+            if asset_id == b'\xff\xff\xff\xff': return None
+            asset = _looked_up_ids.get(asset_id)
+            if asset:
+                return asset
+            asset_b: bytes = self.asset_db.get(b'a' + asset_id)
+            assert asset_b
+            _looked_up_ids[asset_id] = asset_b.decode()
+            return _looked_up_ids[asset_id]
+
         def lookup_hashXs():
             '''Return (hashX, suffix) pairs, or None if not found,
             for each prevout.
@@ -985,17 +997,19 @@ class DB:
                 prefix = b'h' + tx_hash[:4] + idx_packed
 
                 # Find which entry, if any, the TX_HASH matches.
-                for db_key, hashX in self.utxo_db.iterator(prefix=prefix):
+                for db_key, db_val in self.utxo_db.iterator(prefix=prefix):
+                    hashX = db_val[:HASHX_LEN]
+                    asset_id = db_val[HASHX_LEN:]
                     tx_num_packed = db_key[-5:]
                     tx_num, = unpack_le_uint64(tx_num_packed + bytes(3))
                     fs_hash, _height = self.fs_tx_hash(tx_num)
                     if fs_hash == tx_hash:
-                        return hashX, idx_packed + tx_num_packed
-                return None, None
+                        return hashX, asset_id, idx_packed + tx_num_packed
+                return None, None, None
             return [lookup_hashX(*prevout) for prevout in prevouts]
 
         def lookup_utxos(hashX_pairs):
-            def lookup_utxo(hashX, suffix):
+            def lookup_utxo(hashX, asset_id, suffix):
                 if not hashX:
                     # This can happen when the daemon is a block ahead
                     # of us and has mempool txs spending outputs from
@@ -1003,17 +1017,15 @@ class DB:
                     return None
                 # Key: b'u' + address_hashX + tx_idx + tx_num
                 # Value: the UTXO value as a 64-bit unsigned integer
-                key = b'u' + hashX + suffix
+                key = b'u' + hashX + asset_id + suffix
                 db_value = self.utxo_db.get(key)
                 if not db_value:
                     # This can happen if the DB was updated between
                     # getting the hashXs and getting the UTXOs
                     return None
                 value, = unpack_le_uint64(db_value)
-                # possible for assets
-                #if value == 0:
-                #    return None
-                return hashX, value
+                asset_str = get_asset_from_id(asset_id)
+                return hashX, asset_str, value
             return [lookup_utxo(*hashX_pair) for hashX_pair in hashX_pairs]
 
         hashX_pairs = await run_in_thread(lookup_hashXs)
@@ -1076,12 +1088,12 @@ class DB:
                 tx_num, = unpack_le_uint64(db_ret[4:9] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
                 flag = db_ret[-1]
-                ret_val_i = {}
-                ret_val_i['flag'] = True if flag != 0 else False
-                ret_val_i['height'] = height
-                ret_val_i['tx_hash'] = hash_to_hex_str(tx_hash)
-                ret_val_i['tx_pos'] = tx_pos
-                ret_val[h160_key[1:].hex()] = ret_val_i
+                ret_val[h160_key[1:].hex()] = {
+                    'flag': True if flag != 0 else False,
+                    'height': height,
+                    'tx_hash': hash_to_hex_str(tx_hash),
+                    'tx_pos': tx_pos
+                }
             return ret_val
         return await run_in_thread(lookup_quals)
 
@@ -1148,30 +1160,34 @@ class DB:
     async def lookup_messages(self, asset_name: bytes):
         def read_messages():
             prefix = b'b' + bytes([len(asset_name)]) + asset_name
-            ret_val = {}
+            ret_val = []
             for db_key, db_value in self.asset_db.iterator(prefix=prefix):
                 tx_pos, = unpack_le_uint32(db_key[-9:-5])
                 tx_num, = unpack_le_uint64(db_key[-5:] + bytes(3))
                 tx_hash, height = self.fs_tx_hash(tx_num)
                 hash = db_value[:34]
-                expire, = unpack_le_uint64(db_value[34:])
-                ret_val[hash_to_hex_str(tx_hash)] = {
+                expire = None
+                has_expire = db_value[34]
+                if has_expire == 1:
+                    expire, = unpack_le_uint64(db_value[35:])
+                ret_val.append({
+                    'tx_hash': hash_to_hex_str(tx_hash),
                     'data': base_encode(hash, 58),
                     'expiration': expire,
                     'height': height,
                     'tx_pos': tx_pos,
-                }
+                })
             return ret_val
         return await run_in_thread(read_messages)
 
     async def get_assets_with_prefix(self, prefix: bytes):
         def find_assets():
-            return [asset.decode('ascii') for asset, _ in self.asset_info_db.iterator(prefix=prefix)]
+            return [asset.decode('ascii') for asset, _ in self.asset_info_db.iterator(prefix=b'm'+prefix)]
         return await run_in_thread(find_assets)
 
     async def lookup_asset_meta(self, asset_name):
         def read_assets_meta():
-            b = self.asset_info_db.get(asset_name)
+            b = self.asset_info_db.get(b'm'+asset_name)
             if not b:
                 return {}
 
@@ -1236,55 +1252,3 @@ class DB:
 
             return to_ret
         return await run_in_thread(read_assets_meta)
-
-    async def lookup_assets(self, prevouts):
-        '''For each prevout, lookup it up in the DB and return a (hashX,
-        value) pair or None if not found.
-
-        Used by the mempool code.
-        '''
-        def lookup_hashXs():
-            '''Return (hashX, suffix) pairs, or None if not found,
-            for each prevout.
-            '''
-            def lookup_hashX(tx_hash, tx_idx):
-                idx_packed = pack_le_uint32(tx_idx)
-
-                # Key: b'h' + compressed_tx_hash + tx_idx + tx_num
-                # Value: hashX
-                prefix = b'h' + tx_hash[:4] + idx_packed
-
-                # Find which entry, if any, the TX_HASH matches.
-                for db_key, hashX in self.asset_db.iterator(prefix=prefix):
-                    tx_num_packed = db_key[-5:]
-                    tx_num, = unpack_le_uint64(tx_num_packed + bytes(3))
-                    fs_hash, _height = self.fs_tx_hash(tx_num)
-                    if fs_hash == tx_hash:
-                        return hashX, idx_packed + tx_num_packed
-                return None, None
-            return [lookup_hashX(*prevout) for prevout in prevouts]
-
-        def lookup_assets(hashX_pairs):
-            def lookup_asset(hashX, suffix):
-                if not hashX:
-                    # This can happen when the daemon is a block ahead
-                    # of us and has mempool txs spending outputs from
-                    # that new block
-                    return None
-                # Key: b'u' + address_hashX + tx_idx + tx_num
-                # Value: the UTXO value as a 64-bit unsigned integer
-                key = b'u' + hashX + suffix
-                db_value = self.asset_db.get(key)
-                if not db_value:
-                    # This can happen if the DB was updated between
-                    # getting the hashXs and getting the UTXOs
-                    return None
-
-                value, = unpack_le_uint64(db_value[:8])
-                name = db_value[9:].decode('ascii')
-
-                return hashX, value, name
-            return [lookup_asset(*hashX_pair) for hashX_pair in hashX_pairs]
-
-        hashX_pairs = await run_in_thread(lookup_hashXs)
-        return [i for i in await run_in_thread(lookup_assets, hashX_pairs) if i]

@@ -14,6 +14,8 @@ import math
 import os
 import ssl
 import time
+import re
+from typing import Iterable, Dict
 from collections import defaultdict
 from functools import partial
 from ipaddress import IPv4Address, IPv6Address
@@ -536,7 +538,7 @@ class SessionManager:
             if n is None:
                 lines.append('No history found')
             n = None
-            utxos = await db.all_utxos(hashX)
+            utxos = await db.all_utxos(hashX, True)
             for n, utxo in enumerate(utxos, start=1):
                 lines.append(f'UTXO #{n:,d}: tx_hash '
                              f'{hash_to_hex_str(utxo.tx_hash)} '
@@ -1259,9 +1261,9 @@ class ElectrumX(SessionBase):
 
     async def broadcasts_status(self, asset):
         data = await self.get_messages(asset)
-        s_data = sorted(data.items(), key=lambda x: (x[1]["height"], x[0], x[1]["tx_pos"]))
+        s_data = sorted(data, key=lambda x: (x["height"], x['tx_hash'], x[1]["tx_pos"]))
         if s_data:
-            status = ';'.join(f'{txid}:{d["height"]}{d["tx_pos"]}{d["data"]}{d["expiration"]}' for txid, d in s_data)
+            status = ';'.join(f'{d["tx_hash"]}:{d["height"]}{d["tx_pos"]}{d["data"]}{d["expiration"]}' for d in s_data)
             self.bump_cost(0.1 + len(status) * 0.00002)
             status = sha256(status.encode()).hex()
         else:
@@ -1322,33 +1324,30 @@ class ElectrumX(SessionBase):
             self.unsubscribe_hashX(hashX)
             return None
 
-    async def hashX_listassets(self, hashX, asset):
-        asset_outpoints = await self.db.all_assets(hashX, asset)
-        asset_outpoints = sorted(asset_outpoints)
-        asset_outpoints.extend(await self.mempool.unordered_ASSETs(hashX, asset))
-        self.bump_cost(1.0 + len(asset_outpoints) / 50)
-        spends = await self.mempool.potential_spends(hashX)
-
-        return [{'tx_hash': hash_to_hex_str(asset_outpoint.tx_hash),
-                 'tx_pos': asset_outpoint.tx_pos,
-                 'height': asset_outpoint.height,
-                 'name': asset_outpoint.name,
-                 'value': asset_outpoint.value}
-                for asset_outpoint in asset_outpoints
-                if (asset_outpoint.tx_hash, asset_outpoint.tx_pos) not in spends]
-
-    async def hashX_listunspent(self, hashX):
+    async def hashX_listunspent(self, hashX, asset):
         '''Return the list of UTXOs of a script hash, including mempool
         effects.'''
-        utxos = await self.db.all_utxos(hashX)
+
+        if isinstance(asset, str):
+            check_asset(asset)
+        elif isinstance(asset, Iterable):
+            for a in asset:
+                if a is None: continue
+                check_asset(a)
+        elif not isinstance(asset, bool):
+            raise RPCError(
+                BAD_REQUEST, f'asset must be a list, string, or boolean'
+            ) from None
+
+        utxos = await self.db.all_utxos(hashX, asset)
         utxos = sorted(utxos)
-        utxos.extend(await self.mempool.unordered_UTXOs(hashX))
+        utxos.extend(await self.mempool.unordered_UTXOs(hashX, asset))
         self.bump_cost(1.0 + len(utxos) / 50)
         spends = await self.mempool.potential_spends(hashX)
 
         return [{'tx_hash': hash_to_hex_str(utxo.tx_hash),
                  'tx_pos': utxo.tx_pos,
-                 'height': utxo.height, 'value': utxo.value}
+                 'height': utxo.height, 'asset': utxo.name, 'value': utxo.value}
                 for utxo in utxos
                 if (utxo.tx_hash, utxo.tx_pos) not in spends]
 
@@ -1434,32 +1433,39 @@ class ElectrumX(SessionBase):
             asset = asset[1:]
         return self.qualifier_validator_subs.discard(asset) is not None
 
-    async def get_balance(self, hashX):
-        utxos = await self.db.all_utxos(hashX)
-        confirmed = sum(utxo.value for utxo in utxos)
-        unconfirmed = await self.mempool.balance_delta(hashX)
-        self.bump_cost(1.0 + len(utxos) / 50)
-        return {'confirmed': confirmed, 'unconfirmed': unconfirmed}
-
-    async def get_asset_balance(self, hashX, asset):
-        asset_outpoints = await self.db.all_assets(hashX, asset)
+    async def get_balance(self, hashX, asset):
+        must_have_names = []
+        if isinstance(asset, str):
+            check_asset(asset)
+            must_have_names = [asset]
+        elif isinstance(asset, Iterable):
+            for a in asset:
+                if a is None: continue
+                check_asset(a)
+            must_have_names = asset
+        elif not isinstance(asset, bool):
+            raise RPCError(
+                BAD_REQUEST, f'asset must be a list, string, or boolean'
+            ) from None
+        utxos = await self.db.all_utxos(hashX, asset)
         confirmed = defaultdict(int)
-        for asset_outpoint in asset_outpoints:
-            confirmed[asset_outpoint.name] += asset_outpoint.value
-        unconfirmed = await self.mempool.asset_balance_delta(hashX, asset)
-        self.bump_cost(1.0 + len(asset_outpoints) / 50)
-        return {'confirmed': confirmed, 'unconfirmed': unconfirmed}
+        for utxo in utxos:
+            confirmed[utxo.name] += utxo.value
+        unconfirmed: Dict[str | None, int] = await self.mempool.balance_delta(hashX, asset)
+        self.bump_cost(1.0 + len(utxos) / 50)
+        include_names = asset is True or (asset is not False and not isinstance(asset, str))
+        if include_names:
+            return {(k or 'rvn'): {'confirmed': confirmed[k], 'unconfirmed': unconfirmed[k]} for k in set(confirmed.keys()).union(unconfirmed.keys()).union(must_have_names)}
+        else:
+            confirmed = 0 if len(confirmed) == 0 else confirmed[list(confirmed.keys())[0]]
+            unconfirmed = 0 if len(unconfirmed) == 0 else unconfirmed[list(unconfirmed.keys())[0]]
+            return {'confirmed': confirmed, 'unconfirmed': unconfirmed}
 
-
-    async def scripthash_get_balance(self, scripthash):
+    async def scripthash_get_balance(self, scripthash, asset=False):
         '''Return the confirmed and unconfirmed balance of a scripthash.'''
         hashX = scripthash_to_hashX(scripthash)
-        return await self.get_balance(hashX)
-
-    async def scripthash_get_asset_balance(self, scripthash, asset=None):
-        hashX = scripthash_to_hashX(scripthash)
-        return await self.get_asset_balance(hashX, asset)
-
+        return await self.get_balance(hashX, asset)
+    
     async def unconfirmed_history(self, hashX):
         # Note unconfirmed history is unordered in electrum-server
         # height is -1 if it has unconfirmed inputs, otherwise 0
@@ -1488,14 +1494,10 @@ class ElectrumX(SessionBase):
         hashX = scripthash_to_hashX(scripthash)
         return await self.unconfirmed_history(hashX)
 
-    async def scripthash_listunspent(self, scripthash):
+    async def scripthash_listunspent(self, scripthash, asset=False):
         '''Return the list of UTXOs of a scripthash.'''
         hashX = scripthash_to_hashX(scripthash)
-        return await self.hashX_listunspent(hashX)
-
-    async def scripthash_listassets(self, scripthash, asset=None):
-        hashX = scripthash_to_hashX(scripthash)
-        return await self.hashX_listassets(hashX, asset)
+        return await self.hashX_listunspent(hashX, asset)
 
     async def scripthash_subscribe(self, scripthash):
         '''Subscribe to a script hash.
@@ -1832,12 +1834,12 @@ class ElectrumX(SessionBase):
     async def asset_get_meta(self, name: str):
         self.bump_cost(1.0)
         check_asset(name)
-        mempool_data = await self.session_mgr.mempool.get_asset_creation_if_any(name)
+        mempool_data = await self.mempool.get_asset_creation_if_any(name)
         if mempool_data:
             return mempool_data
         else:
-            saved_data = await self.session_mgr.db.lookup_asset_meta(name.encode('ascii'))
-            mempool_data = await self.session_mgr.mempool.get_asset_reissues_if_any(name)
+            saved_data = await self.db.lookup_asset_meta(name.encode('ascii'))
+            mempool_data = await self.mempool.get_asset_reissues_if_any(name)
             if mempool_data:
                 asset_data = {
                     'sats_in_circulation': saved_data['sats_in_circulation'] + mempool_data['sats_in_circulation'],
@@ -1880,6 +1882,8 @@ class ElectrumX(SessionBase):
         check_asset(name)
         ret = await self.db.lookup_messages(name.encode('ascii'))
         self.bump_cost(1.0 + len(ret) / 10)
+        ret += await self.mempool.get_broadcasts(name.encode('ascii'))
+        ret.sort(key=lambda x: x['height'])
         return ret
 
     async def is_qualified(self, h160: str, asset: str):
@@ -1892,6 +1896,9 @@ class ElectrumX(SessionBase):
         check_h160(h160)
         res = await self.db.qualifications_for_h160(bytes.fromhex(h160))
         self.bump_cost(1.0 + len(res) / 10)
+        mem_res = await self.mempool.get_h160_tags(h160)
+        for asset, d in mem_res.items():
+            res[asset] = d
         return res
 
     async def qualifications_for_qualifier(self, asset: str):
@@ -1899,15 +1906,24 @@ class ElectrumX(SessionBase):
         res = await self.db.qualifications_for_qualifier(asset)
         # This incurs 2 db lookups and is no longer contiguous
         self.bump_cost(2.0 + len(res))
+        mem_res = await self.mempool.get_qualifier_tags(asset)
+        for h160_h, d in mem_res.items():
+            res[h160_h] = d
         return res
 
     async def is_restricted_frozen(self, asset: str):
         check_asset(asset)
+        mem_res = await self.mempool.is_frozen(asset)
+        if mem_res:
+            return mem_res
         self.bump_cost(1.0)
         return await self.db.is_restricted_frozen(asset.encode('ascii'))
 
     async def get_restricted_string(self, asset: str):
         check_asset(asset)
+        mem_res = await self.mempool.restricted_verifier(asset)
+        if mem_res:
+            return mem_res
         self.bump_cost(1.0)
         return await self.db.get_restricted_string(asset.encode('ascii'))
 
@@ -1917,6 +1933,20 @@ class ElectrumX(SessionBase):
             asset = asset[1:]
         res = await self.db.lookup_qualifier_associations(asset.encode('ascii'))
         self.bump_cost(1.0 + len(res) / 10)
+        for res_asset in list(res.keys()):
+            res_d = await self.mempool.restricted_verifier(res_asset)
+            if not res_d: continue
+            if asset not in re.findall(r'([A-Z0-9_.]+)', res_d['string']):
+                res[res_asset] = {
+                    'associated': False,
+                    'height': -1,
+                    'tx_hash': res_d['tx_hash'],
+                    'restricted_tx_pos': res_d['restricted_tx_pos'],
+                    'qualifying_tx_pos': res_d['qualifying_tx_pos']
+                }
+        mem_res = await self.mempool.restricted_assets_associated_with_qualifier(asset)
+        for res_asset, d in mem_res.items():
+            res[res_asset] = d
         return res
 
     async def compact_fee_histogram(self):
@@ -1966,8 +1996,6 @@ class ElectrumX(SessionBase):
             'server.ping': self.ping,
             'server.version': self.server_version,
             'blockchain.scripthash.unsubscribe': self.scripthash_unsubscribe,
-            'blockchain.scripthash.get_asset_balance': self.scripthash_get_asset_balance,
-            'blockchain.scripthash.listassets': self.scripthash_listassets,
             'blockchain.asset.subscribe': self.asset_subscribe,
             'blockchain.asset.unsubscribe': self.asset_unsubscribe,
             'blockchain.asset.check_tag': self.is_qualified,
@@ -1982,7 +2010,6 @@ class ElectrumX(SessionBase):
 
             # 1.11
             'blockchain.asset.verifier_string': self.get_restricted_string,
-            'blockchain.scripthash.listassetunspents': self.scripthash_listassets,
             'blockchain.tag.check': self.is_qualified,
             'blockchain.tag.qualifier.list': self.qualifications_for_qualifier,
             'blockchain.tag.h160.list': self.qualifications_for_h160,

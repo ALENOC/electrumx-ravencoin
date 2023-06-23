@@ -251,10 +251,8 @@ New methods
 Changes
 -------
 
-  * :func:`blockchain.scripthash.listassets` and :func:`blockchain.scripthash.get_asset_balance` now
+  * :func:`blockchain.scripthash.listunspent` and :func:`blockchain.scripthash.get_balance` now
     include an optional parameter to filter assets
-
-  * :func:`blockchain.scripthash.listassets` renamed to :func:`blockchain.scripthash.listassetunspents`
 
   * :func:`blockchain.asset.check_tag` renamed to :func:`blockchain.tag.check`
 
@@ -263,3 +261,9 @@ Changes
   * :func:`blockchain.asset.validator_string` renamed to :func:`blockchain.asset.verifier_string`
 
   * :func:`server.features` now includes a unsupported protocol version list
+
+Removed methods
+---------------
+
+  * :func:`blockchain.scripthash.listassets`
+  * :func:`blockchain.scripthash.get_asset_balance`

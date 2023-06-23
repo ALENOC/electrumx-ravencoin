@@ -196,7 +196,6 @@ class Controller(ServerBase):
             notifications.mempool_hashes = daemon.mempool_hashes
             notifications.raw_transactions = daemon.getrawtransactions
             notifications.lookup_utxos = db.lookup_utxos
-            notifications.lookup_assets = db.lookup_assets
             MemPoolAPI.register(Notifications)
             mempool = MemPool(env, notifications)
 

@@ -15,6 +15,7 @@ import hashlib
 import logging
 import os
 import traceback
+from collections import defaultdict
 from datetime import datetime
 from asyncio import sleep
 from struct import error as struct_error
@@ -366,14 +367,9 @@ class BlockProcessor:
         self.db_deletes = []
 
         # Asset cache
-
-        # Same as utxo cache but for assets.
-        # All keys in this dict will also be in the
-        # utxo_cache because assets are normal tx's with no RVN value
-        self.asset_cache = {}
-        # Same as above.
-        self.asset_deletes = []
-        self.asset_undo_infos = []
+        self.asset_id_created_cache = {}
+        self.asset_id_cache = {}
+        self.asset_id_deletes = []
 
         # A dict of the asset name -> asset data
         self.asset_data_new = {}
@@ -545,9 +541,9 @@ class BlockProcessor:
         return FlushData(self.state, self.headers,
                          self.tx_hashes, self.undo_infos, self.utxo_cache,
                          self.db_deletes,
-                         self.asset_cache, self.asset_deletes,
+                         self.asset_id_cache, self.asset_id_created_cache, self.asset_id_deletes,
                          self.asset_data_new, self.asset_data_reissued,
-                         self.asset_undo_infos, self.asset_data_undo_infos, self.asset_data_deletes,
+                         self.asset_data_undo_infos, self.asset_data_deletes,
                          self.h160_qualified, self.h160_qualified_undo_infos, self.h160_qualified_deletes,
                          self.restricted_freezes, self.restricted_freezes_undo_infos, self.restricted_freezes_deletes,
                          self.restricted_strings, self.restricted_strings_undo_infos, self.restricted_strings_deletes,
@@ -573,8 +569,8 @@ class BlockProcessor:
         OnDiskBlock.daemon = self.daemon
 
         while True:
-            utxo_cache_size = len(self.utxo_cache) * 205
-            db_deletes_size = len(self.db_deletes) * 57
+            utxo_cache_size = len(self.utxo_cache) * 209
+            db_deletes_size = len(self.db_deletes) * 61
             hist_cache_size = self.db.history.unflushed_memsize()
             # Roughly ntxs * 32 + nblocks * 42
             tx_hash_size = ((self.state.tx_count - self.db.fs_tx_count) * 32
@@ -582,7 +578,6 @@ class BlockProcessor:
 
             # TODO Fix/add these approximations
             # These are average case approximations
-            asset_cache_size = len(self.asset_cache) * 235  # Added 30 bytes for the max name length
             asset_data_new_size = len(self.asset_data_new) * 160
             asset_data_reissue_size = len(self.asset_data_reissued) * 180
             asset_broadcast_size = len(self.asset_broadcast) * 170
@@ -603,7 +598,7 @@ class BlockProcessor:
             utxo_MB = (db_deletes_size + utxo_cache_size) // one_MB
             hist_MB = (hist_cache_size + tx_hash_size) // one_MB
             asset_MB = (asset_data_new_size + asset_data_reissue_size +
-                        asset_cache_size + asset_broadcast_size +
+                        asset_broadcast_size +
                         h160_quals_size + h160_quals_deletes +
                         restricted_freezes_size + restricted_freezes_deletes +
                         restricted_strings_size + restricted_strings_deletes +
@@ -653,31 +648,10 @@ class BlockProcessor:
         is_unspendable = (is_unspendable_genesis if block.height >= self.coin.GENESIS_ACTIVATION
                           else is_unspendable_legacy)
 
-        #(undo_info, asset_undo_info, asset_meta_undo_info,
-        # t2a_undo_info, freezes_undo_info, r2q_undo_info,
-        # asset_broadcast_undo_info) = self.advance_txs(block.transactions, is_unspendable)
-
-        #if height >= min_height:
-        #    self.undo_infos.append((undo_info, height))
-        #    self.asset_undo_infos.append((asset_undo_info, height))
-        #    self.asset_data_undo_infos.append((asset_meta_undo_info, height))
-        #    self.tag_to_address_undos.append((t2a_undo_info, height))
-        #    self.global_freezes_undos.append((freezes_undo_info, height))
-        #    self.restricted_to_qualifier_undos.append((r2q_undo_info, height))
-        #    self.asset_broadcast_undos.append((asset_broadcast_undo_info, height))
-        #    self.db.write_raw_block(block.raw, height)
-
-        #self.height = height
-        #self.headers.append(block.header)
-        #self.tip = self.coin.header_hash(block.header)
-
-        #await sleep(0)
-
         # Use local vars for speed in the loops
         state = self.state
         tx_hashes = []
         undo_info = []
-        asset_undo_info = []
         asset_meta_undo_info = []
 
         internal_h160_qualified_undo_infos = []
@@ -688,11 +662,10 @@ class BlockProcessor:
         asset_broadcast_undo_info = []
 
         tx_num = state.tx_count
-        asset_num = state.asset_count
+        asset_num: int = state.asset_count
         script_hashX = self.coin.hashX_from_script
         put_utxo = self.utxo_cache.__setitem__
 
-        put_asset = self.asset_cache.__setitem__
         put_asset_data_new = self.asset_data_new.__setitem__
         put_asset_data_reissued = self.asset_data_reissued.__setitem__
         put_asset_broadcast = self.asset_broadcast.__setitem__
@@ -717,10 +690,23 @@ class BlockProcessor:
             return self.qualifier_associations.pop(x, None)
         qualifier_associations_undo_infos_append = internal_qualifier_associations_undo_infos.append
 
+        def lookup_or_add_asset_id(txid: bytes, idx: bytes, tx_numb: bytes, asset: bytes, assert_created=True) -> bytes:
+            nonlocal asset_num
+            if asset in self.asset_id_cache:
+                return self.asset_id_cache[asset]
+            idb = self.db.asset_db.get(b'i' + asset)
+            if idb:
+                return idb
+            if assert_created:
+                raise ChainError(f'{asset} should already be created.')
+            idb = pack_le_uint32(asset_num)
+            self.asset_id_cache[asset] = idb
+            self.asset_id_created_cache[txid + idx] = tx_numb + asset
+            asset_num += 1
+            return idb
+
         spend_utxo = self.spend_utxo
-        spend_asset = self.spend_asset
         undo_info_append = undo_info.append
-        asset_undo_info_append = asset_undo_info.append
         asset_meta_undo_info_append = asset_meta_undo_info.append
         update_touched = self.touched.update
         hashXs_by_tx = []
@@ -737,9 +723,9 @@ class BlockProcessor:
             self.ok = False
             for tx, tx_hash in block.iter_txs():
                 hashXs = []
+                inputHashXs = defaultdict(set)
                 append_hashX = hashXs.append
                 tx_numb = to_le_uint64(tx_num)[:5]
-                is_asset = False
                 current_restricted_asset = None
                 current_qualifiers = []
                 current_restricted_string = None
@@ -750,10 +736,12 @@ class BlockProcessor:
                     if txin.is_generation():  # Don't spend block rewards
                         continue
                     cache_value = spend_utxo(bytes(txin.prev_hash), txin.prev_idx)
-                    asset_cache_value = spend_asset(bytes(txin.prev_hash), txin.prev_idx)
                     undo_info_append(cache_value)
-                    asset_undo_info_append(asset_cache_value)
-                    append_hashX(cache_value[:-13])
+                    hashX = cache_value[:-17]
+                    asset_id = cache_value[-4:]
+                    assert len(hashX) == HASHX_LEN
+                    append_hashX(hashX)
+                    inputHashXs[hashX].add(asset_id)
 
                 # Add the new UTXOs
                 for idx, txout in enumerate(tx.outputs):
@@ -766,12 +754,13 @@ class BlockProcessor:
                     # We need to check for:
                     # Bitcoin PUSHOPs
                     # Standard VARINTs
+                    # Just anything really
 
                     if len(txout.pk_script) == 0:
                         hashX = script_hashX(txout.pk_script)
                         append_hashX(hashX)
                         put_utxo(tx_hash + to_le_uint32(idx),
-                            hashX + tx_numb + to_le_uint64(txout.value))
+                            hashX + tx_numb + to_le_uint64(txout.value) + b'\xff\xff\xff\xff')
                         continue
 
                     # deserialize the script pubkey
@@ -783,7 +772,7 @@ class BlockProcessor:
                         hashX = script_hashX(txout.pk_script)
                         append_hashX(hashX)
                         put_utxo(tx_hash + to_le_uint32(idx),
-                                hashX + tx_numb + to_le_uint64(txout.value))
+                                hashX + tx_numb + to_le_uint64(txout.value) + b'\xff\xff\xff\xff')
                         if self.env.write_bad_vouts_to_file:
                             b = bytearray(tx_hash)
                             b.reverse()
@@ -822,7 +811,7 @@ class BlockProcessor:
                             hashX = script_hashX(txout.pk_script)
                             append_hashX(hashX)
                             put_utxo(tx_hash + to_le_uint32(idx),
-                                    hashX + tx_numb + to_le_uint64(txout.value))
+                                    hashX + tx_numb + to_le_uint64(txout.value) + b'\xff\xff\xff\xff')
                             if self.env.write_bad_vouts_to_file:
                                 b = bytearray(tx_hash)
                                 b.reverse()
@@ -834,14 +823,8 @@ class BlockProcessor:
                                     f.write('OPS : {}\n'.format(str(ops)))
                             continue
 
-                        if op_ptr > 0:
-                            # This script has OP_RVN_ASSET. Use everything before this for the script hash.
-                            # Get the raw script bytes ending ptr from the previous opcode.
-                            script_hash_end = ops[op_ptr - 1][1]
-                            hashX = script_hashX(txout.pk_script[:script_hash_end])
-                        elif op_ptr == 0:
+                        if op_ptr == 0:
                             # This is an asset tag
-
                             # continue is called after this block
 
                             idx = to_le_uint32(idx)
@@ -923,17 +906,18 @@ class BlockProcessor:
                             hashX = script_hashX(txout.pk_script)
                             append_hashX(hashX)
                             put_utxo(tx_hash + idx,
-                                hashX + tx_numb + to_le_uint64(txout.value))
+                                hashX + tx_numb + to_le_uint64(txout.value) + b'\xff\xff\xff\xff')
                             
                             continue
+
+                        if op_ptr > 0:
+                            # This script has OP_RVN_ASSET. Use everything before this for the script hash.
+                            # Get the raw script bytes ending ptr from the previous opcode.
+                            script_hash_end = ops[op_ptr - 1][1]
+                            hashX = script_hashX(txout.pk_script[:script_hash_end])
                         else:
                             # There is no OP_RVN_ASSET. Hash as-is.
                             hashX = script_hashX(txout.pk_script)
-
-                    # Add UTXO info to the database
-                    append_hashX(hashX)
-                    put_utxo(tx_hash + to_le_uint32(idx),
-                            hashX + tx_numb + to_le_uint64(txout.value))
 
                     # Now try and add asset info
                     def try_parse_asset(asset_deserializer: DataParser, second_loop=False):
@@ -949,9 +933,11 @@ class BlockProcessor:
                         if script_type == b'o':
                             # This is an ownership asset. It does not have any metadata.
                             # Just assign it with a value of 1
-                            put_asset(tx_hash + to_le_uint32(idx),
+                            asset_id = lookup_or_add_asset_id(tx_hash, to_le_uint32(idx), tx_numb, asset_name, False)
+                            append_hashX(hashX)
+                            put_utxo(tx_hash + to_le_uint32(idx),
                                     hashX + tx_numb + to_le_uint64(100_000_000) +
-                                    asset_name_len + asset_name)
+                                    asset_id)
 
                                 # (total sats: 8) 
                                 # (div amt: 1)
@@ -992,9 +978,12 @@ class BlockProcessor:
                                 put_asset_data_new(asset_name, sats + asset_data)  # Add meta for this asset
                                 asset_meta_undo_info_append(  # Set previous meta to null in case of roll back
                                     asset_name_len + asset_name + b'\0')
-                                put_asset(tx_hash + to_le_uint32(idx),
+                                
+                                asset_id = lookup_or_add_asset_id(tx_hash, to_le_uint32(idx), tx_numb, asset_name, False)
+                                append_hashX(hashX)
+                                put_utxo(tx_hash + to_le_uint32(idx),
                                         hashX + tx_numb + sats +
-                                        asset_name_len + asset_name)
+                                        asset_id)
                                 self.asset_touched.add(asset_name.decode('ascii'))
                             elif script_type == b'r':  # An asset re-issuance
                                 divisions = asset_deserializer.read_byte()
@@ -1007,7 +996,7 @@ class BlockProcessor:
                                     popped_from_new = False
                                     old_data = self.asset_data_reissued.get(asset_name, None)
                                 if not old_data:
-                                    old_data = self.db.asset_info_db.get(asset_name)
+                                    old_data = self.db.asset_info_db.get(b'm' + asset_name)
                                 assert old_data # If reissuing, we should have it
 
                                 # old_data structure:
@@ -1035,8 +1024,8 @@ class BlockProcessor:
 
 
                                 old_data_parser = DataParser(old_data)
-                                old_sats = int.from_bytes(old_data_parser.read_bytes(8), 'little')
-                                new_sats = int.from_bytes(sats, 'little')
+                                old_sats, = unpack_le_uint64(old_data_parser.read_bytes(8))
+                                new_sats, = unpack_le_uint64(sats)
 
                                 # How many outpoints we need to save
                                 have_old_div = False
@@ -1092,7 +1081,7 @@ class BlockProcessor:
                                 this_outpoint = to_le_uint32(idx) + tx_numb
                                 
                                 this_data = b''
-                                this_data += (total_sats.to_bytes(8, 'little'))
+                                this_data += pack_le_uint64(total_sats)
                                 this_data += (divisions)
                                 this_data += (reissuable)
                                 this_data += (b'\x01' if ipfs else b'\0')
@@ -1127,23 +1116,26 @@ class BlockProcessor:
                                     asset_name_len + asset_name +
                                     bytes([len(old_data)]) + old_data)
                                 
-                                put_asset(tx_hash + to_le_uint32(idx),
+                                asset_id = lookup_or_add_asset_id(tx_hash, to_le_uint32(idx), tx_numb, asset_name)
+                                append_hashX(hashX)
+                                put_utxo(tx_hash + to_le_uint32(idx),
                                         hashX + tx_numb + sats +
-                                        asset_name_len + asset_name)
+                                        asset_id)
                             elif script_type == b't':
-                                # Put DB functions at the end to prevent them from pushing before any errors
-                                put_asset(tx_hash + to_le_uint32(idx),
+                                asset_id = lookup_or_add_asset_id(tx_hash, to_le_uint32(idx), tx_numb, asset_name)
+                                append_hashX(hashX)
+                                put_utxo(tx_hash + to_le_uint32(idx),
                                         hashX + tx_numb + sats +
-                                        asset_name_len + asset_name)
+                                        asset_id)
 
                                 if not asset_deserializer.is_finished():
-                                    if (b'!' in asset_name or b'~' in asset_name) and hashX in hashXs:  # This hashX was also in the inputs; we are sending to ourself; this is a broadcast
+                                    if (b'!' in asset_name or b'~' in asset_name) and asset_id in inputHashXs[hashX]:
                                         if second_loop:
                                             if asset_deserializer.cursor + 34 <= asset_deserializer.length:
                                                 data = asset_deserializer.read_bytes(34)
-                                                timestamp = b'\0\0\0\0\0\0\0\0'
+                                                timestamp = b'\0'
                                                 if asset_deserializer.cursor + 8 <= asset_deserializer.length:
-                                                    timestamp = asset_deserializer.read_bytes(8)
+                                                    timestamp = b'\x01' + asset_deserializer.read_bytes(8)
                                                 # This is a message broadcast
                                                 put_asset_broadcast(
                                                     asset_name_len + asset_name + to_le_uint32(idx) + tx_numb, data + timestamp)
@@ -1152,9 +1144,9 @@ class BlockProcessor:
                                                 self.broadcast_touched.add(asset_name.decode())
                                         else:
                                             data = asset_deserializer.read_bytes(34)
-                                            timestamp = b'\0\0\0\0\0\0\0\0'
+                                            timestamp = b'\0'
                                             if not asset_deserializer.is_finished():
-                                                timestamp = asset_deserializer.read_bytes(8)
+                                                timestamp = b'\x01' + asset_deserializer.read_bytes(8)
                                             # This is a message broadcast
                                             put_asset_broadcast(asset_name_len + asset_name + to_le_uint32(idx) + tx_numb,
                                                                 data + timestamp)
@@ -1195,13 +1187,10 @@ class BlockProcessor:
 
                             asset_deserializer = DataParser(asset_script)
                             try_parse_asset(asset_deserializer)
-                            is_asset = True
                         except Exception:
                             try:
                                 try_parse_asset_iterative(txout.pk_script[ops[op_ptr][1]:])
-                                is_asset = True
                             except Exception as e:
-                                is_asset = False
                                 if self.env.write_bad_vouts_to_file:
                                     b = bytearray(tx_hash)
                                     b.reverse()
@@ -1213,6 +1202,14 @@ class BlockProcessor:
                                         f.write('OpCodes : {}\n'.format(str(ops)))
                                         f.write('Exception : {}\n'.format(repr(e)))
                                         f.write('Traceback : {}\n'.format(traceback.format_exc()))
+                                append_hashX(hashX)
+                                put_utxo(tx_hash + to_le_uint32(idx),
+                                    hashX + tx_numb + to_le_uint64(txout.value) + b'\xff\xff\xff\xff')
+                    else:
+                        append_hashX(hashX)
+                        put_utxo(tx_hash + to_le_uint32(idx),
+                            hashX + tx_numb + to_le_uint64(txout.value) + b'\xff\xff\xff\xff')
+
 
                 if current_restricted_asset and current_restricted_string:
                     res = current_restricted_asset  # type: bytes
@@ -1279,20 +1276,14 @@ class BlockProcessor:
                 update_touched(hashXs)
                 append_tx_hash(tx_hash)
                 tx_num += 1
-                if is_asset:
-                    asset_num += 1
 
-         # Do this first - it uses the prior state
+        # Do this first - it uses the prior state
         self.tx_hashes.append(b''.join(tx_hashes))
         self.db.history.add_unflushed(hashXs_by_tx, state.tx_count)
         self.db.tx_counts.append(tx_num)
 
-        # Assets aren't always in tx's... remove None types
-        asset_undo_info = [i for i in asset_undo_info if i]
-
         if block.height >= self.db.min_undo_height(self.daemon.cached_height()):
             self.undo_infos.append((undo_info, block.height))
-            self.asset_undo_infos.append((asset_undo_info, block.height))
             self.asset_data_undo_infos.append((asset_meta_undo_info, block.height))
             self.h160_qualified_undo_infos.append((internal_h160_qualified_undo_infos, block.height))
             self.restricted_freezes_undo_infos.append((internal_restricted_freezes_undo_infos, block.height))
@@ -1320,8 +1311,7 @@ class BlockProcessor:
                           else is_unspendable_legacy)
         
         undo_info = self.db.read_undo_info(block.height)
-        asset_undo_info = self.db.read_asset_undo_info(block.height)
-        if undo_info is None or asset_undo_info is None:
+        if undo_info is None:
             raise ChainError(f'no undo information found for height {block.height:,d}')
 
         data_parser = DataParser(self.db.read_asset_meta_undo_info(block.height))
@@ -1384,41 +1374,18 @@ class BlockProcessor:
                 self.qualifier_associations.__setitem__(qual_len + qual + restricted_len + restricted, idx_txnumb + flag)
 
         n = len(undo_info)
-        asset_n = len(asset_undo_info)
 
         # Use local vars for speed in the loops
         put_utxo = self.utxo_cache.__setitem__
         spend_utxo = self.spend_utxo
-        touched_add = self.touched.add        
-        undo_entry_len = 13 + HASHX_LEN
+        remove_asset_id = self.remove_asset_id
+        touched_add = self.touched.add
+        undo_entry_len = 17 + HASHX_LEN
 
         # n is our pointer.
         # Items in our list are ordered, but we want them backwards.
 
-        # Value of the asset cache is:
-        # tx_hash + u32 idx + HASHX + TX_NUMB + SATS IN U64 + 1 BYTE OF LEN + NAME
-        # 32 + 4 + HASHX_LEN BYTES + 5 BYTES + 8 BYTES + 1 BYTE + VAR BYTES
-        def find_asset_undo_len(max):
-            assert max <= len(asset_undo_info)
-            if max == 0:
-                return 0
-            else:
-                def val_len(ptr):
-                    name_len = asset_undo_info[ptr + 32 + 4 + HASHX_LEN + 5 + 8]
-                    return name_len + 32 + 4 + HASHX_LEN + 5 + 8 + 1
-
-                last_val_ptr = 0
-                while True:
-                    next_data = last_val_ptr + val_len(last_val_ptr)
-                    if next_data >= max:
-                        break
-                    last_val_ptr += val_len(last_val_ptr)
-                assert next_data == max
-                return max - last_val_ptr
-
-        assets = 0
-        put_asset = self.asset_cache.__setitem__
-        spend_asset = self.spend_asset
+        asset_ids = []
 
         count = 0
         with block as block:
@@ -1429,46 +1396,40 @@ class BlockProcessor:
                     # outputs - we didn't save those in the first place.
                     if is_unspendable(txout.pk_script):
                         continue
-
                     cache_value = spend_utxo(tx_hash, idx)
-
-                    # Since we add assets in the UTXO's normally, when backing up
-                    # Remove them in the spend.
-                    if spend_asset(tx_hash, idx):
-                        assets += 1
-
-                    # All assets will be in the normal utxo cache
-                    touched_add(cache_value[:-13])
+                    touched_add(cache_value[:-17])
+                    id = remove_asset_id(tx_hash, idx)
+                    if id is not None:
+                        asset_ids.append(id)
 
                 # Restore the inputs
                 for txin in reversed(tx.inputs):
-                    prev_idx_bytes = pack_le_uint32(txin.prev_idx)
-
                     if txin.is_generation():
                         continue
                     n -= undo_entry_len
                     undo_item = undo_info[n:n + undo_entry_len]
                     put_utxo(bytes(txin.prev_hash) + pack_le_uint32(txin.prev_idx), undo_item)
-                    touched_add(undo_item[:-13])
-
-                    asset_undo_entry_len = find_asset_undo_len(asset_n)
-                    new_asset_n = asset_n - asset_undo_entry_len
-                    if new_asset_n >= 0 and asset_undo_entry_len > 0:
-                        undo_item = asset_undo_info[new_asset_n:new_asset_n + asset_undo_entry_len]
-                        if undo_item[:32] == bytes(txin.prev_hash) and undo_item[32:36] == prev_idx_bytes:
-                            put_asset(bytes(txin.prev_hash) + prev_idx_bytes, undo_item[36:])
-                            asset_n = new_asset_n
+                    touched_add(undo_item[:-17])
                 count += 1
 
         assert n == 0
-        assert asset_n == 0
         
+        seen_ids = set()
+        min_id = None
+        for id in asset_ids:
+            assert id not in seen_ids, 'duplicate asset ids'
+            seen_ids.add(id)
+            if min_id is None or id < min_id:
+                min_id = id
+
         state = self.state
         state.height -= 1
         state.tip = self.coin.header_prevhash(block.header)
         state.chain_size -= block.size
         state.tx_count -= count
-        state.asset_count -= assets
+
+        assert min_id == state.asset_count - len(seen_ids), f'{min_id}, {state.asset_count}, {seen_ids}'
+        state.asset_count -= len(seen_ids)
 
         self.db.tx_counts.pop()
 
@@ -1552,8 +1513,11 @@ class BlockProcessor:
         candidates = {db_key: hashX for db_key, hashX
                       in self.db.utxo_db.iterator(prefix=prefix)}
 
-        for hdb_key, hashX in candidates.items():
+        for hdb_key, candidate_value in candidates.items():
             tx_num_packed = hdb_key[-5:]
+            hashX = candidate_value[:HASHX_LEN]
+            asset_id = candidate_value[HASHX_LEN:]
+            assert len(asset_id) == 4
 
             if len(candidates) > 1:
                 tx_num, = unpack_le_uint64(tx_num_packed + bytes(3))
@@ -1564,56 +1528,52 @@ class BlockProcessor:
 
             # Key: b'u' + address_hashX + tx_idx + tx_num
             # Value: the UTXO value as a 64-bit unsigned integer
-            udb_key = b'u' + hashX + hdb_key[-9:]
+            udb_key = b'u' + hashX + asset_id + hdb_key[-9:]
             utxo_value_packed = self.db.utxo_db.get(udb_key)
             if utxo_value_packed:
                 # Remove both entries for this UTXO
                 self.db_deletes.append(hdb_key)
                 self.db_deletes.append(udb_key)
-                return hashX + tx_num_packed + utxo_value_packed
-
+                return hashX + tx_num_packed + utxo_value_packed + asset_id
+           
         raise ChainError(f'UTXO {hash_to_hex_str(tx_hash)} / {tx_idx:,d} not found in "h" table')
 
-    def spend_asset(self, tx_hash, tx_idx):
-        # TODO: Find a way to make this faster
+    # Remove the assets that were created at this tx outpoint; return the id that was associated, if any
+    def remove_asset_id(self, tx_hash, tx_idx) -> Optional[int]:
         # Fast track is it being in the cache
         idx_packed = pack_le_uint32(tx_idx)
-        cache_value = self.asset_cache.pop(tx_hash + idx_packed, None)
+        cache_value = self.asset_id_created_cache.pop(tx_hash + idx_packed, None)
         if cache_value:
-            return tx_hash + idx_packed + cache_value
-
-        # Spend it from the DB.
-
-        # Key: b'h' + compressed_tx_hash + tx_idx + tx_num
-        # Value: hashX
-        prefix = b'h' + tx_hash[:4] + idx_packed
+            asset = cache_value[5:]
+            id = self.asset_id_cache.pop(asset, None)
+            assert id
+            id_num, = unpack_le_uint32(id)
+            return id_num
+        
+        prefix = b'I' + tx_hash[:4] + idx_packed
         candidates = {db_key: hashX for db_key, hashX
                       in self.db.asset_db.iterator(prefix=prefix)}
 
-        for hdb_key, hashX in candidates.items():
+        for hdb_key, asset in candidates.items():
             tx_num_packed = hdb_key[-5:]
 
             if len(candidates) > 1:
                 tx_num, = unpack_le_uint64(tx_num_packed + bytes(3))
-                # Assets are on txs
                 fs_hash, _height = self.db.fs_tx_hash(tx_num)
                 if fs_hash != tx_hash:
                     assert fs_hash is not None  # Should always be found
                     continue
-
-            # Key: b'u' + address_hashX + tx_idx + tx_num
-            # Value: the asset amt and name
-            udb_key = b'u' + hashX + hdb_key[-9:]
-            value = self.db.asset_db.get(udb_key)
-            if value:
-                # Remove both entries for this Asset
-                self.asset_deletes.append(hdb_key)
-                self.asset_deletes.append(udb_key)
-                return tx_hash + idx_packed + hashX + tx_num_packed + value
-
-        # Asset doesn't need to be found
-        # raise ChainError('UTXO {} / {:,d} not found in "h" table'
-        # .format(hash_to_hex_str(tx_hash), tx_idx))
+            
+            udb_key = b'i' + asset
+            asset_id = self.db.asset_db.get(udb_key)
+            if asset_id:
+                # Remove both entries for this UTXO
+                self.asset_id_deletes.append(hdb_key)
+                self.asset_id_deletes.append(udb_key)
+                self.asset_id_deletes.append(b'a' + asset_id)
+                id_num, = unpack_le_uint32(asset_id)
+                return id_num
+        return None
 
     async def on_caught_up(self):
         was_first_sync = self.state.first_sync

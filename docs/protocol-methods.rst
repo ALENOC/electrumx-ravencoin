@@ -586,113 +586,9 @@ Return the messages broadcast from a (message channel) asset broadcast.
 
 **Result**
 
-  A dictionary containing a history of all broadcasts made from this message
-  channel. The keys in this dictionary are txids. The values are the broadcast
+  A list containing a history of all broadcasts made from this message
+  channel sorted by height. The values are txid, the broadcast
   data, the transaction height, and position in the transactions of the broadcast.
-
-**Result Example**
-
-::
-
-  {
-    "d5948b8df75c2590bcf4cc2c73abccdfd13ad5afbe37f4445abcc0a048392782": {
-      "data": "Qme7ss3ARVgxv6rXqVPiikMJ8u2NLgmgszg13pYrDKEoiu",
-      "height": 1830170,
-      "tx_pos": 1
-    }
-  }
-
-blockchain.scripthash.get_asset_balance
-=======================================
-
-Return the confirmed and unconfirmed asset balances of a :ref:`script hash
-<script hashes>`.
-
-**Signature**
-
-  .. function:: blockchain.scripthash.get_asset_balance(scripthash, asset=None)
-  .. versionchanged:: 1.11
-     *asset* parameter added
-  .. versionadded:: 1.8
-
-  *scripthash*
-
-    The script hash as a hexadecimal string.
-
-  *asset*
-
-    An asset name or list of asset names to filter the result
-
-**Result**
-
-  A dictionary with keys `confirmed` and `unconfirmed`.  The value of
-  each is a dictionary with the key being the asset name and the value
-  being the appropriate balance in minimum coin units (satoshis).
-
-**Result Example**
-
-::
-
-  {
-    "confirmed": {
-      "asset1": 100000000,
-      "asset2": 200000000
-    },
-    "unconfirmed": {
-      "asset3": 300000000
-    }
-  }
-
-blockchain.scripthash.listassetunspents
-=================================
-
-Return an ordered list of asset UTXOs sent to a script hash.
-
-**Signature**
-
-  .. function:: blockchain.scripthash.listassetunspents(scripthash, asset=None)
-  .. versionchanged:: 1.11
-     *asset* parameter added
-     function renamed
-  .. versionadded:: 1.8
-
-  *scripthash*
-
-    The script hash as a hexadecimal string.
-
-  *asset*
-
-    An asset name or list of asset names to filter the result
-
-**Result**
-
-  A list of unspent asset outputs in blockchain order.  This function takes
-  the mempool into account.  Mempool transactions paying to the
-  address are included at the end of the list in an undefined order.
-  Any output that is spent in the mempool does not appear.  Each
-  output is a dictionary with the following keys:
-
-  * *height*
-
-    The integer height of the block the transaction was confirmed in.
-    ``0`` if the transaction is in the mempool.
-
-  * *tx_pos*
-
-    The zero-based index of the output in the transaction's list of
-    outputs.
-
-  * *tx_hash*
-
-    The output's transaction hash as a hexadecimal string.
-
-  * *name*
-
-    The asset's name
-
-  * *value*
-
-    The output's value in minimum coin units (satoshis).
 
 **Result Example**
 
@@ -700,18 +596,10 @@ Return an ordered list of asset UTXOs sent to a script hash.
 
   [
     {
-      "tx_pos": 0,
-      "value": 45318048,
-      "tx_hash": "9f2c45a12db0144909b5db269415f7319179105982ac70ed80d76ea79d923ebf",
-      "name": "asset1",
-      "height": 437146
-    },
-    {
-      "tx_pos": 0,
-      "value": 919195,
-      "tx_hash": "3d2290c93436a3e964cfc2f0950174d8847b1fbe3946432c4784e168da0f019f",
-      "name": "asset2",
-      "height": 441696
+      "tx_hash": "d5948b8df75c2590bcf4cc2c73abccdfd13ad5afbe37f4445abcc0a048392782",
+      "data": "Qme7ss3ARVgxv6rXqVPiikMJ8u2NLgmgszg13pYrDKEoiu",
+      "height": 1830170,
+      "tx_pos": 1
     }
   ]
 
@@ -1103,17 +991,27 @@ Return the confirmed and unconfirmed balances of a :ref:`script hash
 
 **Signature**
 
-  .. function:: blockchain.scripthash.get_balance(scripthash)
+  .. function:: blockchain.scripthash.get_balance(scripthash, asset=False)
   .. versionadded:: 1.1
 
   *scripthash*
 
     The script hash as a hexadecimal string.
 
+  *asset*
+
+    An optional value that can be: :const:`False` to return only the Ravencoin balance, :const:`True` to 
+    return all balances, an asset name to return the balance for the asset, or a list of assets to return
+    the balances for those assets (a value of null indicates Ravencoin outputs).
+
 **Result**
 
   A dictionary with keys `confirmed` and `unconfirmed`.  The value of
   each is the appropriate balance in minimum coin units (satoshis).
+
+  If more than one set of balances is to be returned, the result will
+  be a dictionary of asset names whose value is the above. Ravencoin values
+  will be denoted as "rvn".
 
 **Result Example**
 
@@ -1122,6 +1020,19 @@ Return the confirmed and unconfirmed balances of a :ref:`script hash
   {
     "confirmed": 103873966,
     "unconfirmed": 23684400
+  }
+
+::
+
+  {
+    "rvn": {
+      "confirmed": 103873966,
+      "unconfirmed": 23684400
+    },
+    "TEST": {
+      "confirmed": 1000000,
+      "unconfirmed": 0
+    }
   }
 
 blockchain.scripthash.get_history
@@ -1234,12 +1145,18 @@ Return an ordered list of UTXOs sent to a script hash.
 
 **Signature**
 
-  .. function:: blockchain.scripthash.listunspent(scripthash)
+  .. function:: blockchain.scripthash.listunspent(scripthash, asset=False)
   .. versionadded:: 1.1
 
   *scripthash*
 
     The script hash as a hexadecimal string.
+
+  *asset*
+
+    An optional value that can be: :const:`False` to return only Ravencoin outputs, :const:`True` to 
+    return all utxos, an asset name to return outputs for the asset, or a list of assets to return
+    outputs for those assets (a value of null indicates Ravencoin outputs).
 
 **Result**
 
@@ -1263,6 +1180,10 @@ Return an ordered list of UTXOs sent to a script hash.
 
     The output's transaction hash as a hexadecimal string.
 
+  * *asset*
+
+    The output's asset if any (can be null).
+
   * *value*
 
     The output's value in minimum coin units (satoshis).
@@ -1273,12 +1194,14 @@ Return an ordered list of UTXOs sent to a script hash.
 
   [
     {
+      "asset": null,
       "tx_pos": 0,
       "value": 45318048,
       "tx_hash": "9f2c45a12db0144909b5db269415f7319179105982ac70ed80d76ea79d923ebf",
       "height": 437146
     },
     {
+      "asset": "TEST",
       "tx_pos": 0,
       "value": 919195,
       "tx_hash": "3d2290c93436a3e964cfc2f0950174d8847b1fbe3946432c4784e168da0f019f",

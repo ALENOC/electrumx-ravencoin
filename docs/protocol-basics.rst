@@ -250,7 +250,7 @@ To calculate the `status` of the set of messages that have been broadcast by thi
 1. Sort the messages ordered by height, tie-breaking with transaction hash, tie-breaking with transaction position.
 
 2. For each message, concatenate the following: the height, and the transaction position,
-the associated data encoded in base58, and the expiration time or 0 if there is none.
+the associated data encoded in base58, and the expiration time if it exists.
 
 3. For each message concatenate the txid, ":" (colon), and the result of step `2`.
 
