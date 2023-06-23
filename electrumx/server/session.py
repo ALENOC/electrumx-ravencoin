@@ -15,7 +15,7 @@ import os
 import ssl
 import time
 import re
-from typing import Iterable, Dict
+from typing import Iterable, Dict, Optional
 from collections import defaultdict
 from functools import partial
 from ipaddress import IPv4Address, IPv6Address
@@ -1451,7 +1451,7 @@ class ElectrumX(SessionBase):
         confirmed = defaultdict(int)
         for utxo in utxos:
             confirmed[utxo.name] += utxo.value
-        unconfirmed: Dict[str | None, int] = await self.mempool.balance_delta(hashX, asset)
+        unconfirmed: Dict[Optional[str], int] = await self.mempool.balance_delta(hashX, asset)
         self.bump_cost(1.0 + len(utxos) / 50)
         include_names = asset is True or (asset is not False and not isinstance(asset, str))
         if include_names:

@@ -11,7 +11,7 @@ import math
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from typing import Callable, Dict, Sequence, Tuple, Set, Iterable
+from typing import Callable, Dict, Sequence, Tuple, Set, Iterable, Optional
 import re
 
 import attr
@@ -176,7 +176,7 @@ class MemPool(object):
         self.tx_to_h160_tags: Dict[bytes, Set[bytes]] = defaultdict(set)
 
         # asset -> dict [ txid, (data, expr, tx_pos) ]
-        self.broadcasts: Dict[str, Dict[bytes, Tuple[bytes, int | None, int]]] = defaultdict(dict)
+        self.broadcasts: Dict[str, Dict[bytes, Tuple[bytes, Optional[int], int]]] = defaultdict(dict)
         self.tx_to_broadcast: Dict[bytes, Set[str]] = defaultdict(set)
 
         # asset -> dict [ txid, (tx_pox, flag) ]
@@ -761,7 +761,7 @@ class MemPool(object):
                 if not task.cancelled():
                     task.result()
 
-    async def balance_delta(self, hashX, asset) -> Dict[str | None, int]:
+    async def balance_delta(self, hashX, asset) -> Dict[Optional[str], int]:
         '''Return the unconfirmed amount in the mempool for hashX.
 
         Can be positive or negative.
