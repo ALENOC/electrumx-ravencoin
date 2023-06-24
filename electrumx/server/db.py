@@ -16,7 +16,7 @@ import time
 from array import array
 from bisect import bisect_right
 from collections import namedtuple
-from typing import Iterable, Set
+from typing import Optional
 
 import attr
 from aiorpcx import run_in_thread, sleep
@@ -933,7 +933,7 @@ class DB:
             asset_ids = asset_name_to_id.values()
 
         _looked_up_ids = dict()
-        def get_asset_from_id(asset_id: bytes) -> str | None:
+        def get_asset_from_id(asset_id: bytes) -> Optional[str]:
             if asset_id == b'\xff\xff\xff\xff': return None
             asset = _looked_up_ids.get(asset_id)
             if asset:
@@ -975,7 +975,7 @@ class DB:
         '''
 
         _looked_up_ids = dict()
-        def get_asset_from_id(asset_id: bytes) -> str | None:
+        def get_asset_from_id(asset_id: bytes) -> Optional[str]:
             if asset_id == b'\xff\xff\xff\xff': return None
             asset = _looked_up_ids.get(asset_id)
             if asset:
