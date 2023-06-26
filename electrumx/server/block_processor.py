@@ -1428,7 +1428,10 @@ class BlockProcessor:
         state.chain_size -= block.size
         state.tx_count -= count
 
-        assert min_id == state.asset_count - len(seen_ids), f'{min_id}, {state.asset_count}, {seen_ids}'
+        if min_id is None:
+            assert len(seen_ids) == 0
+        else:
+            assert min_id == state.asset_count - len(seen_ids), f'{min_id}, {state.asset_count}, {seen_ids}'
         state.asset_count -= len(seen_ids)
 
         self.db.tx_counts.pop()

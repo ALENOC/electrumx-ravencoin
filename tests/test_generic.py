@@ -1,6 +1,6 @@
 import os
 from functools import partial
-from hashlib import sha256
+import hashlib
 
 class Storage(object):
     '''Abstract base class of the DB backend abstraction.'''
@@ -71,6 +71,51 @@ class LevelDB(Storage):
                                    sync=True)
 
 
+def hash_160(x: bytes) -> bytes:
+    try:
+        md = hashlib.new('ripemd160')
+        md.update(hashlib.sha256(x))
+        return md.digest()
+    except BaseException:
+        from . import ripemd
+        md = ripemd.new(hashlib.sha256(x))
+        return md.digest()
+
+__b58chars = b'123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+assert len(__b58chars) == 58
+
+
+def base_encode(v: bytes, base: int) -> str:
+    """ encode v, which is a string of bytes, to base58."""
+    if base not in (58,):
+        raise ValueError('not supported base: {}'.format(base))
+    chars = __b58chars
+    long_value = 0
+    for (i, c) in enumerate(v[::-1]):
+        long_value += (256 ** i) * c
+    result = bytearray()
+    while long_value >= base:
+        div, mod = divmod(long_value, base)
+        result.append(chars[mod])
+        long_value = div
+    result.append(chars[long_value])
+    # Bitcoin does a little leading-zero-compression:
+    # leading 0-bytes in the input become leading-1s
+    nPad = 0
+    for c in v:
+        if c == 0x00:
+            nPad += 1
+        else:
+            break
+    result.extend([chars[0]] * nPad)
+    result.reverse()
+    return result.decode('ascii')
+
+def hash160_to_b58_address(h160: bytes, addrtype: bytes) -> str:
+    s = addrtype + h160
+    s = s + hashlib.sha256(hashlib.sha256(s).digest()).digest()[0:4]
+    return base_encode(s, base=58)
+
 def main():
     LevelDB.import_module()
     os.chdir('/home/work/electrumx_db')
@@ -80,16 +125,21 @@ def main():
     #asset_info_db = LevelDB('asset_info', False)
 
     script = bytes.fromhex('76a914dda3d21797ff26cb8ae9a769bdc68cf4567f5bba88ac')
-    scripthash = sha256(script).digest()
+    scripthash = hashlib.sha256(script).digest()
     #print(bytes(reversed(scripthash)).hex())
     #return
 
-    prefix = b'b'
+    prefix = b'1\x04$'
     #prefix += scripthash[:11]
+
+    prefix = b't\x14\x03P\x8d\x13L\x10\x91HSk|\xbc1\x930D-_\xe4\xce\x04$RUN'
 
     for (key, value), _ in zip(asset_db.iterator(prefix=prefix), range(20)):
         print(f'{key=}')
         print(f'{value=}')
+
+    h160 = b'\x8e8mS\xfc\xf5\x92\xd5\x84\xd1\xa7\xfc\x01\xf0\xae\x9a\x8f\x8cc\xef'
+    #print(hash160_to_b58_address(h160, b'\x6f'))
 
 if __name__ == '__main__':
     main()
