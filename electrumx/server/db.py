@@ -526,10 +526,12 @@ class DB:
 
             if self.utxo_db.for_sync:
                 block_count = flush_data.state.height - self.state.height
+                asset_count = flush_data.state.asset_count - self.state.asset_count
                 tx_count = flush_data.state.tx_count - self.state.tx_count
                 size = (flush_data.state.chain_size - self.state.chain_size) / 1_000_000_000
                 elapsed = time.monotonic() - start_time
                 self.logger.info(f'flushed {block_count:,d} blocks size {size:.1f} GB with '
+                                 f'{asset_count:,d} assets, '
                                  f'{tx_count:,d} txs, {add_count:,d} UTXO adds, '
                                  f'{spend_count:,d} spends in '
                                  f'{elapsed:.1f}s, committing...')
