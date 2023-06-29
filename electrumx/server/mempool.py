@@ -390,6 +390,12 @@ class MemPool(object):
                                           freezes_asset_touched, verifier_string_asset_touched, restricted_qualifier_touched)
                 touched = set()
                 assets_touched = set()
+                tag_qualifiers_touched = set()
+                tag_h160_touched = set()
+                broadcasts_asset_touched = set() 
+                freezes_asset_touched = set()
+                verifier_string_asset_touched = set()
+                restricted_qualifier_touched = set()
             await sleep(self.refresh_secs)
 
     async def _process_mempool(self, all_hashes, touched, assets_touched, 
@@ -433,41 +439,41 @@ class MemPool(object):
 
             reissued_assets = tx_to_reissue.pop(tx_hash, set())
             for reissued_asset in reissued_assets:
-                reissues.pop(reissued_asset, None)
+                del reissues[reissued_asset]
 
             created_assets = tx_to_create.pop(tx_hash, set())
             for created_asset in created_assets:
-                creates.pop(created_asset, None)
+                del creates[created_asset]
 
             quals = tx_to_qualifier_tags.pop(tx_hash, set())
             for qual in quals:
                 qualifier_tags[qual].pop(tx_hash)
                 if not qualifier_tags[qual]:
-                    qualifier_tags.pop(qual)
+                    del qualifier_tags[qual]
 
             h160s = tx_to_h160_tags.pop(tx_hash, set())
             for h160 in h160s:
                 h160_tags[h160].pop(tx_hash)
                 if not h160_tags[h160]:
-                    h160_tags.pop(h160)
+                    del h160_tags[h160]
 
             broadcast = tx_to_broadcast.pop(tx_hash, set())
             for b in broadcast:
                 broadcasts[b].pop(tx_hash)
                 if not broadcasts[b]:
-                    broadcasts.pop(b, None)
+                    del broadcasts[b]
 
             freeze = tx_to_freeze.pop(tx_hash, set())
             for f in freeze:
                 freezes[f].pop(tx_hash)
                 if not freezes[f]:
-                    freezes.pop(f, None)
+                    del freezes[f]
 
             verifier = tx_to_verifier.pop(tx_hash, set())
             for v in verifier:
                 verifiers[v].pop(tx_hash)
                 if not verifiers[v]:
-                    verifiers.pop(v, None)
+                    del verifiers[v]
 
             qualifier_association = tx_to_qualifier_associations.pop(tx_hash, set())
             for qa in qualifier_association:
