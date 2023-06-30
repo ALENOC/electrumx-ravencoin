@@ -69,6 +69,7 @@ class Notifications(object):
             # come in, or we have not yet had a mempool update for the
             # new block height
             return
+        
         touched = tmp.pop(height, {})
         for old in [h for h in tmp if h <= height]:
             del tmp[old]

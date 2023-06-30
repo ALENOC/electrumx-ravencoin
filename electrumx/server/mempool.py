@@ -620,7 +620,8 @@ class MemPool(object):
                             flag = asset_portion_deserializer.read_boolean()
                             freezes[asset_name][tx_hash] = (vout_n, flag)
                             tx_to_freeze[tx_hash].add(asset_name)
-                    elif op_ptr < len(ops):
+                        txout_tuple_list.append((hashX, value, None))
+                    elif 0 < op_ptr:
                         try:
                             next_op = ops[op_ptr + 1]
                             asset_script = next_op[2]
@@ -632,7 +633,6 @@ class MemPool(object):
                                 restricted_asset = asset_name
                                 restricted_asset_pos = vout_n
                             if asset_type == b'o'[0]:
-                                txout_tuple_list.append((hashX, 100_000_000, asset_name))
                                 creates[asset_name] = {
                                     'sats_in_circulation': 100_000_000,
                                     'divisions': 0,
@@ -645,9 +645,9 @@ class MemPool(object):
                                     }
                                 }
                                 tx_to_create[tx_hash].add(asset_name)
+                                txout_tuple_list.append((hashX, 100_000_000, asset_name))
                             else:
                                 value = int.from_bytes(asset_deserializer.read_bytes(8), 'little', signed=False)
-                                txout_tuple_list.append((hashX, value, asset_name))
                                 # Asset reissue chaining is not allowed. There may only be
                                 # one reissue in the mempool per asset name
                                 if asset_type == b'r'[0]:
@@ -706,7 +706,11 @@ class MemPool(object):
                                         if not asset_deserializer.is_finished():
                                             expire_bytes = asset_deserializer.read_bytes(8)
                                         maybe_broadcast[hashX][tx_hash][vout_n] = (asset_name, data, int.from_bytes(expire_bytes, 'little') if expire_bytes else None)
-                        except Exception:
+                                txout_tuple_list.append((hashX, value, asset_name))
+                        except Exception as e:
+                            self.logger.warn(f'failed to parse asset in mempool, defaulting to standard hashX: {e}')
+                            hashX = to_hashX(txout.pk_script)
+                            value = txout.value
                             txout_tuple_list.append((hashX, value, None))
                     else:
                         txout_tuple_list.append((hashX, value, None))
@@ -718,6 +722,9 @@ class MemPool(object):
                     for qualifier in qualifiers:
                         qualifier_associations[qualifier][tx_hash] = (verifier_string_pos, restricted_asset_pos, restricted_asset)
                         tx_to_qualifier_associations[tx_hash].add(qualifier)
+                
+                assert len(txout_tuple_list) == len(tx.outputs)
+
                 txout_pairs = tuple(txout_tuple_list)
                 txs[tx_hash] = MemPoolTx(txin_pairs, None, txout_pairs,
                                          0, tx_size)

@@ -1120,7 +1120,7 @@ class ElectrumX(SessionBase):
         touched_h160_tags = h.intersection(self.h160_tag_subs)
         if touched_h160_tags:
             method = 'blockchain.tag.h160.subscribe'
-            for h160 in touched_qualifier_tags:
+            for h160 in touched_h160_tags:
                 h160_h = h160.hex()
                 status = await self.tags_for_h160_status(h160_h)
                 await self.send_notification(method, (h160_h, status))
@@ -1163,7 +1163,7 @@ class ElectrumX(SessionBase):
             es = '' if len(touched_qualifiers_that_are_in_verifiers) == 1 else 's'
             self.logger.info(f'notified of {len(touched_qualifiers_that_are_in_verifiers):,d} qualifier{es} in verifier strings')
 
-        touched = touched.intersection(self.hashX_subs)
+        touched = touched.intersection(self.hashX_subs.keys())
         if touched or (height_changed and self.mempool_statuses):
             changed = {}
 
