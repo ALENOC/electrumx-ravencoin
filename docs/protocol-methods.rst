@@ -9,12 +9,17 @@ Returns a dictionary with information regarding all of the tags associated with 
 
 **Signature**
 
-    .. function:: blockchain.tag.qualifier.list(asset)
+    .. function:: blockchain.tag.qualifier.list(asset, include_mempool=True)
     .. versionadded:: 1.11
 
     *asset*
 
       The name of the asset as an ascii compliant string.
+
+    *include_mempool*
+
+      Whether or not to overwrite information with relevant information from the mempool
+
 
 **Result**
 
@@ -59,7 +64,7 @@ Subscribe a qualifier asset's tags
 **Notifications**
 
   The client will receive a notification when the :ref:`status <qualifier_tags_status>` of the asset
-  changes.  Its signature is
+  changes. The status uses mempool tags. Its signature is
 
     .. function:: blockchain.asset.broadcasts.subscribe(asset, status)
        :noindex:
@@ -85,7 +90,7 @@ Subscribe an `h160`'s qualifications
 **Notifications**
 
   The client will receive a notification when the :ref:`status <h160_tags_status>` of the `h160`
-  changes.  Its signature is
+  changes. The status uses mempool tags. Its signature is
 
     .. function:: blockchain.tag.h160.subscribe(h160, status)
        :noindex:
@@ -132,7 +137,7 @@ Subscribe to a restricted asset's frozen status
 
 **Result**
 
-  The same as `blockchain.asset.is_frozen`
+  The same as `blockchain.asset.is_frozen` (using the mempool)
 
 **Notifications**
 
@@ -158,7 +163,7 @@ Subscribe to a restricted asset's verifier string
 
 **Result**
 
-  The same as `blockchain.asset.verifier_string`
+  The same as `blockchain.asset.verifier_string` (using the mempool)
 
 **Notifications**
 
@@ -190,7 +195,7 @@ verifier string.
 **Notifications**
 
   The client will receive a notification when the :ref:`status <qualifier_restricted_status>` of the qualifier
-  changes.  Its signature is
+  changes. The status uses mempool verifier strings. Its signature is
 
     .. function:: blockchain.asset.restricted_associations.subscribe(asset, status)
        :noindex:
@@ -365,7 +370,7 @@ Returns a dictionary with information regarding all of the tags associated with 
 
 **Signature**
 
-    .. function:: blockchain.tag.h160.list(h160)
+    .. function:: blockchain.tag.h160.list(h160, include_mempool=True)
     .. versionchanged:: 1.11
       renamed function
     .. versionadded:: 1.10
@@ -373,6 +378,11 @@ Returns a dictionary with information regarding all of the tags associated with 
     *h160*
 
       The h160 of a public key as a hex string
+
+    *include_mempool*
+
+      Whether or not to overwrite information with relevant information from the mempool
+
 
 **Result**
 
@@ -402,12 +412,17 @@ Returns a dictionary with information regarding whether a restricted asset is gl
 
 **Signature**
 
-    .. function:: blockchain.asset.is_frozen(asset)
+    .. function:: blockchain.asset.is_frozen(asset, include_mempool=True)
     .. versionadded:: 1.10
 
     *asset*
 
       A restricted asset as an ascii-compliant string
+
+    *include_mempool*
+
+      Whether or not to overwrite information with relevant information from the mempool
+
 
 **Result**
 
@@ -429,7 +444,7 @@ Returns a dictionary with information about a restricted asset's qualifications
 
 **Signature**
 
-    .. function:: blockchain.asset.verifier_string(asset)
+    .. function:: blockchain.asset.verifier_string(asset, include_mempool=True)
     .. versionchanged:: 1.11
       renamed function
     .. versionadded:: 1.10
@@ -437,6 +452,11 @@ Returns a dictionary with information about a restricted asset's qualifications
     *asset*
 
       A restricted asset as an ascii-compliant string
+
+    *include_mempool*
+
+      Whether or not to overwrite information with relevant information from the mempool
+
 
 **Result**
 
@@ -459,12 +479,18 @@ Returns a list of restricted assets of who's qualifing string contains the quali
 
 **Signature**
 
-    .. function:: blockchain.asset.restricted_associations(asset)
+    .. function:: blockchain.asset.restricted_associations(asset, include_mempool=True)
+    .. versionchanged:: 1.11
     .. versionadded:: 1.10
 
     *asset*
 
       A qualifying asset as an ascii-compliant string
+
+    *include_mempool*
+
+      Whether or not to overwrite information with relevant information from the mempool
+
 
 **Result**
 
@@ -610,13 +636,17 @@ Return metadata associated with a certain asset.
 
 **Signature**
 
-  .. function:: blockchain.asset.get_meta(asset)
-  .. versionchanged:: 1.10
+  .. function:: blockchain.asset.get_meta(asset, include_mempool=True)
+  .. versionchanged:: 1.11
   .. versionadded:: 1.8
 
   *asset*
 
     The name of the asset as an ascii compliant string.
+
+  *include_mempool*
+
+    Whether or not to overwrite information with relevant information from the mempool
 
 **Result**
 

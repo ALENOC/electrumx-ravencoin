@@ -262,6 +262,8 @@ Changes
 
   * :func:`server.features` now includes a unsupported protocol version list
 
+  * added `include_mempool` parameter to methods for replaceable, global asset data
+
 Removed methods
 ---------------
 

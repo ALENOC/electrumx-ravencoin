@@ -1831,16 +1831,16 @@ class ElectrumX(SessionBase):
             self.bump_cost(cost)
             return hash_to_hex_str(tx_hash)
 
-    async def asset_get_meta(self, name: str):
+    async def asset_get_meta(self, name: str, include_mempool=True):
         self.bump_cost(1.0)
         check_asset(name)
         mempool_data = await self.mempool.get_asset_creation_if_any(name)
-        if mempool_data:
+        if mempool_data and include_mempool:
             return mempool_data
         else:
             saved_data = await self.db.lookup_asset_meta(name.encode('ascii'))
             mempool_data = await self.mempool.get_asset_reissues_if_any(name)
-            if mempool_data:
+            if mempool_data and include_mempool:
                 asset_data = {
                     'sats_in_circulation': saved_data['sats_in_circulation'] + mempool_data['sats_in_circulation'],
                     'divisions': mempool_data['divisions'] if mempool_data['divisions'] != 0xff else saved_data['divisions'],
@@ -1892,61 +1892,66 @@ class ElectrumX(SessionBase):
         self.bump_cost(1.0)
         return await self.db.is_h160_qualified(bytes.fromhex(h160), asset.encode('ascii'))
 
-    async def qualifications_for_h160(self, h160: str):
+    async def qualifications_for_h160(self, h160: str, include_mempool=True):
         check_h160(h160)
         res = await self.db.qualifications_for_h160(bytes.fromhex(h160))
         self.bump_cost(1.0 + len(res) / 10)
-        mem_res = await self.mempool.get_h160_tags(h160)
-        for asset, d in mem_res.items():
-            res[asset] = d
+        if include_mempool:
+            mem_res = await self.mempool.get_h160_tags(h160)
+            for asset, d in mem_res.items():
+                res[asset] = d
         return res
 
-    async def qualifications_for_qualifier(self, asset: str):
+    async def qualifications_for_qualifier(self, asset: str, include_mempool=True):
         check_asset(asset)
         res = await self.db.qualifications_for_qualifier(asset)
         # This incurs 2 db lookups and is no longer contiguous
         self.bump_cost(2.0 + len(res))
-        mem_res = await self.mempool.get_qualifier_tags(asset)
-        for h160_h, d in mem_res.items():
-            res[h160_h] = d
+        if include_mempool:
+            mem_res = await self.mempool.get_qualifier_tags(asset)
+            for h160_h, d in mem_res.items():
+                res[h160_h] = d
         return res
 
-    async def is_restricted_frozen(self, asset: str):
+    async def is_restricted_frozen(self, asset: str, include_mempool=True):
         check_asset(asset)
-        mem_res = await self.mempool.is_frozen(asset)
-        if mem_res:
-            return mem_res
+        if include_mempool:
+            mem_res = await self.mempool.is_frozen(asset)
+            if mem_res:
+                return mem_res
         self.bump_cost(1.0)
         return await self.db.is_restricted_frozen(asset.encode('ascii'))
 
-    async def get_restricted_string(self, asset: str):
+    async def get_restricted_string(self, asset: str, include_mempool=True):
         check_asset(asset)
-        mem_res = await self.mempool.restricted_verifier(asset)
-        if mem_res:
-            return mem_res
+        if include_mempool:
+            mem_res = await self.mempool.restricted_verifier(asset)
+            if mem_res:
+                return mem_res
         self.bump_cost(1.0)
         return await self.db.get_restricted_string(asset.encode('ascii'))
 
-    async def lookup_qualifier_associations(self, asset: str):
+    async def lookup_qualifier_associations(self, asset: str, include_mempool=True):
         check_asset(asset)
         if asset[0] == '#':
             asset = asset[1:]
         res = await self.db.lookup_qualifier_associations(asset.encode('ascii'))
         self.bump_cost(1.0 + len(res) / 10)
-        for res_asset in list(res.keys()):
-            res_d = await self.mempool.restricted_verifier(res_asset)
-            if not res_d: continue
-            if asset not in re.findall(r'([A-Z0-9_.]+)', res_d['string']):
-                res[res_asset] = {
-                    'associated': False,
-                    'height': -1,
-                    'tx_hash': res_d['tx_hash'],
-                    'restricted_tx_pos': res_d['restricted_tx_pos'],
-                    'qualifying_tx_pos': res_d['qualifying_tx_pos']
-                }
-        mem_res = await self.mempool.restricted_assets_associated_with_qualifier(asset)
-        for res_asset, d in mem_res.items():
-            res[res_asset] = d
+        if include_mempool:
+            for res_asset in list(res.keys()):
+                res_d = await self.mempool.restricted_verifier(res_asset)
+                if not res_d: continue
+                if asset not in re.findall(r'([A-Z0-9_.]+)', res_d['string']):
+                    res[res_asset] = {
+                        'associated': False,
+                        'height': -1,
+                        'tx_hash': res_d['tx_hash'],
+                        'restricted_tx_pos': res_d['restricted_tx_pos'],
+                        'qualifying_tx_pos': res_d['qualifying_tx_pos']
+                    }
+            mem_res = await self.mempool.restricted_assets_associated_with_qualifier(asset)
+            for res_asset, d in mem_res.items():
+                res[res_asset] = d
         return res
 
     async def compact_fee_histogram(self):
