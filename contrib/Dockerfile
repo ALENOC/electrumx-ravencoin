@@ -8,9 +8,11 @@ WORKDIR /
 RUN apt-get update && \
         apt-get -y install python3 python3-pip python3-venv git cmake libleveldb-dev libssl-dev
 
-#cmake gcc libffi-dev build-essential python3.8 python3.8-dev python3-pip libleveldb-dev libssl-dev
-
 RUN useradd -ms /bin/bash electrumx
+
+RUN mkdir -p /db
+RUN chown electrumx /db
+
 USER electrumx
 WORKDIR /home/electrumx
 
@@ -23,12 +25,18 @@ RUN python3 -m pip install --upgrade pip
 ADD --chown=electrumx https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/archive/master.tar.gz .
 RUN ls -l
 RUN tar zxvf *.tar.gz
+RUN rm *.tar.gz
 
-RUN cd electrumx* && python3 -m pip install -r requirements.txt && python3 setup.py install
+WORKDIR /home/electrumx/electrumx-ravencoin-master
+RUN python3 -m pip install -r requirements.txt
+RUN python3 setup.py install
+WORKDIR /home/electrumx
+
+RUN rm -r electrumx-ravencoin-master
 
 ENV SERVICES="ssl://:50002,tcp://:50001,rpc://:8000"
 ENV COIN=Ravencoin
-ENV DB_DIRECTORY=home/electrumx/db
+ENV DB_DIRECTORY=/db
 ENV DAEMON_URL="http://username:password@hostname:port/"
 ENV ALLOW_ROOT=true
 ENV MAX_SEND=10000000
@@ -39,9 +47,10 @@ ENV EVENT_LOOP_POLICY=uvloop
 ENV SSL_CERTFILE="${DB_DIRECTORY}/ssl_cert/server.crt"
 ENV SSL_KEYFILE="${DB_DIRECTORY}/ssl_cert/server.key"
 
+# !!README!!
 # REQUIRED to connect with the larger electrumx ravencoin server network.
 # Full service://(IP/URL):PORT is REQUIRED
-# Example: 
+# Example:
 # env REPORT_SERVICES = ssl://rvn4lyfe.com:50002,tcp://rvn4lyfe.com:50001
 
 EXPOSE 8000
@@ -50,9 +59,7 @@ EXPOSE 50002
 
 VOLUME /db
 
-RUN mkdir -p "$DB_DIRECTORY" && ulimit -n 1048576
-
-#RUN grep -v "\$ENV::HOME/.rnd" /etc/ssl/openssl.cnf > tmpfile && mv tmpfile /etc/ssl/openssl.cnf
+RUN ulimit -n 1048576
 
 CMD if [ -d "$DB_DIRECTORY/ssl_cert/" ]; then \
         echo "SSL certs exist."; \
@@ -62,9 +69,7 @@ CMD if [ -d "$DB_DIRECTORY/ssl_cert/" ]; then \
         openssl genrsa -out server.key 2048 && \
         openssl req -new -key server.key -out server.csr -subj "/C=AU" && \
         openssl x509 -req -days 1825 -in server.csr -signkey server.key -out server.crt; \
-    fi && /usr/bin/python3 /usr/local/bin/electrumx_server
-
-#CMD ["/usr/bin/python3.8", "/usr/local/bin/electrumx_server"]
+    fi && electrumx_server
 
 # build it with eg.: `docker build -t electrumx .`
 # run it with eg.:
