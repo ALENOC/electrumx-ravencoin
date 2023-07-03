@@ -6,7 +6,7 @@ FROM debian:bookworm-slim
 WORKDIR /
 
 RUN apt-get update && \
-        apt-get -y install python3 python3-pip python3-venv git
+        apt-get -y install python3 python3-pip python3-venv git cmake libleveldb-dev libssl-dev
 
 #cmake gcc libffi-dev build-essential python3.8 python3.8-dev python3-pip libleveldb-dev libssl-dev
 
