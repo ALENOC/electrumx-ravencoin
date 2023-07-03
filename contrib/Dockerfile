@@ -1,22 +1,32 @@
 # example of Dockerfile that builds release of electrumx-ravencoin-1.11.0
 # ENV variables can be overrided on the `docker run` command
 
-FROM ubuntu:18.04
+FROM debian:bookworm-slim
 
 WORKDIR /
 
 RUN apt-get update && \
-        apt-get -y install cmake gcc libffi-dev build-essential python3.8 python3.8-dev python3-pip libleveldb-dev libssl-dev
+        apt-get -y install python3 python3-pip python3-venv
 
-RUN python3.8 -m pip install --upgrade pip
+#cmake gcc libffi-dev build-essential python3.8 python3.8-dev python3-pip libleveldb-dev libssl-dev
+
+RUN useradd -ms /bin/bash electrumx
+USER electrumx
+WORKDIR /home/electrumx
+
+ENV VIRTUAL_ENV=/home/electrumx/.venv
+RUN python3 -m venv $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+RUN python3 -m pip install --upgrade pip
 
 # Needed for MacOs
-RUN python3.8 -m pip install scikit-build 
+RUN python3 -m pip install scikit-build 
 
-ADD https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/archive/v1.11.0.tar.gz /
+ADD https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/archive/v1.11.0.tar.gz ~
 RUN tar zxvf *.tar.gz
 
-RUN cd /electrumx* && python3.8 -m pip install -r requirements.txt && python3.8 setup.py install
+RUN cd /electrumx* && python3 -m pip install -r requirements.txt && python3 setup.py install
 
 ENV SERVICES="ssl://:50002,tcp://:50001,rpc://:8000"
 ENV COIN=Ravencoin
@@ -54,7 +64,7 @@ CMD if [ -d "$DB_DIRECTORY/ssl_cert/" ]; then \
         openssl genrsa -out server.key 2048 && \
         openssl req -new -key server.key -out server.csr -subj "/C=AU" && \
         openssl x509 -req -days 1825 -in server.csr -signkey server.key -out server.crt; \
-    fi && /usr/bin/python3.8 /usr/local/bin/electrumx_server
+    fi && /usr/bin/python3 /usr/local/bin/electrumx_server
 
 #CMD ["/usr/bin/python3.8", "/usr/local/bin/electrumx_server"]
 
