@@ -7,8 +7,6 @@ version = electrumx.version.rsplit(' ', maxsplit=1)[-1]
 with open('requirements.txt', 'r') as f:
     requirements = f.read().splitlines()
 
-requirements = [i for i in requirements if "kawpow" not in i]
-
 setuptools.setup(
     name='electrumX',
     version=version,
@@ -17,7 +15,7 @@ setuptools.setup(
     install_requires=requirements,
     extras_require={
         'rocksdb': ['python-rocksdb>=0.6.9'],
-        'uvloop': ['uvloop>=0.14'],
+        'uvloop': ['uvloop>=0.17'],
     },
     packages=setuptools.find_packages(include=('electrumx*',)),
     description='ElectrumX Server',

@@ -6,7 +6,7 @@ FROM debian:bookworm-slim
 WORKDIR /
 
 RUN apt-get update && \
-        apt-get -y install python3 python3-pip python3-venv
+        apt-get -y install python3 python3-pip python3-venv git
 
 #cmake gcc libffi-dev build-essential python3.8 python3.8-dev python3-pip libleveldb-dev libssl-dev
 
@@ -20,17 +20,15 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 RUN python3 -m pip install --upgrade pip
 
-# Needed for MacOs
-RUN python3 -m pip install scikit-build 
-
-ADD https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/archive/v1.11.0.tar.gz ~
+ADD --chown=electrumx https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/archive/master.tar.gz .
+RUN ls -l
 RUN tar zxvf *.tar.gz
 
-RUN cd /electrumx* && python3 -m pip install -r requirements.txt && python3 setup.py install
+RUN cd electrumx* && python3 -m pip install -r requirements.txt && python3 setup.py install
 
 ENV SERVICES="ssl://:50002,tcp://:50001,rpc://:8000"
 ENV COIN=Ravencoin
-ENV DB_DIRECTORY=/db
+ENV DB_DIRECTORY=home/electrumx/db
 ENV DAEMON_URL="http://username:password@hostname:port/"
 ENV ALLOW_ROOT=true
 ENV MAX_SEND=10000000
@@ -38,8 +36,8 @@ ENV BANDWIDTH_UNIT_COST=50000
 ENV CACHE_MB=1000
 ENV EVENT_LOOP_POLICY=uvloop
 
-ENV SSL_CERTFILE=/db/ssl_cert/server.crt
-ENV SSL_KEYFILE=/db/ssl_cert/server.key
+ENV SSL_CERTFILE="${DB_DIRECTORY}/ssl_cert/server.crt"
+ENV SSL_KEYFILE="${DB_DIRECTORY}/ssl_cert/server.key"
 
 # REQUIRED to connect with the larger electrumx ravencoin server network.
 # Full service://(IP/URL):PORT is REQUIRED
