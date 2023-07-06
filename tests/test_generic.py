@@ -129,10 +129,11 @@ def main():
     #print(bytes(reversed(scripthash)).hex())
     #return
 
-    prefix = b'1\x04$'
+    prefix = b'iTEST_ASSET_MAIN/SUB#unique10'
+    prefix = b'a\x94\r\x00\x00'
     #prefix += scripthash[:11]
 
-    prefix = b't\x14\x03P\x8d\x13L\x10\x91HSk|\xbc1\x930D-_\xe4\xce\x04$RUN'
+    #prefix = b't\x14\x03P\x8d\x13L\x10\x91HSk|\xbc1\x930D-_\xe4\xce\x04$RUN'
 
     for (key, value), _ in zip(asset_db.iterator(prefix=prefix), range(20)):
         print(f'{key=}')

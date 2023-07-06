@@ -13,6 +13,7 @@ import ast
 import copy
 import os
 import time
+import pylru
 from array import array
 from bisect import bisect_right
 from collections import namedtuple
@@ -45,7 +46,7 @@ class FlushData(object):
     deletes = attr.ib()
     # Asset Ids
     asset_to_id = attr.ib()
-    outpoint_to_asset_id = attr.ib()
+    asset_to_id_undos = attr.ib()
     asset_id_deletes = attr.ib()
     # Assets
     asset_meta_adds = attr.ib()
@@ -141,6 +142,9 @@ class DB:
         self.tx_counts_file = util.LogicalFile('meta/txcounts', 2, 2000000)
         self.hashes_file = util.LogicalFile('meta/hashes', 4, 16000000)
 
+        self.asset_to_id_cache = pylru.lrucache(1000)
+        self.id_to_asset_cache = pylru.lrucache(1000)
+
     async def _read_tx_counts(self):
         if self.tx_counts is not None:
             return
@@ -228,7 +232,7 @@ class DB:
         return await self.header_mc.branch_and_root(length, height)
 
     # Flushing
-    def assert_flushed(self, flush_data):
+    def assert_flushed(self, flush_data: FlushData):
         '''Asserts state is fully flushed.'''
         assert flush_data.state.tx_count == self.fs_tx_count == self.state.tx_count
         assert flush_data.state.asset_count == self.fs_asset_count == self.state.asset_count
@@ -241,7 +245,7 @@ class DB:
         assert not flush_data.undo_infos
 
         assert not flush_data.asset_to_id
-        assert not flush_data.outpoint_to_asset_id
+        assert not flush_data.asset_to_id_undos
         assert not flush_data.asset_id_deletes
 
         assert not flush_data.asset_meta_adds
@@ -323,6 +327,9 @@ class DB:
                              f'since last flush: {size_per_sec_last / 1_000_000:.2f}')
             self.logger.info(f'sync time: {formatted_time(flush_data.state.sync_time)}  '
                              f'ETA: {formatted_time(eta)}')
+        else:
+            # Ravencoin has a hard reorg limit of 60; we don't need to keep anything else
+            self.clear_excess_undo_info(False)
 
         self.last_flush_state = flush_data.state.copy()
 
@@ -472,15 +479,13 @@ class DB:
             self.flush_asset_broadcast_undos(batch_put, flush_data.asset_broadcasts_undo)
             flush_data.asset_broadcasts_undo.clear()
 
-            for key, value in flush_data.outpoint_to_asset_id.items():
-                tx_numb = value[:5]
-                asset = value[5:]
-                idb = flush_data.asset_to_id.pop(asset)
-                assert idb
-                batch_put(b'I' + key[:4] + key[-4:] + tx_numb, asset)
+            for asset, idb in flush_data.asset_to_id.items():
                 batch_put(b'i' + asset, idb)
                 batch_put(b'a' + idb, asset)
-            flush_data.outpoint_to_asset_id.clear()
+            flush_data.asset_to_id.clear()
+
+            self.flush_asset_id_undos(batch_put, flush_data.asset_to_id_undos)
+            flush_data.asset_to_id_undos.clear()
 
         if self.asset_db.for_sync:
             elapsed = time.monotonic() - start_time
@@ -693,6 +698,9 @@ class DB:
     def undo_key_qual(self, height):
         return b'Q' + pack_be_uint32(height)
 
+    def undo_key_id(self, height):
+        return b'I' + pack_be_uint32(height)
+
     def undo_key(self, height):
         '''DB key for undo information at the given height.'''
         return b'U' + pack_be_uint32(height)
@@ -715,8 +723,8 @@ class DB:
     def read_asset_meta_undo_info(self, height):
         return self.asset_info_db.get(self.undo_key(height))
 
-    def read_asset_undo_info(self, height):
-        return self.asset_db.get(self.undo_key(height))
+    def read_asset_id_unfo_info(self, height):
+        return self.asset_db.get(self.undo_key_id(height))
 
     def read_undo_info(self, height):
         '''Read undo information from a file for the current height.'''
@@ -752,14 +760,46 @@ class DB:
             if len(undo_info) > 0:
                 batch_put(self.undo_key_meta(height), b''.join(undo_info))
 
-    
+    def flush_asset_id_undos(self, batch_put, undo_infos):
+        for undo_info, height in undo_infos:
+            if len(undo_info) > 0:
+                batch_put(self.undo_key_id(height), b''.join(undo_info))
 
     def flush_undo_infos(self, batch_put, undo_infos):
         '''undo_infos is a list of (undo_info, height) pairs.'''
         for undo_info, height in undo_infos:
             batch_put(self.undo_key(height), b''.join(undo_info))
 
-    def clear_excess_undo_info(self):
+    def clear_asset_undo_info(self, height: int, verbose=True):
+        keys = []
+        for key, _hist in self.asset_info_db.iterator(prefix=b'u'):
+            height, = unpack_be_uint32(key[-4:])
+            if height >= height:
+                break
+            keys.append(key)
+        if keys:
+            with self.asset_info_db.write_batch() as batch:
+                for key in keys:
+                    batch.delete(key)
+            if verbose:
+                self.logger.info(f'deleted {len(keys):,d} stale asset meta undo entries')
+
+        keys = []
+        for asset_prefix in [b'T', b'F', b'R', b'Q', b'B', b'I']:
+            for key, _hist in self.asset_db.iterator(prefix=asset_prefix):
+                height, = unpack_be_uint32(key[-4:])
+                if height >= height:
+                    break
+                keys.append(key)
+
+        if keys:
+            with self.asset_db.write_batch() as batch:
+                for key in keys:
+                    batch.delete(key)
+            if verbose:
+                self.logger.info(f'deleted {len(keys):,d} stale asset undo entries')
+
+    def clear_excess_undo_info(self, verbose=True):
         '''Clear excess undo info.  Only most recent N are kept.'''
         prefix = b'U'
         min_height = self.min_undo_height(self.state.height)
@@ -774,62 +814,10 @@ class DB:
             with self.utxo_db.write_batch() as batch:
                 for key in keys:
                     batch.delete(key)
-            self.logger.info(f'deleted {len(keys):,d} stale undo entries')
+            if verbose:
+                self.logger.info(f'deleted {len(keys):,d} stale undo entries')
 
-        keys = []
-        for key, _hist in self.asset_info_db.iterator(prefix=b'u'):
-            height, = unpack_be_uint32(key[-4:])
-            if height >= min_height:
-                break
-            keys.append(key)
-        if keys:
-            with self.asset_info_db.write_batch() as batch:
-                for key in keys:
-                    batch.delete(key)
-            self.logger.info(f'deleted {len(keys):,d} stale asset meta undo entries')
-
-        keys = []
-        for key, _hist in self.asset_db.iterator(prefix=prefix):
-            height, = unpack_be_uint32(key[-4:])
-            if height >= min_height:
-                break
-            keys.append(key)
-
-        for key, _hist in self.asset_db.iterator(prefix=b'T'):
-            height, = unpack_be_uint32(key[-4:])
-            if height >= min_height:
-                break
-            keys.append(key)
-
-        for key, _hist in self.asset_db.iterator(prefix=b'F'):
-            height, = unpack_be_uint32(key[-4:])
-            if height >= min_height:
-                break
-            keys.append(key)
-
-        for key, _hist in self.asset_db.iterator(prefix=b'R'):
-            height, = unpack_be_uint32(key[-4:])
-            if height >= min_height:
-                break
-            keys.append(key)
-
-        for key, _hist in self.asset_db.iterator(prefix=b'Q'):
-            height, = unpack_be_uint32(key[-4:])
-            if height >= min_height:
-                break
-            keys.append(key)
-
-        for key, _hist in self.asset_db.iterator(prefix=b'B'):
-            height, = unpack_be_uint32(key[-4:])
-            if height >= min_height:
-                break
-            keys.append(key)
-
-        if keys:
-            with self.asset_db.write_batch() as batch:
-                for key in keys:
-                    batch.delete(key)
-                self.logger.info(f'deleted {len(keys):,d} stale asset undo entries')
+        self.clear_asset_undo_info(min_height, verbose)
 
     # -- UTXO database
 
@@ -914,6 +902,24 @@ class DB:
         self.state.flush_count = count
         self.write_utxo_state(self.utxo_db)
 
+    def get_id_for_asset(self, asset: bytes) -> Optional[bytes]:
+        if asset in self.asset_to_id_cache:
+            return self.asset_to_id_cache[asset]
+        idb = self.asset_db.get(b'i' + asset, None)
+        if idb is not None:
+            self.asset_to_id_cache[asset] = idb
+            return idb
+        return None
+    
+    def get_asset_for_id(self, id: bytes) -> Optional[bytes]:
+        if id in self.id_to_asset_cache:
+            return self.id_to_asset_cache[id]
+        asset = self.asset_db.get(b'a' + id, None)
+        if asset is not None:
+            self.id_to_asset_cache[id] = asset
+            return asset
+        return None
+
     async def all_utxos(self, hashX, asset):
         '''Return all UTXOs for an address sorted in no particular order.'''
 
@@ -922,8 +928,8 @@ class DB:
         elif asset is True:
             asset_ids = [b'']
         elif isinstance(asset, str):
-            asset_id = self.asset_db.get(b'i' + asset.encode())
-            if not asset_id:
+            asset_id = self.get_id_for_asset(asset.encode())
+            if asset_id is None:
                 return []
             asset_ids = [asset_id]
         else:
@@ -933,21 +939,16 @@ class DB:
                     asset_name_to_id[None] = b'\xff\xff\xff\xff'
                     continue
                 if asset_name in asset_name_to_id: continue
-                idb = self.asset_db.get(b'i' + asset_name.encode())
-                if not idb: continue
+                idb = self.get_id_for_asset(asset_name.encode())
+                if idb is None: continue
                 asset_name_to_id[asset_name] = idb
             asset_ids = asset_name_to_id.values()
 
-        _looked_up_ids = dict()
         def get_asset_from_id(asset_id: bytes) -> Optional[str]:
             if asset_id == b'\xff\xff\xff\xff': return None
-            asset = _looked_up_ids.get(asset_id)
-            if asset:
-                return asset
-            asset_b: bytes = self.asset_db.get(b'a' + asset_id)
+            asset_b: bytes = self.get_asset_for_id(asset_id)
             assert asset_b
-            _looked_up_ids[asset_id] = asset_b.decode()
-            return _looked_up_ids[asset_id]
+            return asset_b.decode()
 
         def read_utxos():
             utxos = []
@@ -980,16 +981,11 @@ class DB:
         Used by the mempool code.
         '''
 
-        _looked_up_ids = dict()
         def get_asset_from_id(asset_id: bytes) -> Optional[str]:
             if asset_id == b'\xff\xff\xff\xff': return None
-            asset = _looked_up_ids.get(asset_id)
-            if asset:
-                return asset
-            asset_b: bytes = self.asset_db.get(b'a' + asset_id)
+            asset_b: bytes = self.get_asset_for_id(asset_id)
             assert asset_b
-            _looked_up_ids[asset_id] = asset_b.decode()
-            return _looked_up_ids[asset_id]
+            return asset_b.decode()
 
         def lookup_hashXs():
             '''Return (hashX, suffix) pairs, or None if not found,

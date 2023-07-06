@@ -230,12 +230,12 @@ class Ravencoin(Coin):
     KAWPOW_ACTIVATION_HEIGHT = 1219736
     KAWPOW_HEADER_SIZE = 120
     
-    CHAIN_SIZE = 20_156_386_851
-    CHAIN_SIZE_HEIGHT = 2_096_467
+    CHAIN_SIZE = 29_655_304_862
+    CHAIN_SIZE_HEIGHT = 2_873_312
     AVG_BLOCK_SIZE = 12_681
     
     RPC_PORT = 8766
-    REORG_LIMIT = 100
+    REORG_LIMIT = 60
     PEERS = [
         'rvn4lyfe.com t s',
         'rvn-dashboard.com s',
@@ -294,12 +294,11 @@ class RavencoinTestnet(Ravencoin):
     KAWPOW_ACTIVATION_HEIGHT = 231544
     KAWPOW_ACTIVATION_TIME = 1585159200
     
-    CHAIN_SIZE = 490_321_308
+    CHAIN_SIZE = 567_294_883
     CHAIN_SIZE_HEIGHT = 1_048_377
-    AVG_BLOCK_SIZE = 294
+    AVG_BLOCK_SIZE = 400
 
     RPC_PORT = 18766
-    REORG_LIMIT = 100
     PEERS = [
         "rvn4lyfe.com t50011 s50012",
     ]
