@@ -1049,8 +1049,6 @@ class DB:
                 ret_val['height'] = height
                 ret_val['tx_hash'] = hash_to_hex_str(tx_hash)
                 ret_val['tx_pos'] = tx_pos
-            else:
-                ret_val['flag'] = False
             return ret_val
         return await run_in_thread(lookup_h160)
 
@@ -1113,8 +1111,6 @@ class DB:
                 ret_val['height'] = height
                 ret_val['tx_hash'] = hash_to_hex_str(tx_hash)
                 ret_val['tx_pos'] = tx_pos
-            else:
-                ret_val['frozen'] = False
             return ret_val
         return await run_in_thread(lookup_restricted)
 
