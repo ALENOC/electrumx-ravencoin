@@ -701,6 +701,7 @@ class BlockProcessor:
             self.new_asset_ids[asset] = idb
             internal_asset_id_undos.append(idb)
             asset_num += 1
+            assert asset_num < 0xff_ff_ff_ff, 'max asset id reached'
             self.db.asset_to_id_cache[asset] = idb
             return idb
 
