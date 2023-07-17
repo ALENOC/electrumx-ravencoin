@@ -738,21 +738,22 @@ class MemPool(object):
         # return None - concurrent database updates happen - which is
         # relied upon by _accept_transactions. Ignore prevouts that are
         # generation-like.
-        prevouts = tuple(prevout for tx in tx_map.values()
+        prevouts = tuple((txid, prevout) for txid, tx in tx_map.items()
                          for prevout in tx.prevouts
                          if prevout[0] not in all_hashes)
 
         utxos = []
 
-        for hX, asset, v in await self.api.lookup_utxos(prevouts):
+        for prevout_txid, (hX, asset, v) in zip((x[0] for x in prevouts), await self.api.lookup_utxos((x[1] for x in prevouts))):
             utxos.append((hX, v, asset))
             for txid, d in possible_broadcasts[hX].items():
+                if prevout_txid != txid: continue
                 for tx_pos, (broadcast_asset, data, expiry) in d.items():
                     if broadcast_asset == asset:
                         broadcasts[asset][txid] = (data, expiry, tx_pos)
                         tx_to_broadcast[txid].add(asset)
-            
-        utxo_map = {prevout: utxo for prevout, utxo in zip(prevouts, utxos)}
+    
+        utxo_map = {prevout: utxo for prevout, utxo in zip((x[1] for x in prevouts), utxos)}
 
         return self._accept_transactions(tx_map, utxo_map, touched, assets_touched,
                                          tag_qualifiers_touched, tag_h160_touched, broadcasts_asset_touched,
