@@ -1261,7 +1261,7 @@ class ElectrumX(SessionBase):
 
     async def broadcasts_status(self, asset):
         data = await self.get_messages(asset)
-        s_data = sorted(data, key=lambda x: (x["height"], x['tx_hash'], x[1]["tx_pos"]))
+        s_data = sorted(data, key=lambda x: (x["height"], x['tx_hash'], x["tx_pos"]))
         if s_data:
             status = ';'.join(f'{d["tx_hash"]}:{d["height"]}{d["tx_pos"]}{d["data"]}{d["expiration"]}' for d in s_data)
             self.bump_cost(0.1 + len(status) * 0.00002)
