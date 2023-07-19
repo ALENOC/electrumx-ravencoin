@@ -762,7 +762,7 @@ class MemPool(object):
             hX, v, asset = tx.out_pairs[prev_index]
             for txid, d in possible_broadcasts[hX].items():
                 if this_txid != txid: continue
-                for tx_pos, (broadcast_asset, data, exp) in d.items():
+                for tx_pos, (broadcast_asset, data, expiry) in d.items():
                     if broadcast_asset == asset:
                         broadcasts[asset][txid] = (data, expiry, tx_pos)
                         tx_to_broadcast[txid].add(asset)
