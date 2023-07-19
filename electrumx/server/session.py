@@ -1880,11 +1880,11 @@ class ElectrumX(SessionBase):
 
     async def get_messages(self, name):
         check_asset(name)
-        ret = await self.db.lookup_messages(name.encode('ascii'))
-        self.bump_cost(1.0 + len(ret) / 10)
-        ret += await self.mempool.get_broadcasts(name.encode('ascii'))
-        ret.sort(key=lambda x: x['height'])
-        return ret
+        b_items = await self.db.lookup_messages(name.encode('ascii'))
+        self.bump_cost(1.0 + len(b_items) / 10)
+        m_items = await self.mempool.get_broadcasts(name.encode('ascii'))
+        b_items.sort(key=lambda x: (x['height'], x['tx_hash']), reverse=True)
+        return m_items + b_items
 
     async def is_qualified(self, h160: str, asset: str):
         check_asset(asset)

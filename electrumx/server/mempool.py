@@ -207,17 +207,24 @@ class MemPool(object):
         self.logger.info(f'synced in {elapsed:.2f}s')
         while True:
             mempool_size = sum(tx.size for tx in self.txs.values()) / 1_000_000
-            self.logger.info(f'{len(self.txs):,d} txs {mempool_size:.2f} MB '
-                             f'touching {len(self.hashXs):,d} addresses'
-                             #f'{len(self.asset_creates):,d} asset creations, '
-                             #f'{len(self.asset_reissues):,d} asset reissues, '
-                             #f'{len(self.qualifier_tags):,d} qualifier tags, '
-                             #f'{len(self.h160_tags):,d} h160s tagged, '
-                             #f'{len(self.broadcasts):,d} broadcasts, '
-                             #f'{len(self.freezes):,d} freezes, '
-                             #f'{len(self.verifiers):,d} verifier string updates, '
-                             #f'{len(self.qualifier_associations):,d} qualifier associations'
-                             )
+            log_msg = f'{len(self.txs):,d} txs {mempool_size:.2f} MB touching {len(self.hashXs):,d} addresses'
+            if self.asset_creates:
+                log_msg += f', {len(self.asset_creates):,d} asset creations'
+            if self.asset_reissues:
+                log_msg += f', {len(self.asset_reissues):,d} asset reissues'
+            if self.qualifier_tags:
+                log_msg += f', {len(self.qualifier_tags):,d} qualifier tags'
+            if self.h160_tags:
+                log_msg += f', {len(self.h160_tags):,d} h160s tagged'
+            if self.broadcasts:
+                log_msg += f', {len(self.broadcasts):,d} broadcasts'
+            if self.freezes:
+                log_msg += f', {len(self.freezes):,d} freezes'
+            if self.verifiers:
+                log_msg += f', {len(self.verifiers):,d} verifier string updates'
+            if self.qualifier_associations:
+                log_msg += f', {len(self.qualifier_associations):,d} qualifier associations'
+            self.logger.info(log_msg)
             await sleep(self.log_status_secs)
             await synchronized_event.wait()
 
