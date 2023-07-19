@@ -753,9 +753,13 @@ class MemPool(object):
                          if prevout[0] in all_hashes)
 
         for this_txid, prevout in mp_prevouts:
-            tx = self.txs.get(prevout[0], None)
+            prev_hash, prev_index = prevout
+
+            tx = tx_map.get(prev_hash, None)
+            if not tx:
+                tx = self.txs.get(prev_hash, None)
             if not tx: continue
-            hX, v, asset = tx.out_pairs[prevout[1]]
+            hX, v, asset = tx.out_pairs[prev_index]
             for txid, d in possible_broadcasts[hX].items():
                 if this_txid != txid: continue
                 for tx_pos, (broadcast_asset, data, exp) in d.items():
