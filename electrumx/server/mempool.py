@@ -864,7 +864,7 @@ class MemPool(object):
     
     async def get_qualifier_tags(self, asset: str):
         ret = {}
-        for txid, (h160, tx_pos, flag) in self.qualifier_tags[asset].items():
+        for txid, (h160, tx_pos, flag) in self.qualifier_tags.get(asset, dict()).items():
             ret[h160.hex()] = {
                 'flag': flag,
                 'height': -1,
@@ -875,7 +875,7 @@ class MemPool(object):
     
     async def get_h160_tags(self, h160: str):
         ret = {}
-        for txid, (asset, tx_pos, flag) in self.h160_tags[h160].items():
+        for txid, (asset, tx_pos, flag) in self.h160_tags.get(h160, dict()).items():
             ret[asset] = {
                 'flag': flag,
                 'height': -1,
@@ -886,7 +886,7 @@ class MemPool(object):
 
     async def get_broadcasts(self, asset: str):
         ret = []
-        for txid, (data, expiry, tx_pos) in self.broadcasts[asset].items():
+        for txid, (data, expiry, tx_pos) in self.broadcasts.get(asset, dict()).items():
             ret.append({
                 'tx_hash': hash_to_hex_str(txid),
                 'data': base_encode(data, 58),
@@ -897,7 +897,7 @@ class MemPool(object):
         return ret
     
     async def is_frozen(self, asset: str):
-        for txid, (tx_pos, flag) in self.freezes[asset].items():
+        for txid, (tx_pos, flag) in self.freezes.get(asset, dict()).items():
             return {
                 'frozen': flag,
                 'height': -1,
@@ -907,7 +907,7 @@ class MemPool(object):
         return None
 
     async def restricted_verifier(self, asset: str):
-        for txid, (qual_pos, res_pos, string) in self.verifiers[asset].items():
+        for txid, (qual_pos, res_pos, string) in self.verifiers.get(asset, dict()).items():
             return {
                 'string': string,
                 'height': -1,
@@ -919,7 +919,7 @@ class MemPool(object):
 
     async def restricted_assets_associated_with_qualifier(self, asset: str):
         ret_val = {}
-        for txid, (qual_pos, res_pos, restricted_asset) in self.qualifier_associations[asset].items():
+        for txid, (qual_pos, res_pos, restricted_asset) in self.qualifier_associations.get(asset, dict()).items():
             ret_val[restricted_asset] = {
                 'associated': True,
                 'height': -1,
