@@ -213,17 +213,17 @@ class MemPool(object):
             if self.asset_reissues:
                 log_msg += f', {len(self.asset_reissues):,d} asset reissues'
             if self.qualifier_tags:
-                log_msg += f', {len(self.qualifier_tags):,d} qualifier tags'
+                log_msg += f', {sum(len(x) for x in self.qualifier_tags.values()):,d} qualifier tags'
             if self.h160_tags:
-                log_msg += f', {len(self.h160_tags):,d} h160s tagged'
+                log_msg += f', {sum(len(x) for x in self.h160_tags.values()):,d} h160s tagged'
             if self.broadcasts:
-                log_msg += f', {len(self.broadcasts):,d} broadcasts'
+                log_msg += f', {sum(len(x) for x in self.broadcasts.values()):,d} broadcasts'
             if self.freezes:
                 log_msg += f', {len(self.freezes):,d} freezes'
             if self.verifiers:
                 log_msg += f', {len(self.verifiers):,d} verifier string updates'
             if self.qualifier_associations:
-                log_msg += f', {len(self.qualifier_associations):,d} qualifier associations'
+                log_msg += f', {sum(len(x) for x in self.qualifier_associations.values()):,d} qualifier associations'
             self.logger.info(log_msg)
             await sleep(self.log_status_secs)
             await synchronized_event.wait()
