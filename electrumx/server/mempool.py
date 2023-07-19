@@ -753,7 +753,9 @@ class MemPool(object):
                          if prevout[0] in all_hashes)
 
         for this_txid, prevout in mp_prevouts:
-            hX, v, asset = self.txs[prevout[0]].out_pairs[prevout[1]]
+            tx = self.txs.get(prevout[0], None)
+            if not tx: continue
+            hX, v, asset = tx.out_pairs[prevout[1]]
             for txid, d in possible_broadcasts[hX].items():
                 if this_txid != txid: continue
                 for tx_pos, (broadcast_asset, data, exp) in d.items():
