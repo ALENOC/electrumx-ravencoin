@@ -1327,7 +1327,8 @@ class ElectrumX(SessionBase):
     async def hashX_listunspent(self, hashX, asset):
         '''Return the list of UTXOs of a script hash, including mempool
         effects.'''
-
+        if asset is None:
+            asset = False
         if isinstance(asset, str):
             check_asset(asset)
         elif isinstance(asset, Iterable):

@@ -135,10 +135,16 @@ def main():
 
     #prefix = b't\x14\x03P\x8d\x13L\x10\x91HSk|\xbc1\x930D-_\xe4\xce\x04$RUN'
 
-    for (key, value), _ in zip(asset_db.iterator(prefix=prefix), range(20)):
-        print(f'{key=}')
-        print(f'{value=}')
+    prefix = b'b'
 
+    assets = set()
+    for key, value in asset_db.iterator(prefix=prefix):
+        asset_len = key[1]
+        asset = key[2:2+asset_len]
+        assets.add(asset)
+        #print(f'{key=}')
+        #print(f'{value=}')
+    print(assets)
     h160 = b'\x8e8mS\xfc\xf5\x92\xd5\x84\xd1\xa7\xfc\x01\xf0\xae\x9a\x8f\x8cc\xef'
     #print(hash160_to_b58_address(h160, b'\x6f'))
 
