@@ -865,8 +865,8 @@ class DB:
         if self.asset_db.get(b'a' + last_asset_id) is not None:
             self.logger.warn('asset id counter corrupted, attempting to recover')
             while self.asset_db.get(b'a' + last_asset_id) is not None:
-                last_asset_id += 1
-            state.asset_count = last_asset_id
+                state.asset_count += 1
+                last_asset_id = pack_le_uint32(state.asset_count)
 
         # Log some stats
         self.logger.info('UTXO DB version: {:d}'.format(state.db_version))
