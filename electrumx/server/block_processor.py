@@ -569,8 +569,8 @@ class BlockProcessor:
         OnDiskBlock.daemon = self.daemon
 
         while True:
-            utxo_cache_size = len(self.utxo_cache) * 209
-            db_deletes_size = len(self.db_deletes) * 61
+            utxo_cache_size = len(self.utxo_cache) * 213
+            db_deletes_size = len(self.db_deletes) * 65
             hist_cache_size = self.db.history.unflushed_memsize()
             # Roughly ntxs * 32 + nblocks * 42
             tx_hash_size = ((self.state.tx_count - self.db.fs_tx_count) * 32
