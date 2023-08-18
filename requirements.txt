@@ -1,7 +1,7 @@
 aiohttp==3.7.4
 pylru==1.2.0
 plyvel==1.5.0
-aiorpcx==0.22.1
+aiorpcx[ws]==0.22.1
 kawpow==0.9.4.4
 uvloop==0.17.0
 
