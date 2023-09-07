@@ -129,12 +129,8 @@ def main():
 
     asset = suid_db.get(b'aAFAE')
     print(asset)
-    assets = set()
-    for key, value in asset_db.iterator(prefix=b'nz\r\x00\x00'):
-        asset_id = key[:4]
-        if asset_id in assets:
-            print(asset_id)
-        assets.add(asset_id)
+    for key, value in asset_db.iterator(prefix=b'mz\r\x00\x00'):
+        print(f'{key}: {value}')
 
 if __name__ == '__main__':
     main()

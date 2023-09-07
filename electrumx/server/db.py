@@ -1160,7 +1160,7 @@ class DB:
     
     def get_h160_for_id(self, id: bytes) -> Optional[bytes]:
         if id in self.id_to_h160_cache:
-            return self.id_to_asset_cache[id]
+            return self.id_to_h160_cache[id]
         h160 = self.suid_db.get(PREFIX_ID_TO_H160 + id, None)
         if h160 is not None:
             self.id_to_h160_cache[id] = h160
@@ -1397,14 +1397,14 @@ class DB:
             latest_tag_id = self.asset_db.get(current_lookup_key, None)
             if latest_tag_id is None:
                 return {}
-            current_entry_key = PREFIX_FREEZE_HISTORY + asset_id + latest_tag_id
+            current_entry_key = PREFIX_VERIFIER_HISTORY + asset_id + latest_tag_id
             db_ret = self.asset_db.get(current_entry_key, None)
             assert db_ret
 
             ret_val = {}
-            restricted_tx_pos, = unpack_le_uint32(current_lookup_key[:4])
-            qualifying_tx_pos, = unpack_le_uint32(current_lookup_key[4:8])
-            tx_num, = unpack_le_uint64(current_lookup_key[8:13] + bytes(3))
+            restricted_tx_pos, = unpack_le_uint32(latest_tag_id[:4])
+            qualifying_tx_pos, = unpack_le_uint32(latest_tag_id[4:8])
+            tx_num, = unpack_le_uint64(latest_tag_id[8:13] + bytes(3))
             tx_hash, height = self.fs_tx_hash(tx_num)
             string = db_ret.decode()
             ret_val['string'] = string
@@ -1461,7 +1461,7 @@ class DB:
                 hash = db_value[:34]
                 expire = None
                 if len(db_value) > 34:
-                    expire, = unpack_le_uint64(db_value[35:])
+                    expire, = unpack_le_uint64(db_value[34:])
                 ret_val.append({
                     'tx_hash': hash_to_hex_str(tx_hash),
                     'data': base_encode(hash, 58),
