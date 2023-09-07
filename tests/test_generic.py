@@ -120,33 +120,21 @@ def main():
     LevelDB.import_module()
     os.chdir('/home/work/electrumx_db')
 
-    #utxo_db = LevelDB('utxo', False)
     asset_db = LevelDB('asset', False)
-    #asset_info_db = LevelDB('asset_info', False)
 
-    script = bytes.fromhex('76a914dda3d21797ff26cb8ae9a769bdc68cf4567f5bba88ac')
-    scripthash = hashlib.sha256(script).digest()
-    #print(bytes(reversed(scripthash)).hex())
+    suid_db = LevelDB('suid', False)
+    #for key, value in suid_db.iterator(prefix=b'A\0\0\0\0'):
+    #    print(f'{key}: {value}')
     #return
 
-    prefix = b'iTEST_ASSET_MAIN/SUB#unique10'
-    prefix = b'a\x94\r\x00\x00'
-    #prefix += scripthash[:11]
-
-    #prefix = b't\x14\x03P\x8d\x13L\x10\x91HSk|\xbc1\x930D-_\xe4\xce\x04$RUN'
-
-    prefix = b'b'
-
+    asset = suid_db.get(b'aAFAE')
+    print(asset)
     assets = set()
-    for key, value in asset_db.iterator(prefix=prefix):
-        asset_len = key[1]
-        asset = key[2:2+asset_len]
-        assets.add(asset)
-        #print(f'{key=}')
-        #print(f'{value=}')
-    print(assets)
-    h160 = b'\x8e8mS\xfc\xf5\x92\xd5\x84\xd1\xa7\xfc\x01\xf0\xae\x9a\x8f\x8cc\xef'
-    #print(hash160_to_b58_address(h160, b'\x6f'))
+    for key, value in asset_db.iterator(prefix=b'nz\r\x00\x00'):
+        asset_id = key[:4]
+        if asset_id in assets:
+            print(asset_id)
+        assets.add(asset_id)
 
 if __name__ == '__main__':
     main()
