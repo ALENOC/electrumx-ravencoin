@@ -1468,7 +1468,7 @@ class BlockProcessor:
         data_parser = DataParser(self.db.read_asset_id_undo_info(block.height))
         while not data_parser.is_finished():
             id_b = data_parser.read_bytes(4)
-            asset_b = self.db.suid_db.get(PREFIX_ASSET_ID_UNDO + id_b)
+            asset_b = self.db.suid_db.get(PREFIX_ID_TO_ASSET + id_b)
             asset = asset_b.decode()
             id, = unpack_le_uint32(id_b)
             asset_ids.add(id)
@@ -1480,7 +1480,7 @@ class BlockProcessor:
         data_parser = DataParser(self.db.read_h160_id_undo_info(block.height))
         while not data_parser.is_finished():
             id_b = data_parser.read_bytes(4)
-            h160_b = self.db.suid_db.get(PREFIX_H160_ID_UNDO + id_b)
+            h160_b = self.db.suid_db.get(PREFIX_ID_TO_H160 + id_b)
             id, = unpack_le_uint32(id_b)
             h160_ids.add(id)
             self.h160_ids_deletes.append(PREFIX_ID_TO_H160 + id_b)

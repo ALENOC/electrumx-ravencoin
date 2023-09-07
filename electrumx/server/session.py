@@ -989,7 +989,7 @@ class SessionBase(RPCSession):
 def check_asset(name):
     if not isinstance(name, str):
         raise RPCError(
-            BAD_REQUEST, f'the asset name must be a string'
+            BAD_REQUEST, f'the asset name must be a string ({repr(name)}; {name.__class__})'
         ) from None
     if len(name) <= 0:
         raise RPCError(
@@ -1240,7 +1240,7 @@ class ElectrumX(SessionBase):
             raise RPCError(
                 BAD_REQUEST, f'{qualifier} is not a qualifier nor a restricted asset'
             ) from None
-        data = await self.qualifications_for_qualifier(qualifier.encode())
+        data = await self.qualifications_for_qualifier(qualifier)
         s_data = sorted(data.items(), key=lambda x: x[0])
         if s_data:
             status = ';'.join(f'{h160}:{d["height"]}{d["tx_hash"]}{d["tx_pos"]}{d["flag"]}' for h160, d in s_data)
@@ -1913,7 +1913,7 @@ class ElectrumX(SessionBase):
 
     async def qualifications_for_qualifier(self, asset: str, include_mempool=True):
         check_asset(asset)
-        res = await self.db.qualifications_for_qualifier(asset)
+        res = await self.db.qualifications_for_qualifier(asset.encode())
         # This incurs 2 db lookups and is no longer contiguous
         self.bump_cost(2.0 + len(res))
         if include_mempool:
