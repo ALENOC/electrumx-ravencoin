@@ -1409,11 +1409,11 @@ class BlockProcessor:
 
         self.asset_touched.update(assets_touched)
         self.h160_touched.update(h160s_touched)
-        self.frozen_touched.update()
-        self.broadcast_touched.update()
-        self.qualifier_touched.update()
-        self.validator_touched.update()
-        self.qualifier_association_touched.update()
+        self.frozen_touched.update(freezes_touched)
+        self.broadcast_touched.update(broadcasts_touched)
+        self.qualifier_touched.update(qualifiers_touched)
+        self.validator_touched.update(verifiers_touched)
+        self.qualifier_association_touched.update(qualifiers_touched)
 
     def backup_block(self, block):
         '''Backup the streamed block.'''
