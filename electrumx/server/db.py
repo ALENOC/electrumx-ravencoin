@@ -1330,10 +1330,9 @@ class DB:
             return ret_val
         return await run_in_thread(lookup_quals)
 
-    async def qualifications_for_qualifier(self, asset: str):
+    async def qualifications_for_qualifier(self, asset: bytes):
         def lookup_quals():
-            asset_b = asset.encode()
-            asset_id = self.get_id_for_asset(asset_b)
+            asset_id = self.get_id_for_asset(asset)
             if asset_id is None:
                 return {}
             ret_val = {}

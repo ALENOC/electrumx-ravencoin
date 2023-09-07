@@ -127,9 +127,10 @@ def main():
     #    print(f'{key}: {value}')
     #return
 
-    asset = suid_db.get(b'aAFAE')
+    #asset = suid_db.get(b'a$TEST')
+    asset = suid_db.get(b'a#Q02')
     print(asset)
-    for key, value in asset_db.iterator(prefix=b'mz\r\x00\x00'):
+    for key, value in asset_db.iterator(prefix=b'q5\x03\x00\x00'):
         print(f'{key}: {value}')
 
 if __name__ == '__main__':

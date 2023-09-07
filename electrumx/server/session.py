@@ -1235,8 +1235,12 @@ class ElectrumX(SessionBase):
 
         return status
 
-    async def tags_for_qualifier_status(self, qualifier):
-        data = await self.qualifications_for_qualifier(qualifier)
+    async def tags_for_qualifier_status(self, qualifier: str):
+        if qualifier[0] != '#' and qualifier[0] != '$':
+            raise RPCError(
+                BAD_REQUEST, f'{qualifier} is not a qualifier nor a restricted asset'
+            ) from None
+        data = await self.qualifications_for_qualifier(qualifier.encode())
         s_data = sorted(data.items(), key=lambda x: x[0])
         if s_data:
             status = ';'.join(f'{h160}:{d["height"]}{d["tx_hash"]}{d["tx_pos"]}{d["flag"]}' for h160, d in s_data)
@@ -1422,16 +1426,20 @@ class ElectrumX(SessionBase):
 
     async def subscribe_qualifier_associated_restricted(self, asset):
         check_asset(asset)
-        if asset[0] == '#':
-            asset = asset[1:]
+        if asset[0] != '#':
+            raise RPCError(
+                BAD_REQUEST, f'{asset} is not a qualifier'
+            ) from None
         result = await self.qualifier_associations_status(asset)
         self.qualifier_validator_subs.add(asset)
         return result
 
     async def unsubscribe_qualifier_associated_restricted(self, asset):
         check_asset(asset)
-        if asset[0] == '#':
-            asset = asset[1:]
+        if asset[0] != '#':
+            raise RPCError(
+                BAD_REQUEST, f'{asset} is not a qualifier'
+            ) from None
         return self.qualifier_validator_subs.discard(asset) is not None
 
     async def get_balance(self, hashX, asset):
@@ -1925,6 +1933,10 @@ class ElectrumX(SessionBase):
 
     async def get_restricted_string(self, asset: str, include_mempool=True):
         check_asset(asset)
+        if asset[0] != '$':
+            raise RPCError(
+                BAD_REQUEST, f'{asset} is not a restricted asset'
+            ) from None
         if include_mempool:
             mem_res = await self.mempool.restricted_verifier(asset)
             if mem_res:
@@ -1934,8 +1946,10 @@ class ElectrumX(SessionBase):
 
     async def lookup_qualifier_associations(self, asset: str, include_mempool=True):
         check_asset(asset)
-        if asset[0] == '#':
-            asset = asset[1:]
+        if asset[0] != '#':
+            raise RPCError(
+                BAD_REQUEST, f'{asset} is not a qualifier'
+            ) from None
         res = await self.db.lookup_qualifier_associations(asset.encode('ascii'))
         self.bump_cost(1.0 + len(res) / 10)
         if include_mempool:
