@@ -343,12 +343,6 @@ class DB:
         self.tx_counts_file = util.LogicalFile('meta/txcounts', 2, 2000000)
         self.hashes_file = util.LogicalFile('meta/hashes', 4, 16000000)
 
-        self.asset_to_id_cache = pylru.lrucache(1024)
-        self.id_to_asset_cache = pylru.lrucache(1024)
-
-        self.h160_to_id_cache = pylru.lrucache(1024)
-        self.id_to_h160_cache = pylru.lrucache(1024)
-
     async def _read_tx_counts(self):
         if self.tx_counts is not None:
             return
@@ -601,23 +595,6 @@ class DB:
         h160_add_count = len(flush_data.h160_id_adds)
         with self.suid_db.write_batch() as batch:
             # Walk-backs
-
-            for delete in flush_data.asset_id_deletes:
-                if delete[:1] == PREFIX_ASSET_TO_ID:
-                    self.asset_to_id_cache.pop(delete[1:], None)
-                elif delete[:1] == PREFIX_ID_TO_ASSET:
-                    self.id_to_asset_cache.pop(delete[1:], None)
-                else:
-                    assert False
-
-            for delete in flush_data.h160_id_deletes:
-                if delete[:1] == PREFIX_H160_TO_ID:
-                    self.h160_to_id_cache.pop(delete[1:], None)
-                elif delete[:1] == PREFIX_ID_TO_H160:
-                    self.id_to_h160_cache.pop(delete[1:], None)
-                else:
-                    assert False
-
             batch_delete = batch.delete
             for deletion_list in [flush_data.asset_id_deletes, 
                                   flush_data.h160_id_deletes]:
@@ -1080,21 +1057,11 @@ class DB:
         self.fs_h160_count = state.h160_count
 
         last_asset_id = pack_le_uint32(state.asset_count)
-        if self.suid_db.get(PREFIX_ID_TO_ASSET + last_asset_id) is not None:
-            self.logger.warn('asset id counter corrupted, attempting to recover...')
-            while self.suid_db.get(PREFIX_ID_TO_ASSET + last_asset_id) is not None:
-                state.asset_count += 1
-                last_asset_id = pack_le_uint32(state.asset_count)
-        assert state.asset_count < int.from_bytes(NULL_U32, 'little'), 'asset id over-run'
-
+        assert self.suid_db.get(PREFIX_ID_TO_ASSET + last_asset_id) is None, 'asset id counter corrupted'
+            
         last_h160_id = pack_le_uint32(state.h160_count)
-        if self.suid_db.get(PREFIX_ID_TO_H160 + last_h160_id) is not None:
-            self.logger.warn('h160 id counter corrupted, attempting to recover...')
-            while self.suid_db.get(PREFIX_ID_TO_H160 + last_h160_id) is not None:
-                state.h160_count += 1
-                last_h160_id = pack_le_uint32(state.h160_count)
-        assert state.h160_count < int.from_bytes(NULL_U32, 'little'), 'h160 id over-run'
-
+        assert self.suid_db.get(PREFIX_ID_TO_H160 + last_h160_id) is None, 'h160 id counter corrupted'
+            
         # Log some stats
         self.logger.info('UTXO DB version: {:d}'.format(state.db_version))
         self.logger.info('coin: {}'.format(self.coin.NAME))
@@ -1131,41 +1098,17 @@ class DB:
         self.write_utxo_state(self.utxo_db)
 
     def get_id_for_asset(self, asset: bytes) -> Optional[bytes]:
-        if asset in self.asset_to_id_cache:
-            return self.asset_to_id_cache[asset]
-        idb = self.suid_db.get(PREFIX_ASSET_TO_ID + asset, None)
-        if idb is not None:
-            self.asset_to_id_cache[asset] = idb
-            return idb
-        return None
+        return self.suid_db.get(PREFIX_ASSET_TO_ID + asset, None)
     
     def get_asset_for_id(self, id: bytes) -> Optional[bytes]:
         if id == NULL_U32: return None
-        if id in self.id_to_asset_cache:
-            return self.id_to_asset_cache[id]
-        asset = self.suid_db.get(PREFIX_ID_TO_ASSET + id, None)
-        if asset is not None:
-            self.id_to_asset_cache[id] = asset
-            return asset
-        return None
+        return self.suid_db.get(PREFIX_ID_TO_ASSET + id, None)
 
     def get_id_for_h160(self, h160: bytes) -> Optional[bytes]:
-        if h160 in self.h160_to_id_cache:
-            return self.h160_to_id_cache[h160]
-        idb = self.suid_db.get(PREFIX_H160_TO_ID + h160, None)
-        if idb is not None:
-            self.h160_to_id_cache[h160] = idb
-            return idb
-        return None
+        return self.suid_db.get(PREFIX_H160_TO_ID + h160, None)
     
     def get_h160_for_id(self, id: bytes) -> Optional[bytes]:
-        if id in self.id_to_h160_cache:
-            return self.id_to_h160_cache[id]
-        h160 = self.suid_db.get(PREFIX_ID_TO_H160 + id, None)
-        if h160 is not None:
-            self.id_to_h160_cache[id] = h160
-            return h160
-        return None
+        return self.suid_db.get(PREFIX_ID_TO_H160 + id, None)
 
     async def all_utxos(self, hashX, asset):
         '''Return all UTXOs for an address sorted in no particular order.'''

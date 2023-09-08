@@ -704,7 +704,7 @@ class BlockProcessor:
         internal_association_undo_info = []
         internal_association_history_undo_info = []
         
-        tx_num = state.tx_count
+        tx_num: int = state.tx_count
         asset_num: int = state.asset_count
         h160_num: int = state.h160_count
         script_hashX = self.coin.hashX_from_script
@@ -880,7 +880,8 @@ class BlockProcessor:
                         try:
                             if match_script_against_template(ops, ASSET_NULL_TEMPLATE) > -1:
                                 # This is what tags an address with a qualifier
-                                h160 = ops[1][2]
+                                h160_shared = ops[1][2]
+                                h160 = bytes(h160_shared)
                                 asset_portion = ops[2][2]
                                 asset_portion_deserializer = DataParser(asset_portion)
                                 name_byte_len, asset_name = asset_portion_deserializer.read_var_bytes_tuple_bytes()
