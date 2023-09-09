@@ -22,17 +22,19 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 RUN python3 -m pip install --upgrade pip
 
-ADD --chown=electrumx https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/archive/master.tar.gz .
+ARG VERSION=v1.11.0
+
+ADD --chown=electrumx https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/archive/${VERSION}.tar.gz .
 RUN ls -l
 RUN tar zxvf *.tar.gz
 RUN rm *.tar.gz
 
-WORKDIR /home/electrumx/electrumx-ravencoin-master
+WORKDIR /home/electrumx/electrumx-ravencoin-${VERSION}
 RUN python3 -m pip install -r requirements.txt
 RUN python3 setup.py install
 WORKDIR /home/electrumx
 
-RUN rm -r electrumx-ravencoin-master
+RUN rm -r electrumx-ravencoin-${VERSION}
 
 ENV SERVICES="ssl://:50002,tcp://:50001,rpc://:8000"
 ENV COIN=Ravencoin
@@ -71,7 +73,7 @@ CMD if [ -d "$DB_DIRECTORY/ssl_cert/" ]; then \
         openssl x509 -req -days 1825 -in server.csr -signkey server.key -out server.crt; \
     fi && electrumx_server
 
-# build it with eg.: `docker build -t electrumx .`
+# build it with eg.: `docker build -t electrumx-ravencoin .`
 # run it with eg.:
-# `docker run -d --net=host -v /home/electrumx/db/:/db -e DAEMON_URL="http://youruser:yourpass@localhost:8766" -e REPORT_SERVICES=tcp://example.com:50001 electrumx`
+# `docker run -d --net=host -v /home/electrumx/db/:/db -e DAEMON_URL="http://youruser:yourpass@localhost:8766" -e REPORT_SERVICES=tcp://example.com:50001 electrumx-ravencoin`
 # for a proper clean shutdown, send TERM signal to the running container eg.: `docker kill --signal="TERM" CONTAINER_ID`
