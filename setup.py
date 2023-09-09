@@ -8,7 +8,7 @@ with open('requirements.txt', 'r') as f:
     requirements = f.read().splitlines()
 
 setuptools.setup(
-    name='electrumX',
+    name='electrumX-ravencoin',
     version=version,
     scripts=['electrumx_server', 'electrumx_rpc', 'electrumx_compact_history'],
     python_requires='>=3.8',
@@ -31,7 +31,7 @@ setuptools.setup(
         'Framework :: AsyncIO',
         'License :: OSI Approved :: MIT License',
         'Operating System :: Unix',
-        "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.8",
         "Topic :: Database",
         'Topic :: Internet',
     ],

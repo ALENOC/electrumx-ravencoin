@@ -1,9 +1,9 @@
-aiohttp==3.7.4
-pylru==1.2.0
-plyvel==1.5.0
-aiorpcx[ws]==0.22.1
-kawpow==0.9.4.4
-uvloop==0.17.0
+aiohttp>=3.3,<4.0
+aiorpcx[ws]>=0.22,<0.23
+pylru
+plyvel
+kawpow
+uvloop
 
 x16r_hash @ git+https://github.com/brian112358/x16r_hash@d79211ee8b5d86a9709caefded79f318a1d9f3a8
 x16rv2_hash @ git+https://github.com/RavenCommunity/x16rv2_hash@f8a9ef9a185b4c900adea4628be9b08aaab343ba

@@ -575,7 +575,7 @@ class BlockProcessor:
                          self.verifiers, self.verifiers_undos, self.verifiers_deletes,
                          self.verifier_history, self.verifier_history_undos, self.verifier_history_deletes,
                          self.associations, self.associations_undos, self.associations_deletes,
-                         self.association_history, self.associations_undos, self.associations_deletes
+                         self.association_history, self.association_history_undos, self.association_history_deletes
         )
     async def flush(self, flush_utxos):
         self.force_flush_arg = None
@@ -640,6 +640,9 @@ class BlockProcessor:
                 association_size +
                 association_history_size
             ) // one_MB
+
+            #from electrumx.lib.util import deep_getsizeof
+            #print(f'utxo predicted: {utxo_cache_size}, utxo real: {deep_getsizeof(self.utxo_cache)}')
 
             OnDiskBlock.log_block = True
             if hist_cache_size:
@@ -1376,7 +1379,7 @@ class BlockProcessor:
             restricted_idx = data_parser.read_bytes(4)
             qualifiers_idx = data_parser.read_bytes(4)
             tx_numb = data_parser.read_bytes(5)
-            if restricted_idx == NULL_U32 and qualifiers_idx == NULL_U32 and tx_num == NULL_TXNUMB:
+            if restricted_idx == NULL_U32 and qualifiers_idx == NULL_U32 and tx_numb == NULL_TXNUMB:
                 self.verifiers_deletes.append(PREFIX_VERIFIER_CURRENT + asset_id)
             else:
                 self.verifiers[asset_id] = restricted_idx + qualifiers_idx + tx_numb
@@ -1399,7 +1402,7 @@ class BlockProcessor:
             restricted_idx = data_parser.read_bytes(4)
             qualifiers_idx = data_parser.read_bytes(4)
             tx_numb = data_parser.read_bytes(5)
-            if restricted_idx == NULL_U32 and qualifiers_idx == NULL_U32 and tx_num == NULL_TXNUMB:
+            if restricted_idx == NULL_U32 and qualifiers_idx == NULL_U32 and tx_numb == NULL_TXNUMB:
                 self.associations_deletes.append(PREFIX_ASSOCIATION_CURRENT + qualifier_id + restricted_id)
             else:
                 self.associations[qualifier_id + restricted_id] = restricted_idx + qualifiers_idx + tx_numb
@@ -1531,9 +1534,6 @@ class BlockProcessor:
         self.undo_asset_db(block.height)
         self.db.flush_backup(self.flush_data(), self.touched)
 
-        # asset undo info can be none meaning it might not be overwritten; explicitly delete
-        self.db.clear_asset_undo_info(block.height, False)
-        self.db.clear_suid_undo_info(block.height, False)
         self.ok = True
 
     '''An in-memory UTXO cache, representing all changes to UTXO state

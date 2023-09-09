@@ -93,9 +93,7 @@ class Coin:
 
     @classmethod
     def prefetch_limit(cls, height):
-        if height <= 650_000:
-            return 100
-        return 10
+        return 100
 
     @classmethod
     def static_header_offset(cls, height):

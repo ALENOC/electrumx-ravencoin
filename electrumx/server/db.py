@@ -548,9 +548,8 @@ class DB:
         else:
             # Ravencoin has a hard reorg limit of 60; we don't need to keep anything else
             self.clear_excess_undo_info(False)
-
         self.last_flush_state = flush_data.state.copy()
-
+        
     def flush_fs(self, flush_data):
         '''Write headers, tx counts and block tx hashes to the filesystem.
 
