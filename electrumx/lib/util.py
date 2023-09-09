@@ -464,3 +464,4 @@ class DataParser:
             return True
         else:
             return self.cursor >= self.length - 1
+
