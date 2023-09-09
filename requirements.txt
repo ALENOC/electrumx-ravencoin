@@ -3,7 +3,7 @@ pylru
 plyvel
 kawpow
 uvloop
+aiorpcx[ws]>=0.22,<0.23
 
-aiorpcx[ws] @ git+https://github.com/kyuupichan/aiorpcX@a0be71c5671b07e02bedc51d7efaecda86f05128
 x16r_hash @ git+https://github.com/brian112358/x16r_hash@d79211ee8b5d86a9709caefded79f318a1d9f3a8
 x16rv2_hash @ git+https://github.com/RavenCommunity/x16rv2_hash@f8a9ef9a185b4c900adea4628be9b08aaab343ba

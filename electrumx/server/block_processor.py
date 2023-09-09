@@ -775,6 +775,7 @@ class BlockProcessor:
         append_tx_hash = tx_hashes.append
         to_le_uint32 = pack_le_uint32
         to_le_uint64 = pack_le_uint64
+        utxo_count_delta = 0
 
         with block as block:
             if self.coin.header_prevhash(block.header) != self.state.tip:
@@ -796,6 +797,7 @@ class BlockProcessor:
                 for txin in tx.inputs:
                     if txin.is_generation():  # Don't spend block rewards
                         continue
+                    utxo_count_delta -= 1
                     cache_value = spend_utxo(bytes(txin.prev_hash), txin.prev_idx)
                     internal_utxo_undo_info.append(cache_value)
                     hashX = cache_value[:-17]
@@ -809,6 +811,7 @@ class BlockProcessor:
                     # Ignore unspendable outputs
                     if is_unspendable(txout.pk_script):
                         continue
+                    utxo_count_delta += 1
 
                     # Many scripts are malformed. This is very problematic...
                     # We cannot assume scripts are valid just because they are from a node
@@ -1279,6 +1282,7 @@ class BlockProcessor:
         state.height = block.height
         state.tip = self.coin.header_hash(block.header)
         state.chain_size += block.size
+        state.utxo_count += utxo_count_delta
         assert tx_num < int.from_bytes(NULL_TXNUMB, 'little'), 'tx num overrun'
         state.tx_count = tx_num
         state.h160_count = h160_num
@@ -1444,6 +1448,7 @@ class BlockProcessor:
         # Items in our list are ordered, but we want them backwards.
 
         count = 0
+        utxo_count_delta = 0
         with block as block:
             self.ok = False
             for tx, tx_hash in block.iter_txs_reversed():
@@ -1452,6 +1457,7 @@ class BlockProcessor:
                     # outputs - we didn't save those in the first place.
                     if is_unspendable(txout.pk_script):
                         continue
+                    utxo_count_delta -= 1
                     cache_value = spend_utxo(tx_hash, idx)
                     touched_add(cache_value[:-17])
 
@@ -1459,6 +1465,7 @@ class BlockProcessor:
                 for txin in reversed(tx.inputs):
                     if txin.is_generation():
                         continue
+                    utxo_count_delta += 1
                     n -= undo_entry_len
                     undo_item = undo_info[n:n + undo_entry_len]
                     put_utxo(bytes(txin.prev_hash) + pack_le_uint32(txin.prev_idx), undo_item)
@@ -1510,6 +1517,7 @@ class BlockProcessor:
         state.height -= 1
         state.tip = self.coin.header_prevhash(block.header)
         state.chain_size -= block.size
+        state.utxo_count += utxo_count_delta
         state.tx_count -= count
 
         if min_asset_id is None:
@@ -1662,7 +1670,7 @@ class BlockProcessor:
 
     # --- External API
 
-    async def fetch_and_process_blocks(self, caught_up_event):
+    async def fetch_and_process_blocks(self, caught_up_event, shutdown_event):
         '''Fetch, process and index blocks from the daemon.
 
         Sets caught_up_event when first caught up.  Flushes to disk
@@ -1712,11 +1720,9 @@ class BlockProcessor:
         except CancelledError:
             await OnDiskBlock.stop_prefetching()
             await self.run_with_lock(self.flush_if_safe())
-
         except Exception:
             logging.exception('Critical Block Processor Error:')
             raise
-
 
     async def flush_if_safe(self):
         if self.ok:
