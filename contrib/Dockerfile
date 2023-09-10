@@ -22,10 +22,9 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 RUN python3 -m pip install --upgrade pip
 
-ARG VERSION=v1.11.0
+ARG VERSION=1.11.0
 
-ADD --chown=electrumx https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/archive/${VERSION}.tar.gz .
-RUN ls -l
+ADD --chown=electrumx https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/archive/v${VERSION}.tar.gz .
 RUN tar zxvf *.tar.gz
 RUN rm *.tar.gz
 
