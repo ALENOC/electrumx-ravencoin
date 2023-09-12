@@ -13,7 +13,7 @@ Documentation
 =============
 
 Docker:
-`docker pull kralverde/electrumx-ravencoin:latest`
+:code:`docker pull kralverde/electrumx-ravencoin:latest`
 
 Requires :code:`sudo apt-get install python3 python3-pip libleveldb-dev cmake`
 
