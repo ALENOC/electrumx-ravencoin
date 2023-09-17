@@ -43,6 +43,10 @@ import electrumx.lib.tx as lib_tx
 from electrumx.server import daemon
 from electrumx.server.session import ElectrumX
 
+import x16r_hash
+import x16rv2_hash
+import kawpow
+
 Block = namedtuple("Block", "raw header transactions")
 
 
@@ -75,6 +79,9 @@ class Coin:
     PEERS = []
 
     ESTIMATEFEE_MODES = (None, 'CONSERVATIVE', 'ECONOMICAL')
+
+    def __new__(cls):
+        assert cls.KAWPOW_ACTIVATION_TIME > 0
 
     @classmethod
     def bucket_estimatefee_block_target(cls, n: int) -> int:
@@ -236,7 +243,8 @@ class Ravencoin(Coin):
     REORG_LIMIT = 60
     PEERS = [
         'rvn4lyfe.com t s',
-        'rvn-dashboard.com s',
+        '162.19.153.65 t s',
+        'electrum-rvn.moontree.com s',
         'aq7vuqykup2voklcrpqljf6jnjkzrouowsjfrmybdou5kdhrpr6sjjid.onion t s',
     ]
 
@@ -244,40 +252,23 @@ class Ravencoin(Coin):
     def static_header_offset(cls, height):
         '''Given a header height return its offset in the headers file.'''
         if cls.KAWPOW_ACTIVATION_HEIGHT < 0 or height < cls.KAWPOW_ACTIVATION_HEIGHT:
-            result = height * cls.BASIC_HEADER_SIZE
+            return height * cls.BASIC_HEADER_SIZE
         else:  # RVN block header size increased with kawpow fork
-            baseoffset = cls.KAWPOW_ACTIVATION_HEIGHT * cls.BASIC_HEADER_SIZE
-            result = baseoffset + ((height - cls.KAWPOW_ACTIVATION_HEIGHT) * cls.KAWPOW_HEADER_SIZE)
-        return result
+            return (cls.KAWPOW_ACTIVATION_HEIGHT * cls.BASIC_HEADER_SIZE) + ((height - cls.KAWPOW_ACTIVATION_HEIGHT) * cls.KAWPOW_HEADER_SIZE)
 
     @classmethod
     def header_hash(cls, header):
         '''Given a header return the hash.'''
         timestamp = util.unpack_le_uint32_from(header, 68)[0]
-        assert cls.KAWPOW_ACTIVATION_TIME > 0
-
-        def reverse_bytes(data):
-            b = bytearray(data)
-            b.reverse()
-            return bytes(b)
-
         if timestamp >= cls.KAWPOW_ACTIVATION_TIME:
-            import kawpow
             nNonce64 = util.unpack_le_uint64_from(header, 80)[0]  # uint64_t
-            mix_hash = reverse_bytes(header[88:120])  # uint256
-
-            header_hash = reverse_bytes(double_sha256(header[:80]))
-
-            final_hash = reverse_bytes(kawpow.light_verify(header_hash, mix_hash, nNonce64))
-            return final_hash
-
+            mix_hash = header[119:87:-1]  # uint256
+            header_hash = double_sha256(header[:80])[::-1]
+            return kawpow.light_verify(header_hash, mix_hash, nNonce64)[::-1]
         elif timestamp >= cls.X16RV2_ACTIVATION_TIME:
-            import x16rv2_hash
             return x16rv2_hash.getPoWHash(header)
         else:
-            import x16r_hash
             return x16r_hash.getPoWHash(header)
-
 
 class RavencoinTestnet(Ravencoin):
     NET = "testnet"
