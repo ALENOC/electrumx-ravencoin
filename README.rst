@@ -12,6 +12,9 @@ For a future network with bigger blocks.
 Documentation
 =============
 
+Docker:
+:code:`docker pull kralverde/electrumx-ravencoin:latest`
+
 Requires :code:`sudo apt-get install python3 python3-pip libleveldb-dev cmake`
 
 If you would like a guide on how to set up an Ravencoin Electrumx server
