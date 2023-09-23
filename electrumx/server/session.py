@@ -1958,7 +1958,9 @@ class ElectrumX(SessionBase):
             raise RPCError(
                 BAD_REQUEST, f'{asset} is not a qualifier'
             ) from None
-        res = await self.db.lookup_qualifier_associations(asset.encode('ascii'))
+        base_asset = asset.encode('ascii')
+        first_chunk = base_asset.split('/')[0]
+        res = await self.db.lookup_qualifier_associations(first_chunk)
         self.bump_cost(1.0 + len(res) / 10)
         if include_mempool:
             for res_asset in list(res.keys()):
@@ -2053,6 +2055,9 @@ class ElectrumX(SessionBase):
             'blockchain.asset.verifier_string.unsubscribe': self.unsubscribe_restricted_verification_change,
             'blockchain.asset.restricted_associations.subscribe': self.subscribe_qualifier_associated_restricted,
             'blockchain.asset.restricted_associations.unsubscribe': self.unsubscribe_qualifier_associated_restricted,
+
+            #1.12
+            'blockchain.asset.get_meta_history': None
         }
 
         self.request_handlers = handlers
