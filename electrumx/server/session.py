@@ -15,7 +15,7 @@ import os
 import ssl
 import time
 import re
-from typing import Iterable, Dict, Optional
+from typing import Iterable, Dict, Optional, TYPE_CHECKING
 from collections import defaultdict
 from functools import partial
 from ipaddress import IPv4Address, IPv6Address
@@ -37,6 +37,11 @@ from electrumx.lib.hash import (sha256, hash_to_hex_str, hex_str_to_hash, HASHX_
 
 from electrumx.server.daemon import DaemonError
 from electrumx.server.peers import PeerManager
+
+if TYPE_CHECKING:
+    from electrumx.server.db import DB
+    from electrumx.server.mempool import MemPool
+
 
 BAD_REQUEST = 1
 DAEMON_ERROR = 2
@@ -914,7 +919,7 @@ class SessionBase(RPCSession):
     session_counter = itertools.count()
     log_new = False
 
-    def __init__(self, session_mgr, db, mempool, peer_mgr, kind, transport):
+    def __init__(self, session_mgr, db: 'DB', mempool: 'MemPool', peer_mgr, kind, transport):
         connection = JSONRPCConnection(JSONRPCAutoDetect)
         super().__init__(transport, connection=connection)
         self.session_mgr = session_mgr
@@ -1848,6 +1853,25 @@ class ElectrumX(SessionBase):
             self.bump_cost(cost)
             return hash_to_hex_str(tx_hash)
 
+    async def asset_get_meta_history(self, name: str, include_mempool=True):
+        self.bump_cost(1.0)
+        check_asset(name)
+        ret = await self.db.lookup_asset_meta_history(name.encode())
+        self.bump_cost(1.0 + len(ret) / 30)
+        if include_mempool:
+            mempool_data = await self.mempool.get_asset_reissues_if_any(name) or await self.mempool.get_asset_creation_if_any(name)
+            if mempool_data:
+                return ret + [{
+                    'sats': mempool_data['sats_in_circulation'],
+                    'divisions': mempool_data['divisions'],
+                    'has_ipfs': mempool_data['has_ipfs'],
+                    'ipfs': mempool_data.get('ipfs', None),
+                    'tx_hash': mempool_data['source']['tx_hash'],
+                    'tx_pos': mempool_data['source']['tx_pos'],
+                    'height': mempool_data['source']['height']
+                }]
+        return ret
+
     async def asset_get_meta(self, name: str, include_mempool=True):
         self.bump_cost(1.0)
         check_asset(name)
@@ -1890,7 +1914,6 @@ class ElectrumX(SessionBase):
     
     async def get_assets_with_prefix(self, prefix: str):
         check_asset(prefix)
-        prefix = prefix.upper()
         ret = await self.db.get_assets_with_prefix(prefix.encode('ascii'))
         self.bump_cost(1.0 + len(ret) / 10)
         return ret
@@ -2057,7 +2080,12 @@ class ElectrumX(SessionBase):
             'blockchain.asset.restricted_associations.unsubscribe': self.unsubscribe_qualifier_associated_restricted,
 
             #1.12
-            'blockchain.asset.get_meta_history': None
+            'blockchain.asset.get_meta_history': self.asset_get_meta_history,
+            'blockchain.asset.verifier_string_history': None,
+            'blockchain.tag.qualifier.history': None,
+            'blockchain.tag.h160.history': None,
+            'blockchain.asset.frozen_history': None,
+            'blockchain.asset.restricted_associations_history': None,
         }
 
         self.request_handlers = handlers

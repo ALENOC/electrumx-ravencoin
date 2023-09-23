@@ -377,6 +377,8 @@ class DB:
 
         # Asset DB
         self.asset_db = self.db_class('asset', for_sync)
+
+        # Sequential unique id DB
         self.suid_db = self.db_class('suid', for_sync)
 
         self.read_utxo_state()
@@ -1434,6 +1436,39 @@ class DB:
         def find_assets():
             return [asset.decode('ascii') for asset, _ in self.suid_db.iterator(prefix=PREFIX_ASSET_TO_ID+prefix)]
         return await run_in_thread(find_assets)
+
+    async def lookup_asset_meta_history(self, asset_name: bytes):
+        def read_asset_meta_history():
+            history_items = []
+            asset_id = self.get_id_for_asset(asset_name)
+            if asset_id is None:
+                return []
+            for db_key, db_value in self.asset_db.iterator(prefix=PREFIX_METADATA_HISTORY+asset_id):
+                value_parser = util.DataParser(db_value)
+                idx_b = db_key[5:9]
+                tx_num_b = db_key[9:14]
+                sats_b = value_parser.read_bytes(8)
+                divisions = value_parser.read_int()
+                associated_data = None
+                if not value_parser.is_finished():
+                    associated_data = value_parser.read_bytes(34)    
+                source_tx_pos, = unpack_le_uint32(idx_b)
+                source_tx_num, = unpack_le_uint64(tx_num_b + bytes(3))
+                sats, = unpack_le_uint64(sats_b)
+                source_tx_hash, source_height = self.fs_tx_hash(source_tx_num)
+                history_items.append({
+                    'sats': sats,
+                    'divisions': divisions,
+                    'has_ipfs': True if associated_data else False,
+                    'ipfs': base_encode(associated_data, 58) if associated_data else None,
+                    'tx_hash': hash_to_hex_str(source_tx_hash),
+                    'tx_pos': source_tx_pos,
+                    'height': source_height
+                })
+            return sorted(history_items, key=lambda x: (x['height'], x['tx_hash']))
+        
+        return await run_in_thread(read_asset_meta_history)
+
 
     async def lookup_asset_meta(self, asset_name: bytes):
         def read_assets_meta():
