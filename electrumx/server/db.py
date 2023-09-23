@@ -1284,12 +1284,40 @@ class DB:
 
                 ret_val[asset_name.decode()] = {
                     'flag': True if flag != 0 else False,
-                    'height': height,
                     'tx_hash': hash_to_hex_str(tx_hash),
-                    'tx_pos': tx_pos
+                    'tx_pos': tx_pos,
+                    'height': height,
                 }
             return ret_val
         return await run_in_thread(lookup_quals)
+
+    async def qualifications_for_qualifier_history(self, asset: bytes):
+        def lookup_quals_history():
+            history_items = []
+            asset_id = self.get_id_for_asset(asset)
+            if asset_id is None:
+                return []
+            for db_key, db_value in self.asset_db.iterator(prefix=PREFIX_ASSET_TAG_HISTORY + asset_id):
+                idx_b = db_key[5:9]
+                tx_num_b = db_key[9:14]
+                h160_id = db_value[:4]
+                flag = db_value[4]
+                h160_b = self.get_h160_for_id(h160_id)
+                assert h160_b
+
+                tx_pos, = unpack_le_uint32(idx_b)
+                tx_num, = unpack_le_uint64(tx_num_b + bytes(3))
+                tx_hash, height = self.fs_tx_hash(tx_num)
+
+                history_items.append({
+                    'h160': h160_b.hex(),
+                    'flag': True if flag != 0 else False,
+                    'tx_hash': hash_to_hex_str(tx_hash),
+                    'tx_pos': tx_pos,
+                    'height': height,
+                })
+            return history_items
+        return await run_in_thread(lookup_quals_history)
 
     async def qualifications_for_qualifier(self, asset: bytes):
         def lookup_quals():
@@ -1314,9 +1342,9 @@ class DB:
 
                 ret_val[h160_b.hex()] = {
                     'flag': True if flag != 0 else False,
-                    'height': height,
                     'tx_hash': hash_to_hex_str(tx_hash),
-                    'tx_pos': tx_pos
+                    'tx_pos': tx_pos,
+                    'height': height,
                 }
             return ret_val
         return await run_in_thread(lookup_quals)

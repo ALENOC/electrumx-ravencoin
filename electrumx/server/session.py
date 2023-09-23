@@ -1941,6 +1941,22 @@ class ElectrumX(SessionBase):
                 res[asset] = d
         return res
 
+    async def qualifications_for_qualifier_history(self, asset: str, include_mempool=True):
+        check_asset(asset)
+        res = await self.db.qualifications_for_qualifier_history(asset.encode())
+        self.bump_cost(2.0 + len(res) / 30)
+        if include_mempool:
+            mem_res = await self.mempool.get_qualifier_tags(asset)
+            if mem_res:
+                return res + [{
+                    'h160': h160_h,
+                    'flag': d['flag'],
+                    'tx_hash': d['tx_hash'],
+                    'tx_pos': d['tx_pos'],
+                    'height': d['height'],
+                } for h160_h, d in mem_res.items()]
+        return res
+
     async def qualifications_for_qualifier(self, asset: str, include_mempool=True):
         check_asset(asset)
         res = await self.db.qualifications_for_qualifier(asset.encode())
@@ -2101,7 +2117,7 @@ class ElectrumX(SessionBase):
             #1.12
             'blockchain.asset.get_meta_history': self.asset_get_meta_history,
             'blockchain.asset.verifier_string_history': self.get_restricted_string_history,
-            'blockchain.tag.qualifier.history': None,
+            'blockchain.tag.qualifier.history': self.qualifications_for_qualifier_history,
             'blockchain.tag.h160.history': None,
             'blockchain.asset.frozen_history': None,
             'blockchain.asset.restricted_associations_history': None,
