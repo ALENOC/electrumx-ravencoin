@@ -1348,6 +1348,32 @@ class DB:
             return ret_val
         return await run_in_thread(lookup_restricted)
 
+    async def get_restricted_string_history(self, asset: bytes):
+        def lookup_restricted_history():
+            history_items = []
+            asset_id = self.get_id_for_asset(asset)
+            if asset_id is None:
+                return []
+            for db_key, db_value in self.asset_db.iterator(prefix=PREFIX_VERIFIER_HISTORY+asset_id):
+                restricted_idx_b = db_key[5:9]
+                qualifier_idx_b = db_key[9:13]
+                tx_num_b = db_key[13:18]
+
+                res_source_tx_pos, = unpack_le_uint32(restricted_idx_b)
+                qual_source_tx_pos, = unpack_le_uint32(qualifier_idx_b)
+                source_tx_num, = unpack_le_uint64(tx_num_b + bytes(3))
+                source_tx_hash, source_height = self.fs_tx_hash(source_tx_num)
+                history_items.append({
+                    'string': db_value.decode(),
+                    'tx_hash': hash_to_hex_str(source_tx_hash),
+                    'restricted_tx_pos': res_source_tx_pos,
+                    'qualifying_tx_pos': qual_source_tx_pos,
+                    'height': source_height
+                })
+            return sorted(history_items, key=lambda x: (x['height'], x['tx_hash']))
+        return await run_in_thread(lookup_restricted_history)
+
+
     async def get_restricted_string(self, asset: bytes):
         def lookup_restricted():
             asset_id = self.get_id_for_asset(asset)

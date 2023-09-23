@@ -1854,7 +1854,6 @@ class ElectrumX(SessionBase):
             return hash_to_hex_str(tx_hash)
 
     async def asset_get_meta_history(self, name: str, include_mempool=True):
-        self.bump_cost(1.0)
         check_asset(name)
         ret = await self.db.lookup_asset_meta_history(name.encode())
         self.bump_cost(1.0 + len(ret) / 30)
@@ -1961,6 +1960,26 @@ class ElectrumX(SessionBase):
                 return mem_res
         self.bump_cost(1.0)
         return await self.db.is_restricted_frozen(asset.encode('ascii'))
+
+    async def get_restricted_string_history(self, asset: str, include_mempool=True):
+        check_asset(asset)
+        if asset[0] != '$':
+            raise RPCError(
+                BAD_REQUEST, f'{asset} is not a restricted asset'
+            ) from None
+        res = await self.db.get_restricted_string_history(asset.encode())
+        self.bump_cost(1.0 + len(res) / 30)
+        if include_mempool:
+            mem_res = await self.mempool.restricted_verifier(asset)
+            if mem_res:
+                return res + [{
+                    'string': mem_res['string'],
+                    'tx_hash': mem_res['tx_hash'],
+                    'restricted_tx_pos': mem_res['restricted_tx_pos'],
+                    'qualifying_tx_pos': mem_res['qualifying_tx_pos'],
+                    'height': mem_res['height']
+                }]
+        return res
 
     async def get_restricted_string(self, asset: str, include_mempool=True):
         check_asset(asset)
@@ -2081,7 +2100,7 @@ class ElectrumX(SessionBase):
 
             #1.12
             'blockchain.asset.get_meta_history': self.asset_get_meta_history,
-            'blockchain.asset.verifier_string_history': None,
+            'blockchain.asset.verifier_string_history': self.get_restricted_string_history,
             'blockchain.tag.qualifier.history': None,
             'blockchain.tag.h160.history': None,
             'blockchain.asset.frozen_history': None,
