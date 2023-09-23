@@ -1286,7 +1286,7 @@ class DB:
                     'tx_pos': tx_pos,
                     'height': height,
                 })
-            return history_items
+            return sorted(history_items, key=lambda x: (x['height'], x['tx_hash']))
         return await run_in_thread(lookup_quals_history)
 
     async def qualifications_for_h160(self, h160: bytes):
@@ -1344,7 +1344,7 @@ class DB:
                     'tx_pos': tx_pos,
                     'height': height,
                 })
-            return history_items
+            return sorted(history_items, key=lambda x: (x['height'], x['tx_hash']))
         return await run_in_thread(lookup_quals_history)
 
     async def qualifications_for_qualifier(self, asset: bytes):
@@ -1376,6 +1376,29 @@ class DB:
                 }
             return ret_val
         return await run_in_thread(lookup_quals)
+
+    async def restricted_frozen_history(self, asset: bytes):
+        def lookup_restricted_history():
+            history_items = []
+            asset_id = self.get_id_for_asset(asset)
+            if asset_id is None:
+                return []
+            for db_key, db_value in self.asset_db.iterator(prefix=PREFIX_FREEZE_HISTORY+asset_id):
+                idx_b = db_key[5:9]
+                tx_num_b = db_key[9:14]
+
+                tx_pos, = unpack_le_uint32(idx_b)
+                tx_num, = unpack_le_uint64(tx_num_b + bytes(3))
+                tx_hash, height = self.fs_tx_hash(tx_num)
+
+                history_items.append({
+                    'frozen': True if db_value[0] != 0 else False,
+                    'tx_hash': hash_to_hex_str(tx_hash),
+                    'tx_pos': tx_pos,
+                    'height': height,
+                })
+            return sorted(history_items, key=lambda x: (x['height'], x['tx_hash']))
+        return await run_in_thread(lookup_restricted_history)
 
     async def is_restricted_frozen(self, asset: bytes):
         def lookup_restricted():

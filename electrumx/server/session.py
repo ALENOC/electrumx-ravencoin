@@ -1984,8 +1984,26 @@ class ElectrumX(SessionBase):
                 res[h160_h] = d
         return res
 
+    async def restricted_frozen_history(self, asset: str, include_mempool=True):
+        check_asset(asset)
+        if asset[0] != '$':
+            raise RPCError(
+                BAD_REQUEST, f'{asset} is not a restricted asset'
+            ) from None
+        res = await self.db.restricted_frozen_history(asset.encode())
+        self.bump_cost(2.0 + len(res) / 30)
+        if include_mempool:
+            mem_res = await self.mempool.is_frozen(asset)
+            if mem_res:
+                return res + [mem_res]
+        return res
+
     async def is_restricted_frozen(self, asset: str, include_mempool=True):
         check_asset(asset)
+        if asset[0] != '$':
+            raise RPCError(
+                BAD_REQUEST, f'{asset} is not a restricted asset'
+            ) from None
         if include_mempool:
             mem_res = await self.mempool.is_frozen(asset)
             if mem_res:
@@ -2135,7 +2153,7 @@ class ElectrumX(SessionBase):
             'blockchain.asset.verifier_string_history': self.get_restricted_string_history,
             'blockchain.tag.qualifier.history': self.qualifications_for_qualifier_history,
             'blockchain.tag.h160.history': self.qualifications_for_h160_history,
-            'blockchain.asset.frozen_history': None,
+            'blockchain.asset.frozen_history': self.restricted_frozen_history,
             'blockchain.asset.restricted_associations_history': None,
         }
 
