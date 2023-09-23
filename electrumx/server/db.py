@@ -1480,6 +1480,37 @@ class DB:
             return ret_val
         return await run_in_thread(lookup_restricted)
 
+    async def lookup_qualifier_associations_history(self, asset: bytes):
+        def lookup_associations_history():
+            history_items = []
+            qualifier_id = self.get_id_for_asset(asset)
+            if qualifier_id is None:
+                return []
+            for db_key, db_value in self.asset_db.iterator(prefix=PREFIX_ASSOCIATION_HISTORY+qualifier_id):
+                res_asset_id = db_key[5:9]
+                res_idx_b = db_key[9:13]
+                qual_idx_b = db_key[13:17]
+                tx_num_b = db_key[17:22]
+
+                res_asset_b = self.get_asset_for_id(res_asset_id)
+                assert res_asset_b
+
+                restricted_tx_pos, = unpack_le_uint32(res_idx_b)
+                qualifying_tx_pos, = unpack_le_uint32(qual_idx_b)
+                tx_num, = unpack_le_uint64(tx_num_b + bytes(3))
+                tx_hash, height = self.fs_tx_hash(tx_num)    
+
+                history_items.append({
+                    'asset': res_asset_b.decode(),
+                    'associated': True if db_value[0] != 0 else False,
+                    'tx_hash': hash_to_hex_str(tx_hash),
+                    'restricted_tx_pos': restricted_tx_pos,
+                    'qualifying_tx_pos': qualifying_tx_pos,
+                    'height': height,
+                })
+            return sorted(history_items, key=lambda x: (x['height'], x['tx_hash']))
+        return await run_in_thread(lookup_associations_history)
+
     async def lookup_qualifier_associations(self, asset: bytes):
         def lookup_associations():
             qualifier_id = self.get_id_for_asset(asset)
@@ -1504,10 +1535,10 @@ class DB:
                 asset_name = restricted_asset.decode()
                 ret_val[asset_name] = {
                     'associated': True if flag != 0 else False,
-                    'height': height,
                     'tx_hash': hash_to_hex_str(tx_hash),
                     'restricted_tx_pos': restricted_tx_pos,
-                    'qualifying_tx_pos': qualifying_tx_pos
+                    'qualifying_tx_pos': qualifying_tx_pos,
+                    'height': height,
                 }
             return ret_val
         return await run_in_thread(lookup_associations)

@@ -2044,15 +2044,36 @@ class ElectrumX(SessionBase):
         self.bump_cost(1.0)
         return await self.db.get_restricted_string(asset.encode('ascii'))
 
+    async def lookup_qualifier_associations_history(self, asset: str, include_mempool=True):
+        check_asset(asset)
+        if asset[0] != '#':
+            raise RPCError(
+                BAD_REQUEST, f'{asset} is not a qualifier'
+            ) from None
+        first_chunk = asset.split('/')[0]
+        res = await self.db.lookup_qualifier_associations_history(first_chunk.encode())
+        self.bump_cost(1.0 + len(res) / 30)
+        if include_mempool:
+            res_d = await self.lookup_qualifier_associations(asset)
+            if res_d:
+                return res + [{         
+                    'asset': asset,
+                    'associated': mem_d['associated'],
+                    'tx_hash': mem_d['tx_hash'],
+                    'restricted_tx_pos': mem_d['restricted_tx_pos'],
+                    'qualifying_tx_pos': mem_d['qualifying_tx_pos'],
+                    'height': mem_d['height'],
+                } for asset, mem_d in res_d.items() if mem_d['height'] < 0]
+        return res
+
     async def lookup_qualifier_associations(self, asset: str, include_mempool=True):
         check_asset(asset)
         if asset[0] != '#':
             raise RPCError(
                 BAD_REQUEST, f'{asset} is not a qualifier'
             ) from None
-        base_asset = asset.encode('ascii')
-        first_chunk = base_asset.split('/')[0]
-        res = await self.db.lookup_qualifier_associations(first_chunk)
+        first_chunk = asset.split('/')[0]
+        res = await self.db.lookup_qualifier_associations(first_chunk.encode())
         self.bump_cost(1.0 + len(res) / 10)
         if include_mempool:
             for res_asset in list(res.keys()):
@@ -2154,7 +2175,7 @@ class ElectrumX(SessionBase):
             'blockchain.tag.qualifier.history': self.qualifications_for_qualifier_history,
             'blockchain.tag.h160.history': self.qualifications_for_h160_history,
             'blockchain.asset.frozen_history': self.restricted_frozen_history,
-            'blockchain.asset.restricted_associations_history': None,
+            'blockchain.asset.restricted_associations_history': self.lookup_qualifier_associations_history,
         }
 
         self.request_handlers = handlers
