@@ -1261,6 +1261,34 @@ class DB:
             return ret_val
         return await run_in_thread(lookup_h160)
 
+    async def qualifications_for_h160_history(self, h160: bytes):
+        def lookup_quals_history():
+            history_items = []
+            h160_id = self.get_id_for_h160(h160)
+            if h160_id is None:
+                return []
+            for db_key, db_value in self.asset_db.iterator(prefix=PREFIX_H160_TAG_HISTORY + h160_id):
+                idx_b = db_key[5:9]
+                tx_num_b = db_key[9:14]
+                asset_id = db_value[:4]
+                flag = db_value[4]
+                asset_b = self.get_asset_for_id(asset_id)
+                assert asset_b
+
+                tx_pos, = unpack_le_uint32(idx_b)
+                tx_num, = unpack_le_uint64(tx_num_b + bytes(3))
+                tx_hash, height = self.fs_tx_hash(tx_num)
+
+                history_items.append({
+                    'asset': asset_b.decode(),
+                    'flag': True if flag != 0 else False,
+                    'tx_hash': hash_to_hex_str(tx_hash),
+                    'tx_pos': tx_pos,
+                    'height': height,
+                })
+            return history_items
+        return await run_in_thread(lookup_quals_history)
+
     async def qualifications_for_h160(self, h160: bytes):
         def lookup_quals():
             h160_id = self.get_id_for_h160(h160)

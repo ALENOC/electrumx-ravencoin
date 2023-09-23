@@ -1931,6 +1931,22 @@ class ElectrumX(SessionBase):
         self.bump_cost(1.0)
         return await self.db.is_h160_qualified(bytes.fromhex(h160), asset.encode('ascii'))
 
+    async def qualifications_for_h160_history(self, h160: str, include_mempool=True):
+        check_h160(h160)
+        res = await self.db.qualifications_for_h160_history(bytes.fromhex(h160))
+        self.bump_cost(2.0 + len(res) / 30)
+        if include_mempool:
+            mem_res = await self.mempool.get_h160_tags(h160)
+            if mem_res:
+                return res + [{
+                    'asset': asset,
+                    'flag': d['flag'],
+                    'tx_hash': d['tx_hash'],
+                    'tx_pos': d['tx_pos'],
+                    'height': d['height'],
+                } for asset, d in mem_res.items()]
+        return res
+
     async def qualifications_for_h160(self, h160: str, include_mempool=True):
         check_h160(h160)
         res = await self.db.qualifications_for_h160(bytes.fromhex(h160))
@@ -2118,7 +2134,7 @@ class ElectrumX(SessionBase):
             'blockchain.asset.get_meta_history': self.asset_get_meta_history,
             'blockchain.asset.verifier_string_history': self.get_restricted_string_history,
             'blockchain.tag.qualifier.history': self.qualifications_for_qualifier_history,
-            'blockchain.tag.h160.history': None,
+            'blockchain.tag.h160.history': self.qualifications_for_h160_history,
             'blockchain.asset.frozen_history': None,
             'blockchain.asset.restricted_associations_history': None,
         }
