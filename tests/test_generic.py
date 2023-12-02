@@ -118,7 +118,7 @@ def hash160_to_b58_address(h160: bytes, addrtype: bytes) -> str:
 
 def main():
     LevelDB.import_module()
-    os.chdir('/home/work/electrumx_db')
+    os.chdir('/home/work/Desktop/electrumx_db')
 
     asset_db = LevelDB('asset', False)
 
@@ -128,9 +128,7 @@ def main():
     #return
 
     #asset = suid_db.get(b'a$TEST')
-    asset = suid_db.get(b'a#Q02')
-    print(asset)
-    for key, value in asset_db.iterator(prefix=b'q5\x03\x00\x00'):
+    for key, value in asset_db.iterator(prefix=b'b'):
         print(f'{key}: {value}')
 
 if __name__ == '__main__':

@@ -455,41 +455,41 @@ class MemPool(object):
 
             reissued_assets = tx_to_reissue.pop(tx_hash, set())
             for reissued_asset in reissued_assets:
-                del reissues[reissued_asset]
+                reissues.pop(reissued_asset, None)
 
             created_assets = tx_to_create.pop(tx_hash, set())
             for created_asset in created_assets:
-                del creates[created_asset]
+                creates.pop(created_asset, None)
 
             quals = tx_to_qualifier_tags.pop(tx_hash, set())
             for qual in quals:
-                qualifier_tags[qual].pop(tx_hash)
+                qualifier_tags[qual].pop(tx_hash, None)
                 if not qualifier_tags[qual]:
-                    del qualifier_tags[qual]
+                    qualifier_tags.pop(qual, None)
 
             h160s = tx_to_h160_tags.pop(tx_hash, set())
             for h160 in h160s:
-                h160_tags[h160].pop(tx_hash)
+                h160_tags[h160].pop(tx_hash, None)
                 if not h160_tags[h160]:
-                    del h160_tags[h160]
+                    h160_tags.pop(h160, None)
 
             broadcast = tx_to_broadcast.pop(tx_hash, set())
             for b in broadcast:
-                broadcasts[b].pop(tx_hash)
+                broadcasts[b].pop(tx_hash, None)
                 if not broadcasts[b]:
-                    del broadcasts[b]
+                    broadcasts.pop(b, None)
 
             freeze = tx_to_freeze.pop(tx_hash, set())
             for f in freeze:
-                freezes[f].pop(tx_hash)
+                freezes[f].pop(tx_hash, None)
                 if not freezes[f]:
-                    del freezes[f]
+                    freezes.pop(f, None)
 
             verifier = tx_to_verifier.pop(tx_hash, set())
             for v in verifier:
-                verifiers[v].pop(tx_hash)
+                verifiers[v].pop(tx_hash, None)
                 if not verifiers[v]:
-                    del verifiers[v]
+                    verifiers.pop(v, None)
 
             qualifier_association = tx_to_qualifier_associations.pop(tx_hash, set())
             for qa in qualifier_association:
