@@ -1,78 +1,40 @@
-# example of Dockerfile that builds release of electrumx-ravencoin-1.11.0
-# ENV variables can be overrided on the `docker run` command
+FROM python:3.12-slim-bookworm AS builder
 
-FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       build-essential cmake git libleveldb-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /
+WORKDIR /src
+COPY . .
+RUN python -m venv /opt/electrumx \
+    && /opt/electrumx/bin/pip install --no-cache-dir --upgrade pip \
+    && /opt/electrumx/bin/pip install --no-cache-dir .
 
-RUN apt-get update && \
-        apt-get -y install python3 python3-pip python3-venv git cmake libleveldb-dev libssl-dev
+FROM python:3.12-slim-bookworm
 
-RUN useradd -ms /bin/bash electrumx
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libleveldb1d libgomp1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --create-home --home-dir /var/lib/electrumx electrumx
 
-RUN mkdir -p /db
-RUN chown electrumx /db
+COPY --from=builder /opt/electrumx /opt/electrumx
+
+ENV PATH="/opt/electrumx/bin:$PATH" \
+    COIN=Ravencoin \
+    DB_DIRECTORY=/var/lib/electrumx/db \
+    SERVICES="tcp://:50001,rpc://127.0.0.1:8000" \
+    EVENT_LOOP_POLICY=uvloop
+
+RUN install -d -o electrumx -g electrumx /var/lib/electrumx/db
 
 USER electrumx
-WORKDIR /home/electrumx
+WORKDIR /var/lib/electrumx
+VOLUME ["/var/lib/electrumx/db"]
+EXPOSE 50001 50002
+STOPSIGNAL SIGTERM
 
-ENV VIRTUAL_ENV=/home/electrumx/.venv
-RUN python3 -m venv $VIRTUAL_ENV
-ENV PATH="$VIRTUAL_ENV/bin:$PATH"
-
-RUN python3 -m pip install --upgrade pip
-
-ARG VERSION=1.12.1
-
-ADD --chown=electrumx https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/archive/v${VERSION}.tar.gz .
-RUN tar zxvf *.tar.gz
-RUN rm *.tar.gz
-
-WORKDIR /home/electrumx/electrumx-ravencoin-${VERSION}
-RUN python3 -m pip install -r requirements.txt
-RUN python3 setup.py install
-WORKDIR /home/electrumx
-
-RUN rm -r electrumx-ravencoin-${VERSION}
-
-ENV SERVICES="ssl://:50002,tcp://:50001,rpc://:8000"
-ENV COIN=Ravencoin
-ENV DB_DIRECTORY=/db
-ENV DAEMON_URL="http://username:password@hostname:port/"
-ENV ALLOW_ROOT=true
-ENV MAX_SEND=10000000
-ENV BANDWIDTH_UNIT_COST=5000
-ENV CACHE_MB=1000
-ENV EVENT_LOOP_POLICY=uvloop
-
-ENV SSL_CERTFILE="${DB_DIRECTORY}/ssl_cert/server.crt"
-ENV SSL_KEYFILE="${DB_DIRECTORY}/ssl_cert/server.key"
-
-# !!README!!
-# REQUIRED to connect with the larger electrumx ravencoin server network.
-# Full service://(IP/URL):PORT is REQUIRED
-# Example:
-# env REPORT_SERVICES = ssl://rvn4lyfe.com:50002,tcp://rvn4lyfe.com:50001
-
-EXPOSE 8000
-EXPOSE 50001
-EXPOSE 50002
-
-VOLUME /db
-
-RUN ulimit -n 1048576
-
-CMD if [ -d "$DB_DIRECTORY/ssl_cert/" ]; then \
-        echo "SSL certs exist."; \
-    else \ 
-        mkdir "$DB_DIRECTORY/ssl_cert" && \
-        cd "$DB_DIRECTORY/ssl_cert" && \
-        openssl genrsa -out server.key 2048 && \
-        openssl req -new -key server.key -out server.csr -subj "/C=AU" && \
-        openssl x509 -req -days 1825 -in server.csr -signkey server.key -out server.crt; \
-    fi && electrumx_server
-
-# build it with eg.: `docker build -t electrumx-ravencoin .`
-# run it with eg.:
-# `docker run -d --net=host -v /home/electrumx/db/:/db -e DAEMON_URL="http://youruser:yourpass@localhost:8766" -e REPORT_SERVICES=tcp://example.com:50001 electrumx-ravencoin`
-# for a proper clean shutdown, send TERM signal to the running container eg.: `docker kill --signal="TERM" CONTAINER_ID`
+# DAEMON_URL is deliberately not baked into the image.  Supply a private or
+# localhost URL at runtime.  Operators enable TLS only after mounting their own
+# certificate and key and updating SERVICES/SSL_CERTFILE/SSL_KEYFILE.
+CMD ["electrumx_server"]

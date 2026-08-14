@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install native dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake libleveldb-dev
+      - name: Install package and test tools
+        run: python -m pip install --upgrade pip && python -m pip install . pytest pytest-asyncio flake8
+      - name: Unit tests
+        run: pytest -q
+      - name: Static safety checks
+        run: |
+          python -m compileall -q electrumx
+          flake8 electrumx/server/ravencoin_backend.py setup.py \
+            tests/lib/test_ravencoin_headers.py \
+            tests/server/test_ravencoin_backend.py \
+            tests/server/test_ravencoin_session.py
+
+  container:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build amd64 and arm64 images without publishing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: contrib/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
