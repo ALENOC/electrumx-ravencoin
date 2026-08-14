@@ -129,8 +129,8 @@ def evaluate_backend(network_info, blockchain_info, electrum_network,
     network_matches = network == expected_daemon_chain(electrum_network)
     version_safe = version_tuple >= MINIMUM_SAFE_CORE
     checkpoint_required = network == "main" and blocks >= INCIDENT_CHECKPOINT_HEIGHT
-    checkpoint_known = (not checkpoint_required or
-                        checkpoint_hash == INCIDENT_CHECKPOINT_HASH)
+    checkpoint_known = (not checkpoint_required
+                        or checkpoint_hash == INCIDENT_CHECKPOINT_HASH)
     synchronized = ibd is not True and blocks == headers
 
     return RavencoinBackendStatus(

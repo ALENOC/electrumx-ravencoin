@@ -1,14 +1,28 @@
 [Unit]
-Description=Electrumx
-After=network.target network-online.target
+Description=Community ElectrumX-RVN server
+After=network-online.target ravennode.service
 Wants=network-online.target
+StartLimitIntervalSec=10min
+StartLimitBurst=3
 
 [Service]
 EnvironmentFile=/etc/electrumx.conf
-ExecStart=/home/electrumx/electrumx/electrumx_server
+ExecStart=/opt/electrumx/venv/bin/electrumx_server
 User=electrumx
+Group=electrumx
+Restart=on-failure
+RestartSec=30s
 LimitNOFILE=8192
 TimeoutStopSec=30min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/electrumx
+MemoryAccounting=true
+CPUAccounting=true
+# Core is the priority service under memory pressure.
+OOMScoreAdjust=500
 
 [Install]
 WantedBy=multi-user.target
