@@ -4,7 +4,7 @@
 #
 # See the file "LICENCE" for information about the copyright
 # and warranty status of this software.
-from asyncio import Event
+from asyncio import Event, sleep
 
 from aiorpcx import _version as aiorpcx_version, TaskGroup
 
@@ -16,6 +16,9 @@ from electrumx.server.daemon import Daemon
 from electrumx.server.db import DB
 from electrumx.server.mempool import MemPool, MemPoolAPI
 from electrumx.server.session import SessionManager
+from electrumx.server.ravencoin_backend import (
+    enforce_backend_policy, verify_database_chain,
+)
 
 
 class Notifications(object):
@@ -186,6 +189,22 @@ class Controller(ServerBase):
     
         async with Daemon(env.coin, env.daemon_url) as daemon:
             db = DB(env)
+            backend_status = await daemon.refresh_ravencoin_backend_status(env.coin.NET)
+            unsafe_warning = enforce_backend_policy(
+                backend_status, env.allow_unsafe_ravencoin_core
+            )
+            if unsafe_warning:
+                self.logger.critical(
+                    f'{unsafe_warning}; ALLOW_UNSAFE_RAVENCOIN_CORE is enabled. '
+                    'This must never be used for RavenTag production.'
+                )
+            self.logger.info(
+                f'Ravencoin backend {backend_status.subversion} on '
+                f'{backend_status.network}: blocks={backend_status.blocks:,d} '
+                f'headers={backend_status.headers:,d} '
+                f'synchronized={backend_status.synchronized}'
+            )
+            await verify_database_chain(db, daemon)
             bp = block_proc.BlockProcessor(env, db, daemon, notifications)
 
             # Set notifications up to implement the MemPoolAPI
@@ -215,11 +234,24 @@ class Controller(ServerBase):
                 await group.spawn(db.populate_header_merkle_cache())
                 await group.spawn(mempool.keep_synchronized(mempool_event))
 
+            async def monitor_ravencoin_backend():
+                while True:
+                    await sleep(env.ravencoin_backend_check_interval)
+                    status = await daemon.refresh_ravencoin_backend_status(env.coin.NET)
+                    unsafe_warning = enforce_backend_policy(
+                        status, env.allow_unsafe_ravencoin_core
+                    )
+                    if unsafe_warning:
+                        self.logger.critical(
+                            f'{unsafe_warning}; unsafe development override remains active'
+                        )
+
             async with TaskGroup() as group:
                 await group.spawn(session_mgr.serve(notifications, mempool_event))
                 await group.spawn(bp.fetch_and_process_blocks(caught_up_event, shutdown_event))
                 await group.spawn(bp.check_cache_size_loop())
                 await group.spawn(wait_for_catchup())
+                await group.spawn(monitor_ravencoin_backend())
 
                 async for task in group:
                     if not task.cancelled():

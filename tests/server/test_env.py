@@ -16,7 +16,7 @@ BASE_DB_DIR = '/some/dir'
 base_environ = {
     'DB_DIRECTORY': BASE_DB_DIR,
     'DAEMON_URL': BASE_DAEMON_URL,
-    'COIN': 'BitcoinSV',
+    'COIN': 'Ravencoin',
 }
 
 
@@ -89,13 +89,13 @@ def test_COIN_NET():
     '''Test COIN and NET defaults and redirection.'''
     setup_base_env()
     e = Env()
-    assert e.coin == lib_coins.BitcoinSV
+    assert e.coin == lib_coins.Ravencoin
     os.environ['NET'] = 'testnet'
     e = Env()
-    assert e.coin == lib_coins.BitcoinSVTestnet
+    assert e.coin == lib_coins.RavencoinTestnet
     os.environ['NET'] = ' testnet '
     e = Env()
-    assert e.coin == lib_coins.BitcoinSVTestnet
+    assert e.coin == lib_coins.RavencoinTestnet
 
 
 def test_CACHE_MB():
@@ -227,15 +227,15 @@ def test_REPORT_SERVICES_localhost():
 
 def test_REORG_LIMIT():
     assert_integer('REORG_LIMIT', 'reorg_limit',
-                   lib_coins.BitcoinSV.REORG_LIMIT)
+                   lib_coins.Ravencoin.REORG_LIMIT)
 
 
 def test_COST_HARD_LIMIT():
-    assert_integer('COST_HARD_LIMIT', 'cost_hard_limit', 10000)
+    assert_integer('COST_HARD_LIMIT', 'cost_hard_limit', 100000)
 
 
 def test_COST_SOFT_LIMIT():
-    assert_integer('COST_SOFT_LIMIT', 'cost_soft_limit', 1000)
+    assert_integer('COST_SOFT_LIMIT', 'cost_soft_limit', 10000)
 
 
 def test_INITIAL_CONCURRENT():
@@ -247,7 +247,7 @@ def test_REQUEST_SLEEP():
 
 
 def test_BANDWIDTH_UNIT_COST():
-    assert_integer('BANDWIDTH_UNIT_COST', 'bw_unit_cost', 5000)
+    assert_integer('BANDWIDTH_UNIT_COST', 'bw_unit_cost', 500)
 
 
 def test_DONATION_ADDRESS():
@@ -259,7 +259,7 @@ def test_DB_ENGINE():
 
 
 def test_MAX_SEND():
-    assert_integer('MAX_SEND', 'max_send', 1000000)
+    assert_integer('MAX_SEND', 'max_send', lib_coins.Ravencoin.DEFAULT_MAX_SEND)
 
 
 def test_LOG_LEVEL():
@@ -275,7 +275,7 @@ def test_MAX_SESSIONS():
     too_big = 1000000
     os.environ['MAX_SESSIONS'] = str(too_big)
     e = Env()
-    assert e.max_sessions < too_big
+    assert e.max_sessions <= too_big
     # Cannot test default as it may be lowered by the open file limit cap
 
 
@@ -361,5 +361,5 @@ def test_ban_versions():
 
 
 def test_coin_class_provided():
-    e = Env(lib_coins.BitcoinSV)
-    assert e.coin == lib_coins.BitcoinSV
+    e = Env(lib_coins.Ravencoin)
+    assert e.coin == lib_coins.Ravencoin

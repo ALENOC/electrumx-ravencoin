@@ -72,6 +72,19 @@ class Env(EnvBase):
         self.drop_client = self.custom("DROP_CLIENT", None, re.compile)
         self.cache_MB = self.integer('CACHE_MB', 1200)
         self.reorg_limit = self.integer('REORG_LIMIT', self.coin.REORG_LIMIT)
+        self.allow_unsafe_ravencoin_core = self.boolean(
+            'ALLOW_UNSAFE_RAVENCOIN_CORE', False
+        )
+        self.ravencoin_backend_check_interval = self.integer(
+            'RAVENCOIN_BACKEND_CHECK_INTERVAL', 60
+        )
+        self.ravencoin_backend_info_max_age = self.integer(
+            'RAVENCOIN_BACKEND_INFO_MAX_AGE', 5
+        )
+        if self.ravencoin_backend_check_interval < 10:
+            raise self.Error('RAVENCOIN_BACKEND_CHECK_INTERVAL must be at least 10 seconds')
+        if not 0 <= self.ravencoin_backend_info_max_age <= 60:
+            raise self.Error('RAVENCOIN_BACKEND_INFO_MAX_AGE must be between 0 and 60 seconds')
 
         # Server limits to help prevent DoS
 
