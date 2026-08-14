@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
@@ -8,10 +9,11 @@ from aiorpcx import (
     JSONRPCv1, JSONRPCLoose, RPCError, ignore_after,
     Request, )
 
-from electrumx.lib.coins import Bitcoin, CoinError
+from electrumx.lib.coins import Ravencoin, CoinError
 from electrumx.server.daemon import Daemon
+from electrumx.server.ravencoin_backend import INCIDENT_CHECKPOINT_HASH
 
-coin = Bitcoin
+coin = Ravencoin
 
 # These should be full, canonical URLs
 urls = ['http://rpc_user:rpc_pass@127.0.0.1:8332/',
@@ -20,7 +22,7 @@ urls = ['http://rpc_user:rpc_pass@127.0.0.1:8332/',
 
 @pytest.fixture
 def daemon():
-    return Daemon(Bitcoin, ','.join(urls))
+    return Daemon(Ravencoin, ','.join(urls))
 
 
 class ResponseBase(object):
@@ -186,7 +188,7 @@ async def test_set_urls_short():
 
     no_port_urls = [url[:url.rfind(':')] for url in urls]
     daemon = Daemon(coin, ','.join(no_port_urls))
-    assert daemon.current_url() == urls[0]
+    assert daemon.current_url() == urls[0].replace(':8332/', ':8766/')
     assert len(daemon.urls) == 2
 
 
@@ -230,6 +232,38 @@ async def test_broadcast_transaction(daemon):
     tx_hash = 'hash'
     daemon.session = ClientSessionGood(('sendrawtransaction', [raw_tx], tx_hash))
     assert await daemon.broadcast_transaction(raw_tx) == tx_hash
+
+
+@pytest.mark.asyncio
+async def test_backend_status_refresh_detects_downgrade_and_cache(daemon):
+    daemon.getnetworkinfo = AsyncMock(return_value={
+        'version': 4_080_000,
+        'subversion': '/Ravencoin:4.8.0/',
+    })
+    daemon.getblockchaininfo = AsyncMock(return_value={
+        'chain': 'main',
+        'blocks': 4_494_000,
+        'headers': 4_494_000,
+        'initialblockdownload': False,
+    })
+    daemon._send_single = AsyncMock(return_value=INCIDENT_CHECKPOINT_HASH)
+
+    safe = await daemon.refresh_ravencoin_backend_status('mainnet')
+    assert safe.core_safe
+    assert daemon._send_single.await_args.args == (
+        'getblockhash', (4_487_775,)
+    )
+
+    daemon.getnetworkinfo.return_value = {
+        'version': 4_070_000,
+        'subversion': '/Ravencoin:4.7.0/',
+    }
+    cached = await daemon.refresh_ravencoin_backend_status('mainnet', max_age=60)
+    assert cached is safe
+
+    downgraded = await daemon.refresh_ravencoin_backend_status('mainnet', max_age=0)
+    assert not downgraded.version_safe
+    assert daemon.getnetworkinfo.await_count == 2
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,9 @@ import aiohttp
 from aiorpcx import run_in_thread
 
 from electrumx.lib.util import hex_to_bytes, open_truncate, class_logger
+from electrumx.server.ravencoin_backend import (
+    INCIDENT_CHECKPOINT_HEIGHT, evaluate_backend,
+)
 
 
 class DaemonError(Exception):
@@ -53,6 +56,9 @@ class Daemon(object):
         self._height = None
         self.available_rpcs = {}
         self.session = None
+        self._ravencoin_backend_status = None
+        self._ravencoin_backend_checked = 0.0
+        self._ravencoin_backend_lock = asyncio.Lock()
 
     async def __aenter__(self):
         self.session = aiohttp.ClientSession(connector=self.connector())
@@ -226,6 +232,39 @@ class Daemon(object):
     async def getnetworkinfo(self):
         '''Return the result of the 'getnetworkinfo' RPC call.'''
         return await self._send_single('getnetworkinfo')
+
+    async def getblockchaininfo(self):
+        '''Return the result of the 'getblockchaininfo' RPC call.'''
+        return await self._send_single('getblockchaininfo')
+
+    async def refresh_ravencoin_backend_status(self, electrum_network, max_age=0):
+        '''Return fresh, structured Ravencoin backend compatibility evidence.'''
+        now = time.monotonic()
+        if (self._ravencoin_backend_status is not None and max_age > 0 and
+                now - self._ravencoin_backend_checked <= max_age):
+            return self._ravencoin_backend_status
+
+        async with self._ravencoin_backend_lock:
+            now = time.monotonic()
+            if (self._ravencoin_backend_status is not None and max_age > 0 and
+                    now - self._ravencoin_backend_checked <= max_age):
+                return self._ravencoin_backend_status
+
+            network_info, blockchain_info = await asyncio.gather(
+                self.getnetworkinfo(), self.getblockchaininfo()
+            )
+            checkpoint_hash = None
+            if (blockchain_info.get('chain') == 'main' and
+                    blockchain_info.get('blocks', -1) >= INCIDENT_CHECKPOINT_HEIGHT):
+                checkpoint_hash = await self._send_single(
+                    'getblockhash', (INCIDENT_CHECKPOINT_HEIGHT,)
+                )
+            status = evaluate_backend(
+                network_info, blockchain_info, electrum_network, checkpoint_hash
+            )
+            self._ravencoin_backend_status = status
+            self._ravencoin_backend_checked = time.monotonic()
+            return status
 
     async def estimatesmartfee(self, conf_target, estimate_mode='CONSERVATIVE'):
         return await self._send_single('estimatesmartfee', (conf_target, estimate_mode))
