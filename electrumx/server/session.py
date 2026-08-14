@@ -37,6 +37,10 @@ from electrumx.lib.hash import (sha256, hash_to_hex_str, hex_str_to_hash, HASHX_
 
 from electrumx.server.daemon import DaemonError
 from electrumx.server.peers import PeerManager
+from electrumx.server.ravencoin_backend import (
+    INCIDENT_CHECKPOINT_HASH, INCIDENT_CHECKPOINT_HEIGHT,
+    UnsafeRavencoinCoreError, enforce_backend_policy,
+)
 
 if TYPE_CHECKING:
     from electrumx.server.db import DB
@@ -1072,11 +1076,28 @@ class ElectrumX(SessionBase):
             'genesis_hash': env.coin.GENESIS_HASH,
             'hash_function': 'sha256',
             'services': [str(service) for service in env.report_services],
+            'ravencoin': {
+                'backend_info': True,
+                'assets': True,
+                'kawpow_height_validation': True,
+                'checkpoint': {
+                    'height': INCIDENT_CHECKPOINT_HEIGHT,
+                    'hash': INCIDENT_CHECKPOINT_HASH,
+                },
+            },
         }
 
     async def server_features_async(self):
         self.bump_cost(0.2)
         return self.server_features(self.env)
+
+    async def ravencoin_backend(self):
+        '''Return fresh sanitized evidence about the Ravencoin Core backend.'''
+        self.bump_cost(0.5)
+        status = await self.session_mgr.daemon.refresh_ravencoin_backend_status(
+            self.env.coin.NET, self.env.ravencoin_backend_info_max_age
+        )
+        return status.public_dict(electrumx.version)
 
     @classmethod
     def server_version_args(cls):
@@ -1740,6 +1761,20 @@ class ElectrumX(SessionBase):
         raw_tx: the raw transaction as a hexadecimal string'''
         assert_raw_bytes(raw_tx)
         self.bump_cost(0.25 + len(raw_tx) / 5000)
+        # A daemon downgrade between periodic checks must never retain a
+        # broadcast window.  Re-check without using the capability cache.
+        backend_status = await self.session_mgr.daemon.refresh_ravencoin_backend_status(
+            self.env.coin.NET, max_age=0
+        )
+        try:
+            enforce_backend_policy(
+                backend_status, self.env.allow_unsafe_ravencoin_core
+            )
+        except UnsafeRavencoinCoreError as exc:
+            self.logger.critical(f'refusing transaction broadcast: {exc}')
+            raise RPCError(
+                DAEMON_ERROR, 'transaction broadcast disabled: unsafe Ravencoin backend'
+            ) from None
         # This returns errors as JSON RPC errors, as is natural
         try:
             hex_hash = await self.session_mgr.broadcast_transaction(raw_tx)
@@ -2135,6 +2170,7 @@ class ElectrumX(SessionBase):
             'server.banner': self.banner,
             'server.donation_address': self.donation_address,
             'server.features': self.server_features_async,
+            'server.ravencoin_backend': self.ravencoin_backend,
             'server.peers.subscribe': self.peers_subscribe,
             'server.ping': self.ping,
             'server.version': self.server_version,
