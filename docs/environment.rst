@@ -183,6 +183,26 @@ Miscellaneous
 
 These environment variables are optional:
 
+.. envvar:: ALLOW_UNSAFE_RAVENCOIN_CORE
+
+  Disabled when unset, which is the required production setting.  Setting a
+  non-empty value explicitly bypasses the Ravencoin Core 4.8.0 minimum-version,
+  network, and checkpoint startup gate and emits critical warnings.  This is
+  only for isolated development and must never be enabled on a public server.
+
+.. envvar:: RAVENCOIN_BACKEND_CHECK_INTERVAL
+
+  Seconds between backend Core safety checks.  Defaults to 60 and cannot be
+  lower than 10.  A failed periodic check terminates serving; systemd may then
+  restart according to its bounded policy.  Transaction broadcast always does
+  an additional uncached check.
+
+.. envvar:: RAVENCOIN_BACKEND_INFO_MAX_AGE
+
+  Maximum cached age, in seconds, for ``server.ravencoin_backend`` responses.
+  Defaults to 5 and must be between 0 and 60.  The response includes its own
+  observation timestamp.
+
 .. envvar:: LOG_FORMAT
 
   The Python logging `format string
