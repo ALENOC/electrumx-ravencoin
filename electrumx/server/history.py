@@ -18,7 +18,8 @@ from electrumx.lib import util
 from electrumx.lib.hash import hash_to_hex_str, HASHX_LEN
 
 from electrumx.lib.util import (
-    pack_be_uint32, pack_le_uint64, unpack_be_uint32_from, unpack_le_uint64,
+    pack_be_uint16, pack_be_uint32, pack_le_uint64, unpack_be_uint32_from,
+    unpack_le_uint64,
 )
 
 
@@ -225,7 +226,7 @@ class History(object):
     def _flush_compaction(self, cursor, write_items, keys_to_delete):
         '''Flush a single compaction pass as a batch.'''
         # Update compaction state
-        if cursor == (2**8)**4:  # 65536:
+        if cursor == 2**16:
             self.flush_count = self.comp_flush_count
             self.comp_cursor = -1
             self.comp_flush_count = -1
@@ -315,13 +316,25 @@ class History(object):
         write_items = []   # A list of (key, value) pairs
         write_size = 0
 
-        # Loop over 2-byte prefixes
+        # The history key uses a 4-byte flush-id suffix, but compaction groups
+        # rows by the first two bytes of hashX.  Seek directly to the next
+        # occupied prefix instead of opening 65,536 mostly-empty iterators.
         cursor = self.comp_cursor
-        while write_size < limit and cursor < (2**8)**4:  # 65536:
-            prefix = pack_be_uint32(cursor)
+        while write_size < limit and cursor < 2**16:
+            prefix = None
+            start = pack_be_uint16(cursor)
+            for key, _hist in self.db.iterator(start=start):
+                if len(key) == HASHX_LEN + 4:
+                    prefix = key[:2]
+                    break
+            if prefix is None:
+                cursor = 2**16
+                break
+
+            prefix_value = int.from_bytes(prefix, byteorder='big')
             write_size += self._compact_prefix(prefix, write_items,
                                                keys_to_delete)
-            cursor += 1
+            cursor = prefix_value + 1
 
         max_rows = self.comp_flush_count + 1
         self._flush_compaction(cursor, write_items, keys_to_delete)
@@ -330,7 +343,7 @@ class History(object):
                          'removed {:,d} rows, largest: {:,d}, {:.1f}% complete'
                          .format(len(write_items), write_size / 1000000,
                                  len(keys_to_delete), max_rows,
-                                 100 * cursor / ((2**8)**4)))
+                                 100 * cursor / (2**16)))
         return write_size
 
     def _cancel_compaction(self):

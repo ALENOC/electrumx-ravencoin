@@ -1229,7 +1229,10 @@ class DB:
             return [lookup_utxo(*hashX_pair) for hashX_pair in hashX_pairs]
 
         hashX_pairs = await run_in_thread(lookup_hashXs)
-        return [i for i in await run_in_thread(lookup_utxos, hashX_pairs) if i]
+        # Preserve one result per requested prevout.  The mempool relies on
+        # positional correspondence and handles None when Core is ahead of
+        # the indexed DB or an input is missing.
+        return await run_in_thread(lookup_utxos, hashX_pairs)
 
     # For external use
     

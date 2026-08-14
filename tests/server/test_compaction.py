@@ -6,7 +6,7 @@ import random
 from os import environ, urandom
 
 from electrumx.lib.hash import HASHX_LEN
-from electrumx.lib.util import pack_be_uint16, pack_le_uint64
+from electrumx.lib.util import pack_be_uint32, pack_le_uint64
 from electrumx.server.db import DB
 from electrumx.server.env import Env
 
@@ -29,7 +29,7 @@ def create_histories(history, hashX_count=100):
 
         tx_num += 1
         # Occasionally flush and drop a random hashX if non-empty
-        if random.random() < 0.1:
+        if random.random() < 1.0:
             history.flush()
             index = random.randrange(0, len(hashXs))
             if histories[hashXs[index]]:
@@ -49,7 +49,7 @@ def check_hashX_compaction(history):
     hist_list = []
     hist_map = {}
     for flush_count, count in pairs:
-        key = hashX + pack_be_uint16(flush_count)
+        key = hashX + pack_be_uint32(flush_count)
         hist = full_hist[cum * 5: (cum+count) * 5]
         hist_map[key] = hist
         hist_list.append(hist)
@@ -65,10 +65,10 @@ def check_hashX_compaction(history):
     assert len(keys_to_delete) == 3
     assert len(hist_map) == len(pairs)
     for n, item in enumerate(write_items):
-        assert item == (hashX + pack_be_uint16(n),
+        assert item == (hashX + pack_be_uint32(n),
                         full_hist[n * row_size: (n + 1) * row_size])
     for flush_count, count in pairs:
-        assert hashX + pack_be_uint16(flush_count) in keys_to_delete
+        assert hashX + pack_be_uint32(flush_count) in keys_to_delete
 
     # Check re-compaction is null
     hist_map = {key: value for key, value in write_items}
@@ -87,7 +87,7 @@ def check_hashX_compaction(history):
     write_size = history._compact_hashX(hashX, hist_map, hist_list,
                                         write_items, keys_to_delete)
     assert write_size == len(hist_list[-1])
-    assert write_items == [(hashX + pack_be_uint16(2), hist_list[-1])]
+    assert write_items == [(hashX + pack_be_uint32(2), hist_list[-1])]
     assert len(keys_to_delete) == 1
     assert write_items[0][0] in keys_to_delete
     assert len(hist_map) == len(pairs)
@@ -114,7 +114,7 @@ async def run_test(db_dir):
     environ.clear()
     environ['DB_DIRECTORY'] = db_dir
     environ['DAEMON_URL'] = ''
-    environ['COIN'] = 'BitcoinSV'
+    environ['COIN'] = 'Ravencoin'
     db = DB(Env())
     await db.open_for_serving()
     history = db.history
@@ -122,7 +122,9 @@ async def run_test(db_dir):
     # Test abstract compaction
     check_hashX_compaction(history)
     # Now test in with random data
-    histories = create_histories(history)
+    # Five independent histories provide multi-flush coverage without
+    # turning a deterministic unit test into minutes of LevelDB fsyncs.
+    histories = create_histories(history, hashX_count=5)
     check_written(history, histories)
     compact_history(history)
     check_written(history, histories)
@@ -130,5 +132,8 @@ async def run_test(db_dir):
 def test_compaction(tmpdir):
     db_dir = str(tmpdir)
     print('Temp dir: {}'.format(db_dir))
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(run_test(db_dir))
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(run_test(db_dir))
+    finally:
+        loop.close()
