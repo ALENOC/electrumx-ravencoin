@@ -58,13 +58,13 @@ class Storage(object):
         '''
         raise NotImplementedError
 
-    def iterator(self, prefix=b'', reverse=False):
+    def iterator(self, prefix=b'', reverse=False, start=None):
         '''Return an iterator that yields (key, value) pairs from the
         database sorted by key.
 
         If `prefix` is set, only keys starting with `prefix` will be
-        included.  If `reverse` is True the items are returned in
-        reverse order.
+        included.  If `start` is set, iteration begins at that key.  If
+        `reverse` is True the items are returned in reverse order.
         '''
         raise NotImplementedError
 
@@ -127,8 +127,8 @@ class RocksDB(Storage):
     def write_batch(self):
         return RocksDBWriteBatch(self.db)
 
-    def iterator(self, prefix=b'', reverse=False):
-        return RocksDBIterator(self.db, prefix, reverse)
+    def iterator(self, prefix=b'', reverse=False, start=None):
+        return RocksDBIterator(self.db, prefix, reverse, start)
 
 
 class RocksDBWriteBatch(object):
@@ -149,7 +149,7 @@ class RocksDBWriteBatch(object):
 class RocksDBIterator(object):
     '''An iterator for RocksDB.'''
 
-    def __init__(self, db, prefix, reverse):
+    def __init__(self, db, prefix, reverse, start=None):
         self.prefix = prefix
         if reverse:
             self.iterator = reversed(db.iteritems())
@@ -164,7 +164,7 @@ class RocksDBIterator(object):
                 self.iterator.seek_to_last()
         else:
             self.iterator = db.iteritems()
-            self.iterator.seek(prefix)
+            self.iterator.seek(max(prefix, start or prefix))
 
     def __iter__(self):
         return self

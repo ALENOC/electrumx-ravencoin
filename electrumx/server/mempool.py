@@ -949,13 +949,13 @@ class MemPool(object):
                         broadcasts[asset][txid] = (data, expiry, tx_pos)
                         tx_to_broadcast[txid].add(asset)
 
-        utxos = []
-
-        for this_txid, (hX, asset, v) in zip(
-            (x[0] for x in bc_prevouts),
-            await self.api.lookup_utxos((x[1] for x in bc_prevouts)),
-        ):
-            utxos.append((hX, v, asset))
+        db_utxos = await self.api.lookup_utxos((x[1] for x in bc_prevouts))
+        utxo_map = {}
+        for (this_txid, _prevout), db_utxo in zip(bc_prevouts, db_utxos):
+            if db_utxo is None:
+                continue
+            hX, asset, v = db_utxo
+            utxo_map[_prevout] = (hX, v, asset)
             for txid, d in possible_broadcasts[hX].items():
                 if this_txid != txid:
                     continue
@@ -963,10 +963,6 @@ class MemPool(object):
                     if broadcast_asset == asset:
                         broadcasts[asset][txid] = (data, expiry, tx_pos)
                         tx_to_broadcast[txid].add(asset)
-
-        utxo_map = {
-            prevout: utxo for prevout, utxo in zip((x[1] for x in bc_prevouts), utxos)
-        }
 
         return self._accept_transactions(
             tx_map,

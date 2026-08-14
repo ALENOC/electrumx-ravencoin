@@ -4,16 +4,18 @@ import os
 from collections import defaultdict
 from functools import partial
 from random import randrange, choice, seed
+from types import SimpleNamespace
 
 import pytest
 from aiorpcx import Event, TaskGroup, sleep, ignore_after
 
-from electrumx.lib.coins import Bitcoin
+from electrumx.lib.coins import Ravencoin
 from electrumx.lib.hash import HASHX_LEN, hex_str_to_hash, hash_to_hex_str, double_sha256
 from electrumx.lib.tx import Tx, TxInput, TxOutput
 from electrumx.server.mempool import MemPool, MemPoolAPI
 
-coin = Bitcoin
+coin = Ravencoin
+env = SimpleNamespace(coin=coin)
 # Change seed daily
 seed(datetime.date.today().toordinal())
 
@@ -28,7 +30,7 @@ def random_tx(hash160s, utxos):
     # Create inputs spending random UTXOs.  total the inpu
     for n in range(n_inputs):
         prevout = choice(list(utxos))
-        hashX, value = utxos.pop(prevout)
+        hashX, asset, value = utxos.pop(prevout)
         inputs.append(TxInput(prevout[0], prevout[1], b'', 4294967295))
         input_value += value
 
@@ -47,12 +49,12 @@ def random_tx(hash160s, utxos):
         pk_script = coin.hash160_to_P2PKH_script(choice(hash160s))
         outputs.append(TxOutput(value, pk_script))
 
-    tx = Tx(2, inputs, outputs, 0)
+    tx = Tx(2, inputs, outputs, 0, [])
     tx_bytes = tx.serialize()
     tx_hash = double_sha256(tx_bytes)
     for n, output in enumerate(tx.outputs):
         utxos[(tx_hash, n)] = (coin.hashX_from_script(output.pk_script),
-                               output.value)
+                               None, output.value)
     return tx, tx_hash, tx_bytes
 
 
@@ -81,7 +83,7 @@ class API(MemPoolAPI):
         prevouts = [(os.urandom(32), randrange(0, 10))
                     for n in range (db_utxo_count)]
         random_value = partial(randrange, coin.VALUE_PER_COIN * 10)
-        self.db_utxos = {prevout: (choice(self.hashXs), random_value())
+        self.db_utxos = {prevout: (choice(self.hashXs), None, random_value())
                          for prevout in prevouts}
 
         unspent_utxos = self.db_utxos.copy()
@@ -96,7 +98,7 @@ class API(MemPoolAPI):
         for tx_hash, tx in self.txs.items():
             for n, output in enumerate(tx.outputs):
                 hashX = coin.hashX_from_script(output.pk_script)
-                utxos[(tx_hash, n)] = (hashX, output.value)
+                utxos[(tx_hash, n)] = (hashX, None, output.value)
         return utxos
 
     def mempool_spends(self):
@@ -116,9 +118,9 @@ class API(MemPoolAPI):
                 if prevout in utxos:
                     utxos.pop(prevout)
                 else:
-                    hashX, value = self.db_utxos[prevout]
+                    hashX, asset, value = self.db_utxos[prevout]
                     deltas[hashX] -= value
-        for hashX, value in utxos.values():
+        for hashX, asset, value in utxos.values():
             deltas[hashX] += value
         return deltas
 
@@ -132,9 +134,9 @@ class API(MemPoolAPI):
                     continue
                 prevout = (input.prev_hash, input.prev_idx)
                 if prevout in utxos:
-                    hashX, value = utxos.pop(prevout)
+                    hashX, asset, value = utxos.pop(prevout)
                 else:
-                    hashX, value = self.db_utxos[prevout]
+                    hashX, asset, value = self.db_utxos[prevout]
                 spends[hashX].append(prevout)
         return spends
 
@@ -152,9 +154,9 @@ class API(MemPoolAPI):
                 has_ui = has_ui or (input.prev_hash in self.txs)
                 prevout = (input.prev_hash, input.prev_idx)
                 if prevout in utxos:
-                    hashX, value = utxos[prevout]
+                    hashX, asset, value = utxos[prevout]
                 else:
-                    hashX, value = self.db_utxos[prevout]
+                    hashX, asset, value = self.db_utxos[prevout]
                 hashXs.add(hashX)
                 fee += value
 
@@ -177,9 +179,9 @@ class API(MemPoolAPI):
                     continue
                 prevout = (input.prev_hash, input.prev_idx)
                 if prevout in utxos:
-                    hashX, value = utxos[prevout]
+                    hashX, asset, value = utxos[prevout]
                 else:
-                    hashX, value = self.db_utxos[prevout]
+                    hashX, asset, value = self.db_utxos[prevout]
                 touched.add(hashX)
 
             for output in tx.outputs:
@@ -187,12 +189,12 @@ class API(MemPoolAPI):
         return touched
 
     def UTXOs(self):
-        # Return lists of UTXO 5-tuples by hashX
+        # Return lists of UTXO 6-tuples by hashX
         utxos = defaultdict(list)
         for tx_hash, tx in self.txs.items():
             for n, output in enumerate(tx.outputs):
                 hashX = coin.hashX_from_script(output.pk_script)
-                utxos[hashX].append((-1, n, tx_hash, 0, output.value))
+                utxos[hashX].append((-1, n, tx_hash, 0, None, output.value))
         return utxos
 
     async def height(self):
@@ -222,7 +224,7 @@ class API(MemPoolAPI):
         return [self.raw_txs.get(hash) for hash in hashes]
 
     async def lookup_utxos(self, prevouts):
-        '''Return a list of (hashX, value) pairs each prevout if unspent,
+        '''Return (hashX, asset, value) for each unspent prevout,
         otherwise return None if spent or not found.
 
         prevouts - an iterable of (hash, index) pairs
@@ -230,7 +232,7 @@ class API(MemPoolAPI):
         await sleep(0)
         return [self.db_utxos.get(prevout) for prevout in prevouts]
 
-    async def on_mempool(self, touched, height, assets):
+    async def on_mempool(self, touched, height, assets, *_asset_changes):
         '''Called each time the mempool is synchronized.  touched is a set of
         hashXs touched since the previous call.  height is the
         daemon's height at the time the mempool was obtained.'''
@@ -261,7 +263,7 @@ def in_caplog(caplog, message):
 @pytest.mark.asyncio
 async def test_keep_synchronized(caplog):
     api = API()
-    mempool = MemPool(coin, api)
+    mempool = MemPool(env, api)
     event = Event()
     with caplog.at_level(logging.INFO):
         async with TaskGroup() as group:
@@ -280,7 +282,7 @@ async def test_keep_synchronized(caplog):
 async def test_balance_delta():
     api = API()
     api.initialize()
-    mempool = MemPool(coin, api)
+    mempool = MemPool(env, api)
     event = Event()
     async with TaskGroup() as group:
         await group.spawn(mempool.keep_synchronized, event)
@@ -289,21 +291,22 @@ async def test_balance_delta():
 
     # Check the default dict is handled properly
     prior_len = len(mempool.hashXs)
-    assert await mempool.balance_delta(os.urandom(HASHX_LEN)) == 0
+    assert await mempool.balance_delta(os.urandom(HASHX_LEN), None) == {}
     assert prior_len == len(mempool.hashXs)
 
     # Test all hashXs
     deltas = api.balance_deltas()
     for hashX in api.hashXs:
         expected = deltas.get(hashX, 0)
-        assert await mempool.balance_delta(hashX) == expected
+        result = await mempool.balance_delta(hashX, None)
+        assert result.get(None, 0) == expected
 
 
 @pytest.mark.asyncio
 async def test_potential_spends():
     api = API()
     api.initialize()
-    mempool = MemPool(coin, api)
+    mempool = MemPool(env, api)
     event = Event()
     async with TaskGroup() as group:
         await group.spawn(mempool.keep_synchronized, event)
@@ -337,7 +340,7 @@ async def _test_summaries(mempool, api):
 async def test_transaction_summaries(caplog):
     api = API()
     api.initialize()
-    mempool = MemPool(coin, api)
+    mempool = MemPool(env, api)
     event = Event()
     with caplog.at_level(logging.INFO):
         async with TaskGroup() as group:
@@ -358,7 +361,7 @@ async def test_transaction_summaries(caplog):
 async def test_unordered_UTXOs():
     api = API()
     api.initialize()
-    mempool = MemPool(coin, api)
+    mempool = MemPool(env, api)
     event = Event()
     async with TaskGroup() as group:
         await group.spawn(mempool.keep_synchronized, event)
@@ -367,13 +370,13 @@ async def test_unordered_UTXOs():
 
     # Check the default dict is handled properly
     prior_len = len(mempool.hashXs)
-    assert await mempool.unordered_UTXOs(os.urandom(HASHX_LEN)) == []
+    assert await mempool.unordered_UTXOs(os.urandom(HASHX_LEN), None) == []
     assert prior_len == len(mempool.hashXs)
 
     # Test all hashXs
     utxos = api.UTXOs()
     for hashX in api.hashXs:
-        mempool_result = await mempool.unordered_UTXOs(hashX)
+        mempool_result = await mempool.unordered_UTXOs(hashX, None)
         our_result = utxos.get(hashX, [])
         assert set(our_result) == set(mempool_result)
 
@@ -382,7 +385,7 @@ async def test_unordered_UTXOs():
 async def test_mempool_removals():
     api = API()
     api.initialize()
-    mempool = MemPool(coin, api, refresh_secs=0.01)
+    mempool = MemPool(env, api, refresh_secs=0.01)
     event = Event()
     async with TaskGroup() as group:
         await group.spawn(mempool.keep_synchronized, event)
@@ -412,7 +415,7 @@ async def test_daemon_drops_txs():
     # returning their hashes and the mempool requesting the raw txs
     api = DropAPI(10)
     api.initialize()
-    mempool = MemPool(coin, api, refresh_secs=0.01)
+    mempool = MemPool(env, api, refresh_secs=0.01)
     event = Event()
     async with TaskGroup() as group:
         await group.spawn(mempool.keep_synchronized, event)
@@ -429,7 +432,7 @@ async def test_notifications(caplog):
     # 3) A block comes in confirming the first batch only
     api = API()
     api.initialize()
-    mempool = MemPool(coin, api, refresh_secs=0.001, log_status_secs=0)
+    mempool = MemPool(env, api, refresh_secs=0.001, log_status_secs=0)
     event = Event()
 
     n = len(api.ordered_adds) // 2
@@ -451,7 +454,7 @@ async def test_notifications(caplog):
         await group.spawn(mempool.keep_synchronized, event)
         await event.wait()
         assert len(api.on_mempool_calls) == 1
-        touched, height = api.on_mempool_calls[0]
+        touched, height, assets = api.on_mempool_calls[0]
         assert height == api._height == api._db_height == api._cached_height
         assert touched == first_touched
         # Second batch enters the mempool
@@ -459,7 +462,7 @@ async def test_notifications(caplog):
         api.txs = txs
         await event.wait()
         assert len(api.on_mempool_calls) == 2
-        touched, height = api.on_mempool_calls[1]
+        touched, height, assets = api.on_mempool_calls[1]
         assert height == api._height == api._db_height == api._cached_height
         # Touched is incremental
         assert touched == second_touched
@@ -484,7 +487,7 @@ async def test_notifications(caplog):
             del api.db_utxos[spend]
         await event.wait()
         assert len(api.on_mempool_calls) == 3
-        touched, height = api.on_mempool_calls[2]
+        touched, height, assets = api.on_mempool_calls[2]
         assert height == api._db_height == new_height
         assert touched == first_touched
         await group.cancel_remaining()
@@ -494,7 +497,7 @@ async def test_notifications(caplog):
 async def test_dropped_txs(caplog):
     api = API()
     api.initialize()
-    mempool = MemPool(coin, api)
+    mempool = MemPool(env, api)
     event = Event()
     # Remove a single TX_HASH that is used in another mempool tx
     for prev_hash, prev_idx in api.mempool_spends():
