@@ -198,9 +198,15 @@ class Coin:
         return header[4:36]
 
     @classmethod
+    def validate_header(cls, header, height):
+        '''Validate coin-specific header invariants before indexing.'''
+
+    @classmethod
     def block_header(cls, block, height):
         '''Returns the block header given a block and its height.'''
-        return block[:cls.static_header_len(height)]
+        header = block[:cls.static_header_len(height)]
+        cls.validate_header(header, height)
+        return header
 
     @classmethod
     def block(cls, raw_block, height):
@@ -234,6 +240,10 @@ class Ravencoin(Coin):
     KAWPOW_ACTIVATION_TIME = 1588788000  # kawpow algo activation time
     KAWPOW_ACTIVATION_HEIGHT = 1219736
     KAWPOW_HEADER_SIZE = 120
+    INCIDENT_CHECKPOINT_HEIGHT = 4487775
+    INCIDENT_CHECKPOINT_HASH = ('000000000002d64509e06e76ddbbe418'
+                                'c725291687ec62b41ecfc40386a091fd')
+    KAWPOW_HEIGHT_ENFORCEMENT_HEIGHT = 4487776
     
     CHAIN_SIZE = 29_655_304_862
     CHAIN_SIZE_HEIGHT = 2_873_312
@@ -269,6 +279,30 @@ class Ravencoin(Coin):
             return x16rv2_hash.getPoWHash(header)
         else:
             return x16r_hash.getPoWHash(header)
+
+    @classmethod
+    def validate_header(cls, header, height):
+        expected_size = cls.static_header_len(height)
+        if len(header) != expected_size:
+            raise CoinError(
+                f'Ravencoin header at height {height} is {len(header)} bytes, '
+                f'expected {expected_size}'
+            )
+        if (cls.NET == 'mainnet' and
+                height >= cls.KAWPOW_HEIGHT_ENFORCEMENT_HEIGHT):
+            declared_height = util.unpack_le_uint32_from(header, 76)[0]
+            if declared_height != height:
+                raise CoinError(
+                    f'Ravencoin KAWPOW header at chain height {height} declares '
+                    f'nHeight={declared_height}'
+                )
+        if cls.NET == 'mainnet' and height == cls.INCIDENT_CHECKPOINT_HEIGHT:
+            actual_hash = hash_to_hex_str(cls.header_hash(header))
+            if actual_hash != cls.INCIDENT_CHECKPOINT_HASH:
+                raise CoinError(
+                    f'Ravencoin incident checkpoint mismatch at {height}: '
+                    f'{actual_hash} != {cls.INCIDENT_CHECKPOINT_HASH}'
+                )
 
 class RavencoinTestnet(Ravencoin):
     NET = "testnet"

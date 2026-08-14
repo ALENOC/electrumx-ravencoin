@@ -778,6 +778,7 @@ class BlockProcessor:
         utxo_count_delta = 0
 
         with block as block:
+            self.coin.validate_header(block.header, block.height)
             if self.coin.header_prevhash(block.header) != self.state.tip:
                 self.reorg_count = -1
                 return
