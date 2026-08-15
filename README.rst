@@ -1,6 +1,6 @@
-============================================================
-ElectrumX for Ravencoin — maintained for Ravencoin Core 4.8+
-============================================================
+===========================================================
+ElectrumX for Ravencoin: maintained for Ravencoin Core 4.8+
+===========================================================
 
 This is the maintained ALENOC fork of ElectrumX-RVN.  It is designed for
 modern Ravencoin operation after the August 2026 consensus incident, preserves
@@ -11,78 +11,54 @@ safety baseline. Core 4.6.x and 4.7.x are rejected by default.**
 The recommended Docker Compose deployment supplies both an exact, verified
 Ravencoin Core 4.8.0 binary and ElectrumX.  A second mode connects ElectrumX to
 an operator's existing compatible Core.  ElectrumX itself is
-``ElectrumX-RVN 1.13.0.dev1``; it is not “ElectrumX 4.8.0”.
+``ElectrumX-RVN 1.13.0.dev1``; it is not "ElectrumX 4.8.0".
 
-Security status
-===============
+Quick start: Core 4.8.0 + ElectrumX
+===================================
 
-Production mainnet operation fails closed when the daemon is older than 4.8.0,
-is on the wrong network, does not match checkpoint 4,487,775, or conflicts with
-the existing ElectrumX database.  Validation repeats while the server runs and
-immediately before transaction broadcast.  Never set
-``ALLOW_UNSAFE_RAVENCOIN_CORE`` in production.
+Requirements are a current Linux Docker Engine, Docker Compose v2, Git, and
+OpenSSL.  On a fresh amd64 server:
 
-The bundled Core artifact is currently **Linux amd64 only** because that is the
-only binary published by the maintainer release.  The ElectrumX image is tested
-for amd64 and arm64.  An arm64 operator can use ``--existing-core`` with a
-separately verified Core 4.8.0+ installation; this repository does not pretend
-that an unverified arm64 Core artifact exists.
+.. code-block:: sh
 
-Current validation status
-=========================
+   git clone https://github.com/ALENOC/electrumx-ravencoin.git
+   cd electrumx-ravencoin
+   ./setup.sh --enable-reboot
+   docker compose up -d --build
+   docker compose ps
 
-This table reports what has actually been observed, not what is intended.
-It is updated as live validation progresses.
+``setup.sh`` verifies Docker/Compose and the CPU architecture, creates
+``.env`` without overwriting an existing file, generates strong RPC credentials
+under the Git-ignored ``.secrets/`` directory, restricts their host permissions,
+and validates the Compose model.  It never displays a credential or deletes
+existing data.  ``--enable-reboot`` creates a non-secret user systemd unit,
+refuses to overwrite an existing unit, and enables it for the next boot.  User
+lingering must be enabled for boot before login; the script warns when an
+administrator still needs to run ``loginctl enable-linger <operator-user>``.
 
-==========================================  ======================================
-Item                                        Evidence as of 2026-08-15
-==========================================  ======================================
-Implementation and deterministic tests      complete; 176 passed, 5 skipped
-Bundled Core 4.8.0 container                smoke validated, Linux amd64
-Compose models (bundled/TLS/existing-Core)  validated by ``docker compose config``
-Live Core reindex with txindex+assetindex   in progress, Linux amd64
-Full ElectrumX mainnet historical index     in progress, not complete
-Live Raven asset RPC validation             pending the completed index
-Client end-to-end ``SAFE_CORE_VERIFIED``    pending the completed index
-Public CA-valid Electrum TLS endpoint       pending operator network action
-ElectrumX arm64 container                   build validated only
-Bundled Core on arm64                       not published; use existing-Core mode
-==========================================  ======================================
+The initial Electrum TCP listener is bound to ``127.0.0.1:50001``.  This lets
+Core synchronize and ElectrumX index without accidentally publishing an
+unencrypted production service.  Enable public TLS only after the checks below
+pass.
 
-An initial Core reindex plus a full ElectrumX historical index is a
-multi-hour to multi-day job on any hardware.  Do not advertise a server
-until both finish and the checks in this document pass.
+What to expect immediately after startup
+----------------------------------------
 
-Why this fork exists
-====================
+Nothing is ready yet, and that is normal.  In order:
 
-The August 2026 Ravencoin incident exploited missing validation between the
-``nHeight`` declared by a post-KAWPOW header and its actual chain position.
-Patched Core behavior rejects the affected construction from height 4,487,776
-and anchors the last unaffected block at 4,487,775.  This fork applies those
-invariants at the Electrum server boundary as defense in depth and requires the
-patched Core generation.
+1. **Core starts and reports healthy within seconds.**  Healthy only means it
+   answers JSON-RPC.  It then synchronizes, or rebuilds indexes if you supplied
+   existing block files, and ``blocks`` stays far below ``headers`` meanwhile.
+2. **ElectrumX waits for Core, then builds its own historical index.**  Its
+   reported height stays at 0 for a long time, and it retries while Core is
+   still unavailable.
+3. **Only then is the server usable.**  Both databases must be built before you
+   publish anything.
 
-Primary reference: the `2miners Ravencoin 4.8.0 maintainer release
-<https://github.com/2miners/Ravencoin/releases/tag/v4.8.0>`_.
-
-What changed in this fork
-=========================
-
-The maintained code and tests implement:
-
-* a numeric ``>= 4.8.0`` Core floor, including acceptance of exactly 4.8.0;
-* default rejection of 4.6.x, 4.7.x, malformed versions, and wrong networks;
-* periodic backend validation and downgrade detection after startup;
-* fresh backend validation immediately before transaction broadcast;
-* the exact mainnet checkpoint at height 4,487,775;
-* post-KAWPOW ``nHeight`` validation from height 4,487,776;
-* canonical Core-chain validation of the ElectrumX database tip and checkpoint;
-* sanitized backend evidence through ``server.ravencoin_backend``;
-* preserved Ravencoin asset indexing and asset-aware RPC methods;
-* current Python packaging/runtime support and non-root containers;
-* amd64 and arm64 ElectrumX image builds; and
-* a complete, health-gated Core + ElectrumX Compose deployment.
+The first build takes hours on a fast x86-64 machine and can take considerably
+longer on a low-power board.  It resumes after a restart; it does not start over.
+Follow it with the commands under `Monitoring and reading the state`_, and check
+the hardware guidance below before committing to a machine or a disk.
 
 Recommended hardware
 ====================
@@ -101,8 +77,8 @@ Dedicated server or VPS                    16 GB or more                  NVMe S
 Orange Pi Zero 3 and other ~1-2 GB boards  insufficient                   n/a           not recommended; see the warning below
 =========================================  =============================  ============  ==============================================================
 
-Raspberry Pi 5 — first choice for a low-power node
---------------------------------------------------
+Raspberry Pi 5: first choice for a low-power node
+-------------------------------------------------
 
 * an 8 GB board is the sensible minimum for Core plus ElectrumX; the 16 GB
   variant leaves more room for a larger ElectrumX cache;
@@ -123,8 +99,8 @@ Raspberry Pi 5 — first choice for a low-power node
 The bundled Core artifact is amd64-only, so an arm64 board runs ElectrumX in
 ``--existing-core`` mode against a Core 4.8.0+ build you verify yourself.
 
-Orange Pi 5 class — second choice, lower cost
----------------------------------------------
+Orange Pi 5 class: second choice, lower cost
+--------------------------------------------
 
 An RK3588 or RK3588S board with 8 GB or more (16 GB preferred when the price
 difference is small), an NVMe SSD, active cooling and a reliable supply is a
@@ -133,8 +109,8 @@ storage.**  The Orange Pi 5, 5B, 5 Plus and 5 Pro differ in M.2 connector,
 lane count, supported drive length and boot behaviour, so follow the vendor
 documentation for your board rather than a generic guide.
 
-x86-64 mini PC or NUC — fastest initial build
----------------------------------------------
+x86-64 mini PC or NUC: fastest initial build
+--------------------------------------------
 
 16 GB or more with an NVMe SSD.  This is the only class on which the bundled
 Core 4.8.0 + ElectrumX deployment path itself has been exercised, and more
@@ -186,33 +162,76 @@ choice for a long-lived public node.  Verify actual sizes on your own
 deployment with the disk-usage commands below instead of trusting a fixed
 number in a document.
 
-Quick start — Core 4.8.0 + ElectrumX
-====================================
+Current validation status
+=========================
 
-Requirements are a current Linux Docker Engine, Docker Compose v2, Git, and
-OpenSSL.  On a fresh amd64 server:
+This table reports what has actually been observed, not what is intended.
+It is updated as live validation progresses.
 
-.. code-block:: sh
+==========================================  ======================================
+Item                                        Evidence as of 2026-08-15
+==========================================  ======================================
+Implementation and deterministic tests      complete; 176 passed, 5 skipped
+Bundled Core 4.8.0 container                smoke validated, Linux amd64
+Compose models (bundled/TLS/existing-Core)  validated by ``docker compose config``
+Live Core reindex with txindex+assetindex   in progress, Linux amd64
+Full ElectrumX mainnet historical index     in progress, not complete
+Live Raven asset RPC validation             pending the completed index
+Client end-to-end ``SAFE_CORE_VERIFIED``    pending the completed index
+Public CA-valid Electrum TLS endpoint       pending operator network action
+ElectrumX arm64 container                   build validated only
+Bundled Core on arm64                       not published; use existing-Core mode
+==========================================  ======================================
 
-   git clone https://github.com/ALENOC/electrumx-ravencoin.git
-   cd electrumx-ravencoin
-   ./setup.sh --enable-reboot
-   docker compose up -d --build
-   docker compose ps
+An initial Core reindex plus a full ElectrumX historical index is a
+multi-hour to multi-day job on any hardware.  Do not advertise a server
+until both finish and the checks in this document pass.
 
-``setup.sh`` verifies Docker/Compose and the CPU architecture, creates
-``.env`` without overwriting an existing file, generates strong RPC credentials
-under the Git-ignored ``.secrets/`` directory, restricts their host permissions,
-and validates the Compose model.  It never displays a credential or deletes
-existing data.  ``--enable-reboot`` creates a non-secret user systemd unit,
-refuses to overwrite an existing unit, and enables it for the next boot.  User
-lingering must be enabled for boot before login; the script warns when an
-administrator still needs to run ``loginctl enable-linger <operator-user>``.
+Security status
+===============
 
-The initial Electrum TCP listener is bound to ``127.0.0.1:50001``.  This lets
-Core synchronize and ElectrumX index without accidentally publishing an
-unencrypted production service.  Enable public TLS only after the checks below
-pass.
+Production mainnet operation fails closed when the daemon is older than 4.8.0,
+is on the wrong network, does not match checkpoint 4,487,775, or conflicts with
+the existing ElectrumX database.  Validation repeats while the server runs and
+immediately before transaction broadcast.  Never set
+``ALLOW_UNSAFE_RAVENCOIN_CORE`` in production.
+
+The bundled Core artifact is currently **Linux amd64 only** because that is the
+only binary published by the maintainer release.  The ElectrumX image is tested
+for amd64 and arm64.  An arm64 operator can use ``--existing-core`` with a
+separately verified Core 4.8.0+ installation; this repository does not pretend
+that an unverified arm64 Core artifact exists.
+
+Why this fork exists
+====================
+
+The August 2026 Ravencoin incident exploited missing validation between the
+``nHeight`` declared by a post-KAWPOW header and its actual chain position.
+Patched Core behavior rejects the affected construction from height 4,487,776
+and anchors the last unaffected block at 4,487,775.  This fork applies those
+invariants at the Electrum server boundary as defense in depth and requires the
+patched Core generation.
+
+Primary reference: the `2miners Ravencoin 4.8.0 maintainer release
+<https://github.com/2miners/Ravencoin/releases/tag/v4.8.0>`_.
+
+What changed in this fork
+=========================
+
+The maintained code and tests implement:
+
+* a numeric ``>= 4.8.0`` Core floor, including acceptance of exactly 4.8.0;
+* default rejection of 4.6.x, 4.7.x, malformed versions, and wrong networks;
+* periodic backend validation and downgrade detection after startup;
+* fresh backend validation immediately before transaction broadcast;
+* the exact mainnet checkpoint at height 4,487,775;
+* post-KAWPOW ``nHeight`` validation from height 4,487,776;
+* canonical Core-chain validation of the ElectrumX database tip and checkpoint;
+* sanitized backend evidence through ``server.ravencoin_backend``;
+* preserved Ravencoin asset indexing and asset-aware RPC methods;
+* current Python packaging/runtime support and non-root containers;
+* amd64 and arm64 ElectrumX image builds; and
+* a complete, health-gated Core + ElectrumX Compose deployment.
 
 Architecture
 ============
@@ -255,7 +274,7 @@ access control.  The shipped Compose model binds that listener to the container
 loopback and one private bridge address and gives it no host port mapping.
 
 Core provenance and integrity
-==============================
+=============================
 
 The bundled image downloads exactly:
 
@@ -294,10 +313,10 @@ Persistent state
 
 The Compose project creates:
 
-* ``ravencoin-data`` — blocks, chainstate, indexes, and peer state;
-* ``ravencoin-config`` — the generated Core configuration and RPC credential;
-* ``electrumx-data`` — the ElectrumX LevelDB index; and
-* ``rpc-secrets`` — container-readable copies of generated RPC credentials.
+* ``ravencoin-data``: blocks, chainstate, indexes, and peer state;
+* ``ravencoin-config``: the generated Core configuration and RPC credential;
+* ``electrumx-data``: the ElectrumX LevelDB index; and
+* ``rpc-secrets``: container-readable copies of generated RPC credentials.
 
 The host source credentials remain mode ``0600`` below ``.secrets/``.  A
 network-isolated, one-shot initializer copies them to the private volume without
@@ -379,27 +398,27 @@ installing netcat:
 Core evidence comes only from ``server.ravencoin_backend``, whose sanitized
 schema is:
 
-* ``server``, ``serverVersion`` — ElectrumX identity;
+* ``server``, ``serverVersion``: ElectrumX identity;
 * ``backend.name``, ``backend.version``, ``backend.versionNumber``,
-  ``backend.subversion``, ``backend.network`` — the daemon's own report, for
+  ``backend.subversion``, ``backend.network``: the daemon's own report, for
   example ``4.8.0``, ``4080000`` and ``/Ravencoin:4.8.0/``;
 * ``backend.blocks``, ``backend.headers``, ``backend.initialBlockDownload``;
-* ``compatibility.minimumSafeCore`` — ``4.8.0``;
-* ``compatibility.coreSafe`` — version, network and checkpoint policy all hold;
+* ``compatibility.minimumSafeCore``: ``4.8.0``;
+* ``compatibility.coreSafe``: version, network and checkpoint policy all hold;
 * ``compatibility.networkMatches``, ``compatibility.backendSynchronized``;
-* ``compatibility.kawpowHeightValidation`` — this server enforces the
+* ``compatibility.kawpowHeightValidation``: this server enforces the
   post-KAWPOW ``nHeight`` rule;
-* ``compatibility.checkpoint4487775`` — see below;
-* ``observedAt`` — when the evidence was collected.
+* ``compatibility.checkpoint4487775``: see below;
+* ``observedAt``: when the evidence was collected.
 
 It never contains RPC credentials, wallet data, or file paths.
 
 Checkpoint semantics are deliberately strict, and two different questions are
 kept apart internally:
 
-* *known* — a backend still below height 4,487,775 cannot violate the
+* *known*: a backend still below height 4,487,775 cannot violate the
   checkpoint, so it is allowed to start and to keep syncing;
-* *verified* — the server actually asked the daemon for the hash at 4,487,775
+* *verified*: the server actually asked the daemon for the hash at 4,487,775
   and it matched.
 
 Only the second is published.  ``compatibility.checkpoint4487775`` is therefore
@@ -531,9 +550,9 @@ progress** and this section will be updated when it finishes.  The asset
 handlers registered by this server are:
 
 * ``blockchain.asset.get_meta``, ``blockchain.asset.get_meta_history``;
-* ``blockchain.asset.get_assets_with_prefix`` — also how owner tokens
+* ``blockchain.asset.get_assets_with_prefix``: also how owner tokens
   (``NAME!``) and unique assets (``NAME#TAG``) are discovered;
-* ``blockchain.asset.list_addresses_by_asset`` — delegates to Core's
+* ``blockchain.asset.list_addresses_by_asset``: delegates to Core's
   ``assetindex``;
 * ``blockchain.asset.broadcasts``, ``blockchain.asset.is_frozen``,
   ``blockchain.asset.verifier_string``,
@@ -598,7 +617,7 @@ asset checks.  Never change Core to an unpinned image or use
 ``ALLOW_UNSAFE_RAVENCOIN_CORE`` to make an upgrade appear healthy.
 
 Migration from an old Core/ElectrumX-RVN
-=========================================
+========================================
 
 Read `docs/MIGRATING_FROM_ELECTRUM_RVN_SIG.md
 <docs/MIGRATING_FROM_ELECTRUM_RVN_SIG.md>`_ before reusing data from around the
