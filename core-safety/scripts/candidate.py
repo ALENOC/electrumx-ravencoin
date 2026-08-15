@@ -64,6 +64,7 @@ class TestResult(str, Enum):
 
     PASS = "PASS"
     FAIL = "FAIL"
+    REVIEW_REQUIRED = "REVIEW_REQUIRED"
     UNAVAILABLE = "UNAVAILABLE"
     ERROR = "ERROR"
     SKIPPED = "SKIPPED"
@@ -73,6 +74,7 @@ class TestResult(str, Enum):
 #: disappear from an aggregate.
 NON_PASSING_RESULTS = (
     TestResult.FAIL,
+    TestResult.REVIEW_REQUIRED,
     TestResult.UNAVAILABLE,
     TestResult.ERROR,
     TestResult.SKIPPED,

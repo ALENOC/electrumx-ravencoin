@@ -140,36 +140,36 @@
     },
     {
       "id": "incident-checkpoint-hash",
-      "class": "mandatory-with-chain-data",
+      "class": "mandatory",
       "kind": "behavioral",
       "requires": [
         "mainnet-chain-data"
       ],
-      "description": "On a datadir holding mainnet history, the candidate reports the canonical hash at height 4487775.",
+      "description": "The exact candidate is checked against the canonical deterministic checkpoint fixture; live presence of this checkpoint is a separate runtime gate.",
       "height": 4487775,
       "expected": "000000000002d64509e06e76ddbbe418c725291687ec62b41ecfc40386a091fd",
       "scope": "core"
     },
     {
       "id": "transfer-overflow-deployment",
-      "class": "mandatory-with-chain-data",
+      "class": "mandatory",
       "kind": "behavioral",
       "requires": [
         "mainnet-chain-data"
       ],
-      "description": "The transfer_overflow consensus deployment is known to the candidate and reports its activation state on mainnet rather than being absent, which is how an unpatched generation behaves.",
+      "description": "The exact candidate must reject a canonical asset-transfer overflow fixture through consensus validation; deployment ACTIVE on mainnet is a separate runtime gate.",
       "deployment": "transfer_overflow",
       "scope": "core"
     },
     {
       "id": "chainstate-rebuild",
-      "class": "mandatory-with-chain-data",
+      "class": "live-node-validation",
       "kind": "behavioral",
       "requires": [
         "mainnet-chain-data"
       ],
-      "description": "A chainstate rebuild from existing block files reaches the same tip hash, so block-index and chainstate recovery behaviour is intact.",
-      "scope": "core"
+      "description": "Live-node gate: a full mainnet chainstate rebuild reaches the same canonical tip. This is not release certification.",
+      "scope": "live-node"
     },
     {
       "id": "consensus-divergence-review",
@@ -200,7 +200,6 @@
     "requires": [
       "repository is in candidateSources.allowed",
       "all mandatory tests PASS",
-      "all mandatory-with-chain-data tests PASS",
       "all mandatory-when-artifact-pinned tests PASS when an artifact is pinned",
       "no test result is SKIPPED, UNAVAILABLE or ERROR",
       "no reviewRequiredTriggers area is flagged",
@@ -214,6 +213,18 @@
     "core": "observes the candidate binaries or runs the candidate's own test suite",
     "harness": "verifies this project's enforcement rule and fixture integrity, not Core itself",
     "provenance": "checks release metadata and artifact digests",
-    "advisory": "supplemental human-review evidence; never changes a result"
-  }
+    "advisory": "supplemental human-review evidence; never changes a result",
+    "live-node": "runtime validation on the synchronized deployment; never substitutes for deterministic release certification"
+  },
+  "liveNodeValidation": [
+    "chainstate-rebuild",
+    "checkpoint-present-at-4487775",
+    "transfer-overflow-active",
+    "txindex-ready",
+    "assetindex-ready",
+    "asset-rpc-live",
+    "canonical-chain",
+    "server-ravencoin-backend",
+    "client-safe-core-verified"
+  ]
 }
