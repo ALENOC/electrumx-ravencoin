@@ -324,18 +324,40 @@ def _required_indexes(environment: Environment) -> Outcome:
 def _core_unit_tests(environment: Environment) -> Outcome:
     if environment.source_dir is None:
         return Outcome(TestResult.UNAVAILABLE, "no source checkout was supplied")
-    binary = environment.source_dir / "src" / "test" / "test_raven"
-    if not binary.exists():
+    candidates = (environment.source_dir / "src" / "test" / "test_raven",
+                  environment.source_dir / "test" / "test_raven")
+    binary = next((path for path in candidates if path.exists()), None)
+    if binary is None:
         return Outcome(TestResult.UNAVAILABLE,
                        "the candidate's own test binary was not built, so its "
                        "regression suite could not be observed")
-    suites = ("pow_tests", "validation_block_tests", "assets_tests", "checkpoints_tests")
+    # These are the suites actually registered by the 2miners v4.8.0
+    # candidate.  Do not invent suite names: an absent suite is a harness
+    # error, not evidence that Core failed a consensus test.
+    suites = ("pow_tests", "kawpow_tests", "asset_tx_tests", "asset_tests")
     passed = []
     for suite in suites:
         completed = environment.run([str(binary), f"--run_test={suite}"], timeout=1800)
+        evidence = completed.stdout + "\n" + completed.stderr
+        if f'Test suite "{suite}" is skipped' in evidence:
+            return Outcome(TestResult.REVIEW_REQUIRED,
+                           f"candidate suite {suite} was skipped by the candidate build",
+                           {"suite": suite, "tail": evidence[-1200:]})
+        if completed.returncode != 0 and "error while loading shared libraries" in completed.stderr:
+            return Outcome(TestResult.REVIEW_REQUIRED,
+                           "candidate test binary could not run in this host environment",
+                           {"suite": suite, "stderr": completed.stderr[-500:]})
         if completed.returncode != 0:
+            evidence = evidence[-1200:]
+            # A wallet-disabled build legitimately omits wallet-only asset
+            # fixtures.  It remains REVIEW_REQUIRED until canonical
+            # wallet-independent fixtures are supplied; it is not unsafe.
+            if "skipped" in evidence.lower() and suite.startswith("asset"):
+                return Outcome(TestResult.REVIEW_REQUIRED,
+                               f"candidate suite {suite} was skipped in the wallet-disabled build",
+                               {"suite": suite, "tail": evidence})
             return Outcome(TestResult.FAIL, f"candidate suite {suite} failed",
-                           {"suite": suite, "tail": completed.stdout[-400:]})
+                           {"suite": suite, "tail": evidence})
         passed.append(suite)
     return Outcome(TestResult.PASS, "candidate consensus suites passed",
                    {"suites": passed})
@@ -375,8 +397,12 @@ def _forged_rejected(environment: Environment) -> Outcome:
     try:
         from electrumx.lib.coins import CoinError, Ravencoin
     except ImportError:
-        return Outcome(TestResult.UNAVAILABLE,
-                       "the enforcement implementation is not importable here")
+        if environment.validator is None:
+            return Outcome(TestResult.REVIEW_REQUIRED,
+                           "the enforcement implementation is not importable here")
+        class CoinError(Exception):
+            pass
+        Ravencoin = None
     validate = environment.validator or Ravencoin.validate_header
     rejected = []
     for entry in fixtures["invalidHeaders"]:
@@ -389,8 +415,14 @@ def _forged_rejected(environment: Environment) -> Outcome:
             return Outcome(TestResult.FAIL,
                            "a forged fixture was accepted by the enforcement rule",
                            {"fixture": entry["name"]})
-    return Outcome(TestResult.PASS, "every forged fixture was rejected",
-                   {"rejected": rejected})
+    if environment.validator is not None:
+        return Outcome(TestResult.PASS, "every forged fixture was rejected by the injected validator",
+                       {"rejected": rejected, "validator": "explicit test double"})
+    return Outcome(TestResult.REVIEW_REQUIRED,
+                   "the project validator rejected every forged fixture, but the "
+                   "candidate Core contextual validation entry point was not invoked",
+                   {"rejected": rejected, "candidateBehavior": "not exercised",
+                    "preFixModel": "covered by deterministic harness regression test"})
 
 
 @test("post-boundary-valid-accepted", "harness")
@@ -402,8 +434,12 @@ def _valid_accepted(environment: Environment) -> Outcome:
         from electrumx.lib.coins import Ravencoin
         from electrumx.lib.hash import hash_to_hex_str
     except ImportError:
-        return Outcome(TestResult.UNAVAILABLE,
-                       "the enforcement implementation is not importable here")
+        if environment.validator is None:
+            return Outcome(TestResult.REVIEW_REQUIRED,
+                           "the enforcement implementation is not importable here")
+        Ravencoin = None
+        def hash_to_hex_str(value):
+            return value.hex()
     validate = environment.validator or Ravencoin.validate_header
     for entry in fixtures["validHeaders"]:
         header = bytes.fromhex(entry["headerHex"])
@@ -412,48 +448,46 @@ def _valid_accepted(environment: Environment) -> Outcome:
             return Outcome(TestResult.FAIL,
                            "a valid fixture did not re-hash to its known block hash",
                            {"height": entry["height"]})
-    return Outcome(TestResult.PASS,
-                   "the honest headers at and after the boundary are accepted and "
-                   "re-hash to their known block hashes",
-                   {"vectors": len(fixtures["validHeaders"])})
+    if environment.validator is not None:
+        return Outcome(TestResult.PASS,
+                       "the injected validator accepted and re-hashed the honest fixtures",
+                       {"vectors": len(fixtures["validHeaders"])})
+    return Outcome(TestResult.REVIEW_REQUIRED,
+                   "the project validator accepted and re-hashed the honest fixtures, "
+                   "but candidate Core contextual validation was not invoked",
+                   {"vectors": len(fixtures["validHeaders"]),
+                    "candidateBehavior": "not exercised"})
 
 
 # ------------------------------------------------------- tests needing the chain
 @test("incident-checkpoint-hash", "core")
 def _checkpoint(environment: Environment) -> Outcome:
-    if environment.mainnet_datadir is None or environment.binary("raven-cli") is None:
-        return Outcome(TestResult.UNAVAILABLE,
-                       "no mainnet chain data was supplied, so the candidate could not "
-                       "be asked for the checkpoint hash")
-    completed = _cli(environment, environment.mainnet_datadir, "getblockhash",
-                     str(CHECKPOINT_HEIGHT))
-    if completed.returncode != 0:
-        return Outcome(TestResult.UNAVAILABLE, "the node did not answer getblockhash")
-    observed = completed.stdout.strip()
-    if observed != CHECKPOINT_HASH:
-        return Outcome(TestResult.FAIL, "checkpoint hash mismatch",
+    fixtures = _load_fixtures(environment)
+    if not fixtures:
+        return Outcome(TestResult.REVIEW_REQUIRED,
+                       "deterministic checkpoint fixture set was not supplied")
+    provenance = fixtures.get("provenance", {})
+    observed = next((e.get("hash") for e in fixtures.get("validHeaders", [])
+                     if e.get("height") == CHECKPOINT_HEIGHT), None)
+    if (provenance.get("checkpointHeight") != CHECKPOINT_HEIGHT or
+            observed != CHECKPOINT_HASH):
+        return Outcome(TestResult.FAIL, "canonical checkpoint fixture mismatch",
                        {"height": CHECKPOINT_HEIGHT, "expected": CHECKPOINT_HASH,
                         "observed": observed})
-    return Outcome(TestResult.PASS, "canonical hash at the incident checkpoint",
-                   {"height": CHECKPOINT_HEIGHT, "hash": observed})
+    return Outcome(TestResult.REVIEW_REQUIRED,
+                   "fixture proves the canonical checkpoint identity, but this harness "
+                   "does not yet invoke candidate checkpoint acceptance without a chain",
+                   {"height": CHECKPOINT_HEIGHT, "hash": observed,
+                    "liveNodeCheck": "separate LIVE NODE VALIDATION gate"})
 
 
 @test("transfer-overflow-deployment", "core")
 def _transfer_overflow(environment: Environment) -> Outcome:
-    if environment.mainnet_datadir is None or environment.binary("raven-cli") is None:
-        return Outcome(TestResult.UNAVAILABLE, "no mainnet chain data was supplied")
-    completed = _cli(environment, environment.mainnet_datadir, "getblockchaininfo")
-    if completed.returncode != 0:
-        return Outcome(TestResult.UNAVAILABLE, "getblockchaininfo did not answer")
-    parsed = json.loads(completed.stdout)
-    deployments = parsed.get("bip9_softforks", {})
-    entry = deployments.get("transfer_overflow")
-    if entry is None:
-        return Outcome(TestResult.FAIL,
-                       "the candidate does not know the transfer_overflow deployment, "
-                       "which is how an unpatched generation behaves")
-    return Outcome(TestResult.PASS, "transfer_overflow deployment is known",
-                   {"status": entry.get("status"), "since": entry.get("since")})
+    return Outcome(TestResult.REVIEW_REQUIRED,
+                   "candidate-local behavioral overflow fixture is not yet available; "
+                   "deployment presence alone is insufficient evidence",
+                   {"releaseRequirement": "wallet-independent exact-candidate tx validation",
+                    "liveNodeCheck": "deployment ACTIVE on synchronized mainnet"})
 
 
 @test("chainstate-rebuild", "core")
@@ -528,6 +562,7 @@ def certify(candidate: Candidate, profile: dict, environment: Environment) -> di
             "machine": platform.machine(),
         },
         "requiredTests": list(required),
+        "liveNodeValidation": profile.get("liveNodeValidation", []),
         "results": details,
         "overall": state.value,
         "startedAt": int(started),

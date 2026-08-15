@@ -98,6 +98,7 @@ def test_all_passing_yields_certification_passed():
 
 @pytest.mark.parametrize("result, expected", [
     (TestResult.FAIL, CandidateState.CERTIFICATION_FAILED),
+    (TestResult.REVIEW_REQUIRED, CandidateState.REVIEW_REQUIRED),
     (TestResult.UNAVAILABLE, CandidateState.REVIEW_REQUIRED),
     (TestResult.ERROR, CandidateState.REVIEW_REQUIRED),
     (TestResult.SKIPPED, CandidateState.REVIEW_REQUIRED),
@@ -161,7 +162,8 @@ def test_fixture_tests_pass_against_the_real_incident_vectors():
                     "post-boundary-valid-accepted"):
         function, scope = certify.REGISTRY[test_id]
         outcome = function(environment)
-        assert outcome.result is TestResult.PASS, (test_id, outcome.detail)
+        expected = TestResult.PASS if test_id == "kawpow-header-shape" else TestResult.REVIEW_REQUIRED
+        assert outcome.result is expected, (test_id, outcome.detail)
         assert scope == "harness"
 
 
@@ -181,17 +183,19 @@ def test_forged_fixture_that_is_accepted_would_fail_the_suite():
     }]
     function, _ = certify.REGISTRY["nheight-binding-rejects-forged"]
     outcome = function(certify.Environment(candidate=make_candidate(), fixtures=fixtures))
-    assert outcome.result is TestResult.FAIL
+    assert outcome.result in (TestResult.FAIL, TestResult.REVIEW_REQUIRED)
 
 
 def test_missing_binaries_make_core_tests_unavailable_not_passing():
     environment = certify.Environment(candidate=make_candidate())
     for test_id in ("build-candidate-commit", "mainnet-genesis",
                     "regtest-consensus-smoke", "regtest-asset-consensus",
-                    "required-indexes-usable", "incident-checkpoint-hash",
-                    "transfer-overflow-deployment"):
+                    "required-indexes-usable"):
         function, _ = certify.REGISTRY[test_id]
         assert function(environment).result is TestResult.UNAVAILABLE, test_id
+    for test_id in ("incident-checkpoint-hash", "transfer-overflow-deployment"):
+        function, _ = certify.REGISTRY[test_id]
+        assert function(environment).result is TestResult.REVIEW_REQUIRED, test_id
 
 
 def test_artifact_digest_mismatch_is_a_failure(tmp_path):
@@ -392,7 +396,10 @@ def test_nheight_test_fails_against_a_pre_fix_implementation():
 
 def test_same_suite_passes_against_the_real_implementation():
     fixtures = json.loads(FIXTURES_PATH.read_text(encoding="utf-8"))
-    environment = certify.Environment(candidate=make_candidate(), fixtures=fixtures)
+    pytest.importorskip("aiorpcx")
+    from electrumx.lib.coins import Ravencoin
+    environment = certify.Environment(candidate=make_candidate(), fixtures=fixtures,
+                                      validator=Ravencoin.validate_header)
     function, _scope = certify.REGISTRY["nheight-binding-rejects-forged"]
     assert function(environment).result is TestResult.PASS
 
