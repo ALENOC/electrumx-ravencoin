@@ -31,6 +31,7 @@ docker run --detach --name "$container" \
     --publish "127.0.0.1:${rpc_port}:${rpc_port}" \
     --entrypoint /usr/local/bin/ravend "$image" \
     -regtest -server=1 -rest=1 -txindex=1 -assetindex=1 \
+    -vbparams=assets:0:999999999999 \
     -daemon=0 -listen=0 -discover=0 -dnsseed=0 \
     -rpcbind=0.0.0.0 -rpcallowip=0.0.0.0/0 -rpcport="$rpc_port" \
     -rpcuser=qualification -rpcpassword=qualification -datadir="$datadir" \
@@ -50,7 +51,7 @@ done
 # This is the Ravencoin testnet/regtest address used by the candidate's
 # asset-serialization tests; Bitcoin's commonly copied regtest fixture is
 # rejected by Ravencoin's address validation.
-cli generatetoaddress 101 mfe7MqgYZgBuXzrT2QTFqZwBXwRDqagHTp >/dev/null
+cli generatetoaddress 200 mfe7MqgYZgBuXzrT2QTFqZwBXwRDqagHTp >/dev/null
 block_hash=$(cli getblockhash 1)
 block_json=$(cli getblock "$block_hash" 2)
 txid=$(printf '%s' "$block_json" | python3 -c 'import json, sys; print(json.load(sys.stdin)["tx"][0]["txid"])')

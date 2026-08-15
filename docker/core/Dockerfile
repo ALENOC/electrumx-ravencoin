@@ -71,7 +71,7 @@ RUN apt-get update \
        libboost-filesystem1.74.0 libboost-iostreams1.74.0 \
        libboost-program-options1.74.0 libboost-serialization1.74.0 \
        libboost-system1.74.0 libboost-thread1.74.0 \
-       libdb5.3 libdb5.3++ libevent-2.1-7 libssl1.1 \
+       libdb5.3 libdb5.3++ libevent-2.1-7 libevent-pthreads-2.1-7 libssl1.1 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid 10001 ravencoin \
