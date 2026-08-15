@@ -215,15 +215,23 @@ def new_candidates(discovered: list, processed: dict) -> list:
     fresh = []
     for entry in discovered:
         commit = entry.get("commit")
-        if not commit:
-            fresh.append(entry)
-            continue
-        identity = f"{entry['repository']}@{commit}"
+        if commit:
+            identity = f"{entry['repository']}@{commit}"
+        else:
+            # A malformed or otherwise unresolvable tag is still a discovery
+            # result, but it must not make every scheduled run red or repeat
+            # indefinitely. A changed tag that later resolves to a commit gets
+            # a different identity and is considered again.
+            tag = entry.get("tag")
+            if not tag:
+                fresh.append(entry)
+                continue
+            identity = f"{entry['repository']}#tag:{tag}"
         known = processed.get(identity)
         if known is None:
             fresh.append(entry)
             continue
-        if known.get("tag") != entry.get("tag"):
+        if commit and known.get("tag") != entry.get("tag"):
             changed = dict(entry)
             changed["state"] = CandidateState.REVIEW_REQUIRED.value
             changed["reason"] = (
@@ -254,6 +262,8 @@ def save_state(path: pathlib.Path, processed: dict) -> None:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repository", choices=ALLOWED_SOURCE_REPOSITORIES,
+                        help="restrict discovery to one allowed repository")
     parser.add_argument("--state-file", default="core-safety/state/processed.json")
     parser.add_argument("--output", default="core-safety/state/new-candidates.json")
     parser.add_argument("--limit", type=int, default=10)
@@ -263,7 +273,9 @@ def main(argv=None) -> int:
     state_path = pathlib.Path(arguments.state_file)
     processed = load_state(state_path)
 
-    discovered = discover_all(default_fetch, token=token)
+    repositories = ((arguments.repository,) if arguments.repository
+                    else ALLOWED_SOURCE_REPOSITORIES)
+    discovered = discover_all(default_fetch, token=token, repositories=repositories)
     fresh = new_candidates(discovered, processed)
 
     output = pathlib.Path(arguments.output)

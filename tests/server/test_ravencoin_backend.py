@@ -313,8 +313,9 @@ def test_malformed_identity_configuration_is_refused(kwargs, message):
 
 
 def test_published_evidence_and_profile_travel_together():
-    status = evaluate_backend(network_info(), blockchain_info(), "mainnet",
-                             INCIDENT_CHECKPOINT_HASH, observed_at=100)
+    status = evaluate_backend(
+        network_info(), blockchain_info(), "mainnet",
+        INCIDENT_CHECKPOINT_HASH, observed_at=100)
     identity = BackendIdentity.from_config(
         repository="2miners/Ravencoin", tag="v4.8.0", commit=CERTIFIED_COMMIT,
         artifact_sha256=CERTIFIED_ARTIFACT, evidence="BUILD_IDENTITY_VERIFIED")
@@ -325,7 +326,8 @@ def test_published_evidence_and_profile_travel_together():
 
 
 def test_identity_is_optional_for_older_callers():
-    status = evaluate_backend(network_info(), blockchain_info(), "mainnet",
-                             INCIDENT_CHECKPOINT_HASH, observed_at=100)
+    status = evaluate_backend(
+        network_info(), blockchain_info(), "mainnet",
+        INCIDENT_CHECKPOINT_HASH, observed_at=100)
     published = status.public_dict("ElectrumX-RVN 1.13.0.dev1")
     assert published["backend"]["identity"] == {"evidence": "VERSION_ONLY"}
