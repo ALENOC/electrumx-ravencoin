@@ -201,6 +201,12 @@ def main(argv=None) -> int:
                         help="signed safe-Core policy; without it nothing is certified")
     parser.add_argument("--allow-private", action="store_true",
                         help="development only: permit probing private addresses")
+    parser.add_argument("--max-depth", type=int, default=None,
+                        help="crawl depth limit for this run")
+    parser.add_argument("--max-candidates", type=int, default=None,
+                        help="new candidates accepted in this run")
+    parser.add_argument("--concurrency", type=int, default=None,
+                        help="concurrent probes; keep it low to stay polite")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("status")
     subparsers.add_parser("discover-now")
@@ -216,12 +222,19 @@ def main(argv=None) -> int:
         if arguments.command == "publish":
             return command_publish(store, version=arguments.directory_version,
                                    output=arguments.output)
+        limits = Limits()
+        if arguments.max_depth is not None:
+            limits.max_crawl_depth = arguments.max_depth
+        if arguments.max_candidates is not None:
+            limits.max_new_candidates_per_crawl = arguments.max_candidates
+        if arguments.concurrency is not None:
+            limits.max_concurrent_probes = arguments.concurrency
         summary = asyncio.run(run_discovery(
             store,
             seeds_path=pathlib.Path(arguments.seeds),
             registry_path=pathlib.Path(arguments.registry),
             policy=load_policy(arguments.policy),
-            limits=Limits(), thresholds=Thresholds(),
+            limits=limits, thresholds=Thresholds(),
             allow_private=arguments.allow_private))
         print(f"probed {summary['probed']} endpoint(s), {summary['edges']} peer edge(s), "
               f"chain {summary['chain']}: {summary['chain_detail']}")

@@ -361,3 +361,55 @@ def test_corrupt_state_file_falls_back_to_empty(tmp_path):
     path = tmp_path / "processed.json"
     path.write_text("{not json", encoding="utf-8")
     assert discover.load_state(path) == {}
+
+
+# ------------------------------------------------- the suite must be able to fail
+def broken_pre_fix_validator(header, height):
+    """A model of the pre-fix behaviour: no nHeight binding at all.
+
+    The August 2026 incident was possible because a header could declare a height
+    that was not its own. This model accepts exactly that, so the certification
+    test that is supposed to catch it must report FAIL against it.
+    """
+    from electrumx.lib.coins import CoinError, Ravencoin
+    expected_size = Ravencoin.static_header_len(height)
+    if len(header) != expected_size:
+        raise CoinError("wrong header size")
+    # Deliberately omitted: the declared-height check.
+    return None
+
+
+def test_nheight_test_fails_against_a_pre_fix_implementation():
+    """Guards against a certification test that can only ever pass."""
+    fixtures = json.loads(FIXTURES_PATH.read_text(encoding="utf-8"))
+    environment = certify.Environment(candidate=make_candidate(), fixtures=fixtures,
+                                      validator=broken_pre_fix_validator)
+    function, _scope = certify.REGISTRY["nheight-binding-rejects-forged"]
+    outcome = function(environment)
+    assert outcome.result is TestResult.FAIL, outcome.detail
+    assert "accepted by the enforcement rule" in outcome.detail
+
+
+def test_same_suite_passes_against_the_real_implementation():
+    fixtures = json.loads(FIXTURES_PATH.read_text(encoding="utf-8"))
+    environment = certify.Environment(candidate=make_candidate(), fixtures=fixtures)
+    function, _scope = certify.REGISTRY["nheight-binding-rejects-forged"]
+    assert function(environment).result is TestResult.PASS
+
+
+def test_a_certification_run_with_a_broken_validator_cannot_be_promoted():
+    """A failing mandatory test drives the whole candidate to CERTIFICATION_FAILED."""
+    profile = candidate_module.load_profile(PROFILE_PATH)
+    fixtures = json.loads(FIXTURES_PATH.read_text(encoding="utf-8"))
+    environment = certify.Environment(candidate=make_candidate(), fixtures=fixtures,
+                                      validator=broken_pre_fix_validator)
+    report = certify.certify(make_candidate(), profile, environment)
+    assert report["overall"] == CandidateState.CERTIFICATION_FAILED.value
+    # And such a report can never become a policy entry.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "generate_policy", SCRIPTS / "generate_policy.py")
+    generate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(generate)
+    entry = generate.entry_from_report(report)
+    assert entry["status"] == "KNOWN_UNSAFE"
