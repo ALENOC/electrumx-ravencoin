@@ -16,6 +16,7 @@ docs/_build
 .idea/
 .env
 contrib/electrumx.env
+.secrets/
 tls/
 test_get_ops.py
 test_address.py

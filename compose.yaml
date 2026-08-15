@@ -1,26 +1,115 @@
+name: electrumx-ravencoin
+
+x-core-build: &core-build
+  context: .
+  dockerfile: docker/core/Dockerfile
+  args:
+    RAVENCOIN_VERSION: 4.8.0
+    RAVENCOIN_SOURCE_COMMIT: b60f50e04f1fba425b28804e61be2694faaf3469
+    RAVENCOIN_ARCHIVE_SHA256: 966cf8978af1f2e3f36e9733d011eb92f4116750af6f8e77c5a5ced525577c4c
+    RAVEND_SHA256: 13e5c5da527888a870554acdbe0ad3de4f882ee2102d1cfc521e2868fa17b17b
+    RAVEN_CLI_SHA256: fcc7b88bd456e9ef21d9d5e9c9b40b26f0276b371f2108d702c6ce242bfdb109
+
 services:
+  rpc-secrets-init:
+    build: *core-build
+    image: alenoc/ravencoin-core:4.8.0
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        umask 077
+        cp /run/secrets/raven_rpc_user /prepared/raven_rpc_user
+        cp /run/secrets/raven_rpc_password /prepared/raven_rpc_password
+        chmod 0444 /prepared/raven_rpc_user /prepared/raven_rpc_password
+    secrets:
+      - raven_rpc_user
+      - raven_rpc_password
+    volumes:
+      - rpc-secrets:/prepared
+    network_mode: none
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+
+  ravencoin-core:
+    build: *core-build
+    image: alenoc/ravencoin-core:4.8.0
+    depends_on:
+      rpc-secrets-init:
+        condition: service_completed_successfully
+    environment:
+      RAVEN_RPC_USER_FILE: /run/raven-secrets/raven_rpc_user
+      RAVEN_RPC_PASSWORD_FILE: /run/raven-secrets/raven_rpc_password
+    networks:
+      ravencoin-backend:
+        ipv4_address: 172.29.80.10
+    ports:
+      - "8767:8767/tcp"
+    volumes:
+      - ravencoin-data:/var/lib/ravencoin
+      - ravencoin-config:/var/lib/ravencoin-config
+      - rpc-secrets:/run/raven-secrets:ro
+    restart: on-failure:5
+    stop_grace_period: 30m
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "ravencoin-healthcheck"]
+      interval: 30s
+      timeout: 20s
+      retries: 10
+      start_period: 5m
+
   electrumx:
     build:
       context: .
       dockerfile: contrib/Dockerfile
-    image: alenoc/electrumx-ravencoin:local
-    network_mode: host
-    env_file:
-      - ${ELECTRUMX_ENV_FILE:-contrib/electrumx.env}
+    image: alenoc/electrumx-ravencoin:1.13.0-dev1
+    depends_on:
+      ravencoin-core:
+        condition: service_healthy
+        restart: true
     environment:
       COIN: Ravencoin
+      NET: mainnet
       DB_DIRECTORY: /var/lib/electrumx/db
-      SERVICES: ssl://:50002,rpc://127.0.0.1:8000
+      SERVICES: tcp://:50001,rpc://127.0.0.1:8000
       EVENT_LOOP_POLICY: uvloop
+      CACHE_MB: ${ELECTRUMX_CACHE_MB:-1200}
+      RAVENCOIN_BACKEND_CHECK_INTERVAL: 60
+      RAVENCOIN_BACKEND_INFO_MAX_AGE: 5
+      RAVEN_RPC_USER_FILE: /run/raven-secrets/raven_rpc_user
+      RAVEN_RPC_PASSWORD_FILE: /run/raven-secrets/raven_rpc_password
+      RAVENCOIN_DAEMON_HOST: ravencoin-core
+      RAVENCOIN_DAEMON_PORT: 8766
+    networks:
+      ravencoin-backend:
+        ipv4_address: 172.29.80.20
+    ports:
+      - "127.0.0.1:50001:50001/tcp"
     volumes:
-      - electrumx-db:/var/lib/electrumx/db
-      - type: bind
-        source: ${ELECTRUMX_TLS_DIRECTORY:?set ELECTRUMX_TLS_DIRECTORY in .env}
-        target: /run/electrumx/tls
-        read_only: true
+      - electrumx-data:/var/lib/electrumx/db
+      - rpc-secrets:/run/raven-secrets:ro
     restart: on-failure:5
     stop_grace_period: 15m
     init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -33,8 +122,24 @@ services:
       test: ["CMD", "electrumx_rpc", "getinfo"]
       interval: 60s
       timeout: 35s
-      retries: 3
+      retries: 5
       start_period: 5m
 
+secrets:
+  raven_rpc_user:
+    file: .secrets/raven_rpc_user
+  raven_rpc_password:
+    file: .secrets/raven_rpc_password
+
+networks:
+  ravencoin-backend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.29.80.0/24
+
 volumes:
-  electrumx-db:
+  ravencoin-data:
+  ravencoin-config:
+  electrumx-data:
+  rpc-secrets:

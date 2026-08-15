@@ -26,7 +26,12 @@ def blockchain_info(chain="main", blocks=4_494_000, headers=4_494_000, ibd=False
     }
 
 
-@pytest.mark.parametrize("version", [4_060_000, 4_060_100, 4_060_101, 4_070_000])
+@pytest.mark.parametrize("version", [
+    pytest.param(4_060_000, id="4.6.0"),
+    pytest.param(4_060_100, id="4.6.1"),
+    pytest.param(4_060_101, id="4.6.1.1"),
+    pytest.param(4_070_000, id="4.7.0"),
+])
 def test_known_unsafe_core_versions_are_rejected(version):
     status = evaluate_backend(
         network_info(version), blockchain_info(), "mainnet",
@@ -40,7 +45,7 @@ def test_known_unsafe_core_versions_are_rejected(version):
 @pytest.mark.parametrize("version, parsed", [
     (4_080_000, (4, 8, 0, 0)),
     (4_080_100, (4, 8, 1, 0)),
-    (4_090_000, (4, 9, 0, 0)),
+    (4_100_000, (4, 10, 0, 0)),
     (5_000_000, (5, 0, 0, 0)),
 ])
 def test_safe_and_future_structural_versions_are_accepted(version, parsed):
