@@ -87,6 +87,7 @@ jobs:
                       "tag": release.get("tag"),
                   }
           state = pathlib.Path("core-safety/state/processed.json")
+          state.parent.mkdir(parents=True, exist_ok=True)
           state.write_text(json.dumps({"processed": processed}, indent=2) + "\n",
                             encoding="utf-8")
           PY
