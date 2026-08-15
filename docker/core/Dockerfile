@@ -52,7 +52,7 @@ RUN set -eux; \
         install -Dm0555 src/ravend src/raven-cli -t /out; \
     fi
 
-FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
+FROM debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792
 
 ARG RAVENCOIN_VERSION=4.8.0
 ARG RAVENCOIN_SOURCE_COMMIT=b60f50e04f1fba425b28804e61be2694faaf3469
@@ -63,6 +63,16 @@ LABEL org.opencontainers.image.title="Ravencoin Core" \
       org.opencontainers.image.source="https://github.com/2miners/Ravencoin" \
       org.opencontainers.image.revision="${RAVENCOIN_SOURCE_COMMIT}" \
       org.opencontainers.image.architecture="${TARGETARCH}"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       ca-certificates \
+       libboost-chrono1.74.0 libboost-date-time1.74.0 \
+       libboost-filesystem1.74.0 libboost-iostreams1.74.0 \
+       libboost-program-options1.74.0 libboost-serialization1.74.0 \
+       libboost-system1.74.0 libboost-thread1.74.0 \
+       libdb5.3 libdb5.3++ libevent-2.1-7 libssl1.1 \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid 10001 ravencoin \
     && useradd --uid 10001 --gid 10001 --system \
