@@ -71,6 +71,7 @@ class RavencoinBackendStatus:
     network_matches: bool
     synchronized: bool
     checkpoint_known: bool
+    checkpoint_verified: bool
     observed_at: int
 
     @property
@@ -98,7 +99,10 @@ class RavencoinBackendStatus:
                 "networkMatches": self.network_matches,
                 "backendSynchronized": self.synchronized,
                 "kawpowHeightValidation": True,
-                "checkpoint4487775": self.checkpoint_known,
+                # Only a real comparison against a backend that already holds the
+                # checkpoint height counts as verified.  A backend still below it
+                # must not publish evidence it cannot have.
+                "checkpoint4487775": self.checkpoint_verified,
             },
             "observedAt": self.observed_at,
         }
@@ -129,8 +133,11 @@ def evaluate_backend(network_info, blockchain_info, electrum_network,
     network_matches = network == expected_daemon_chain(electrum_network)
     version_safe = version_tuple >= MINIMUM_SAFE_CORE
     checkpoint_required = network == "main" and blocks >= INCIDENT_CHECKPOINT_HEIGHT
-    checkpoint_known = (not checkpoint_required
-                        or checkpoint_hash == INCIDENT_CHECKPOINT_HASH)
+    checkpoint_matches = checkpoint_hash == INCIDENT_CHECKPOINT_HASH
+    # A backend below the checkpoint height cannot violate it yet, so startup is
+    # not blocked; it also cannot prove anything, so it is not verified either.
+    checkpoint_known = not checkpoint_required or checkpoint_matches
+    checkpoint_verified = checkpoint_required and checkpoint_matches
     synchronized = ibd is not True and blocks == headers
 
     return RavencoinBackendStatus(
@@ -145,6 +152,7 @@ def evaluate_backend(network_info, blockchain_info, electrum_network,
         network_matches=network_matches,
         synchronized=synchronized,
         checkpoint_known=checkpoint_known,
+        checkpoint_verified=checkpoint_verified,
         observed_at=int(time.time() if observed_at is None else observed_at),
     )
 

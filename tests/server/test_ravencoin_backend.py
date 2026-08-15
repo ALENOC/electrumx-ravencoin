@@ -214,3 +214,39 @@ def test_abnormal_startup_failure_exits_non_zero():
     )
     assert completed.returncode != 0
     assert "terminated abnormally" in completed.stdout + completed.stderr
+
+
+def test_backend_below_checkpoint_does_not_claim_verification():
+    """A syncing backend must not publish checkpoint evidence it cannot have."""
+    status = evaluate_backend(
+        network_info(), blockchain_info(blocks=0, headers=457_998), "mainnet",
+        checkpoint_hash=None, observed_at=100,
+    )
+    published = status.public_dict("ElectrumX-RVN 1.13.0.dev1")
+    assert status.checkpoint_known          # cannot violate what it has not reached
+    assert not status.checkpoint_verified
+    assert published["compatibility"]["checkpoint4487775"] is False
+    assert published["compatibility"]["backendSynchronized"] is False
+    enforce_backend_policy(status)          # startup is still allowed while syncing
+
+
+def test_backend_at_checkpoint_publishes_verified_checkpoint():
+    status = evaluate_backend(
+        network_info(), blockchain_info(), "mainnet",
+        INCIDENT_CHECKPOINT_HASH, observed_at=100,
+    )
+    published = status.public_dict("ElectrumX-RVN 1.13.0.dev1")
+    assert status.checkpoint_verified
+    assert published["compatibility"]["checkpoint4487775"] is True
+
+
+def test_wrong_checkpoint_above_height_is_unsafe():
+    status = evaluate_backend(
+        network_info(), blockchain_info(), "mainnet",
+        "00" * 32, observed_at=100,
+    )
+    assert not status.checkpoint_known
+    assert not status.checkpoint_verified
+    assert status.public_dict("v")["compatibility"]["checkpoint4487775"] is False
+    with pytest.raises(UnsafeRavencoinCoreError, match="checkpoint"):
+        enforce_backend_policy(status)
