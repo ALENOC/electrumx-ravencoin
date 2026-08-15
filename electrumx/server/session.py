@@ -1097,7 +1097,8 @@ class ElectrumX(SessionBase):
         status = await self.session_mgr.daemon.refresh_ravencoin_backend_status(
             self.env.coin.NET, self.env.ravencoin_backend_info_max_age
         )
-        return status.public_dict(electrumx.version)
+        return status.public_dict(electrumx.version,
+                                  self.env.ravencoin_backend_identity)
 
     @classmethod
     def server_version_args(cls):

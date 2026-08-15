@@ -309,6 +309,61 @@ for amd64 and arm64.  An arm64 operator can use ``--existing-core`` with a
 separately verified Core 4.8.0+ installation; this repository does not pretend
 that an unverified arm64 Core artifact exists.
 
+How a Ravencoin Core release becomes trusted
+============================================
+
+**Version 4.8.0 is the certified baseline, not a threshold.** A release is not
+safe because its number is high enough. It is safe because that exact build was
+tested, and the identity that gets tested is the source repository plus the exact
+commit, never the version string.
+
+::
+
+   2miners/Ravencoin ------+
+                           |
+                           +--> release watcher --> build the exact commit
+                           |                               |
+   RavenProject/Ravencoin -+                               v
+                                                behavioural certification
+                                                           |
+                                                   pass? --+-- no --> refused
+                                                           |          review required
+                                                          yes
+                                                           v
+                                             signed safe-Core policy update
+
+Both upstream sources are watched, and neither is trusted for being itself. A
+release from the project's historical home passes exactly the same suite as any
+other. A future 4.9.0 is refused by wallets until it has been certified, which is
+deliberate: the release that caused the August 2026 incident was also, at the
+time, simply the newest one.
+
+The certification profile lives in ``core-safety/profiles/``, the real incident
+fixtures in ``core-safety/fixtures/``, and the watcher, harness and policy tools
+in ``core-safety/scripts/``. The profile is versioned, so tightening it later
+means publishing a new profile and re-certifying, not silently changing what an
+old result meant.
+
+This server publishes its own backend identity through
+``server.ravencoin_backend`` so wallets can match it against their policy. What
+that identity is worth is stated explicitly:
+
+=========================  ====================================================
+Evidence level             Meaning
+=========================  ====================================================
+BUILD_IDENTITY_VERIFIED    this deployment pinned the Core artifact and verified
+                           its digest at image build time
+BUILD_IDENTITY_ATTESTED    an operator configured the identity by hand
+VERSION_ONLY               only the daemon's own version string is known
+UNKNOWN                    nothing usable was reported
+=========================  ====================================================
+
+The bundled deployment reports the first. A third-party deployment cannot
+honestly report more than the second, because **no JSON field can prove which
+binary a remote operator is really running**. That is why identity evidence never
+replaces the wallet's own chain validation; it only decides whether a server is
+worth validating further.
+
 Why this fork exists
 ====================
 

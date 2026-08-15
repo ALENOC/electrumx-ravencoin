@@ -1,0 +1,219 @@
+{
+  "schemaVersion": 1,
+  "profileId": "rvn-consensus-2026-08-v1",
+  "title": "Ravencoin consensus safety profile, August 2026 incident baseline",
+  "createdAt": "2026-08-15",
+  "description": "Behaviour a Ravencoin Core release must demonstrate before this project treats it as safe to sit behind an Electrum server. A release is certified against a profile, never against a version number: a numerically newer release proves nothing until it passes this suite.",
+  "candidateSources": {
+    "note": "Allowlist of repositories a candidate may be discovered from. Being listed here grants a release the right to be TESTED, never the right to be TRUSTED. Both entries are treated identically.",
+    "allowed": [
+      "2miners/Ravencoin",
+      "RavenProject/Ravencoin"
+    ]
+  },
+  "identity": {
+    "note": "The certified identity key is repository plus commit. Version and tag are metadata only. Two repositories publishing the same version are two different candidates.",
+    "keyFields": [
+      "repository",
+      "commit"
+    ],
+    "metadataFields": [
+      "tag",
+      "version",
+      "releaseUrl",
+      "publishedAt"
+    ]
+  },
+  "tests": [
+    {
+      "id": "provenance-tag-resolves-to-commit",
+      "class": "mandatory",
+      "kind": "provenance",
+      "requires": [],
+      "description": "The release tag resolves, through its tag object where annotated, to exactly the candidate commit being certified.",
+      "scope": "provenance"
+    },
+    {
+      "id": "provenance-artifact-digest",
+      "class": "mandatory-when-artifact-pinned",
+      "kind": "provenance",
+      "requires": [
+        "release-artifact"
+      ],
+      "description": "When the deployment pins a published binary artifact, its SHA-256 matches both the release metadata and the published checksum file.",
+      "scope": "provenance"
+    },
+    {
+      "id": "build-candidate-commit",
+      "class": "mandatory",
+      "kind": "build",
+      "requires": [
+        "source-checkout",
+        "toolchain"
+      ],
+      "description": "The exact candidate commit builds, producing ravend and raven-cli. A moving branch is never substituted for the candidate.",
+      "scope": "core"
+    },
+    {
+      "id": "mainnet-genesis",
+      "class": "mandatory",
+      "kind": "behavioral",
+      "requires": [
+        "built-binaries"
+      ],
+      "description": "A fresh mainnet datadir with no network access produces the canonical Ravencoin mainnet genesis hash, proving the chain parameters were not altered.",
+      "expected": "0000006b444bc2f2ffe627be9d9e7e7a0730000870ef6eb6da46c8eae389df90",
+      "scope": "core"
+    },
+    {
+      "id": "regtest-consensus-smoke",
+      "class": "mandatory",
+      "kind": "behavioral",
+      "requires": [
+        "built-binaries"
+      ],
+      "description": "On regtest the candidate starts, connects blocks, keeps blocks equal to headers, and serves getblockchaininfo, getblockhash and getblockheader coherently.",
+      "scope": "core"
+    },
+    {
+      "id": "regtest-asset-consensus",
+      "class": "mandatory",
+      "kind": "behavioral",
+      "requires": [
+        "built-binaries"
+      ],
+      "description": "Asset consensus is still present and functional: an asset can be issued and queried on regtest, and the asset database survives a restart.",
+      "scope": "core"
+    },
+    {
+      "id": "required-indexes-usable",
+      "class": "mandatory",
+      "kind": "behavioral",
+      "requires": [
+        "built-binaries"
+      ],
+      "description": "txindex and assetindex build and answer, since ElectrumX depends on getrawtransaction and listaddressesbyasset. REST must serve rest/block/<hash>.bin, which is how ElectrumX reads blocks.",
+      "scope": "core"
+    },
+    {
+      "id": "core-unit-test-suite",
+      "class": "mandatory",
+      "kind": "behavioral",
+      "requires": [
+        "source-checkout",
+        "toolchain"
+      ],
+      "description": "The candidate's own consensus, PoW, validation and asset unit tests pass in its build tree. A skipped or absent suite is not a pass.",
+      "scope": "core"
+    },
+    {
+      "id": "kawpow-header-shape",
+      "class": "mandatory",
+      "kind": "behavioral",
+      "requires": [
+        "fixtures"
+      ],
+      "description": "Post-KAWPOW headers remain 120 bytes with the declared height at byte offset 76, and each real boundary fixture re-hashes to its known block hash under KAWPOW light verification. Scope is harness: this certifies that the enforcement rule and the real incident fixtures in this project are intact. Evidence about the candidate's own behaviour comes from the core-scope tests.",
+      "fixtureSet": "mainnet-incident-boundary",
+      "scope": "harness"
+    },
+    {
+      "id": "nheight-binding-rejects-forged",
+      "class": "mandatory",
+      "kind": "behavioral",
+      "requires": [
+        "fixtures"
+      ],
+      "description": "Every forged fixture whose declared nHeight disagrees with its chain height is rejected at the enforcement boundary, and a truncated header is rejected as well. Scope is harness: this certifies that the enforcement rule and the real incident fixtures in this project are intact. Evidence about the candidate's own behaviour comes from the core-scope tests.",
+      "fixtureSet": "mainnet-incident-boundary",
+      "scope": "harness"
+    },
+    {
+      "id": "post-boundary-valid-accepted",
+      "class": "mandatory",
+      "kind": "behavioral",
+      "requires": [
+        "fixtures"
+      ],
+      "description": "The real valid headers at and after the enforcement boundary are still accepted, so the rule rejects forgeries without rejecting the honest chain. Scope is harness: this certifies that the enforcement rule and the real incident fixtures in this project are intact. Evidence about the candidate's own behaviour comes from the core-scope tests.",
+      "scope": "harness"
+    },
+    {
+      "id": "incident-checkpoint-hash",
+      "class": "mandatory-with-chain-data",
+      "kind": "behavioral",
+      "requires": [
+        "mainnet-chain-data"
+      ],
+      "description": "On a datadir holding mainnet history, the candidate reports the canonical hash at height 4487775.",
+      "height": 4487775,
+      "expected": "000000000002d64509e06e76ddbbe418c725291687ec62b41ecfc40386a091fd",
+      "scope": "core"
+    },
+    {
+      "id": "transfer-overflow-deployment",
+      "class": "mandatory-with-chain-data",
+      "kind": "behavioral",
+      "requires": [
+        "mainnet-chain-data"
+      ],
+      "description": "The transfer_overflow consensus deployment is known to the candidate and reports its activation state on mainnet rather than being absent, which is how an unpatched generation behaves.",
+      "deployment": "transfer_overflow",
+      "scope": "core"
+    },
+    {
+      "id": "chainstate-rebuild",
+      "class": "mandatory-with-chain-data",
+      "kind": "behavioral",
+      "requires": [
+        "mainnet-chain-data"
+      ],
+      "description": "A chainstate rebuild from existing block files reaches the same tip hash, so block-index and chainstate recovery behaviour is intact.",
+      "scope": "core"
+    },
+    {
+      "id": "consensus-divergence-review",
+      "class": "advisory",
+      "kind": "review",
+      "requires": [
+        "source-checkout",
+        "baseline-commit"
+      ],
+      "description": "Consensus-relevant source differences against the last certified baseline are summarised for human review. Supplemental evidence only; it never substitutes for the behavioural tests, and it never upgrades a result.",
+      "scope": "advisory"
+    }
+  ],
+  "reviewRequiredTriggers": {
+    "note": "If a candidate changes any of these areas in a way this profile version cannot confidently certify, the result is REVIEW_REQUIRED, never KNOWN_SAFE.",
+    "areas": [
+      "block header format or size",
+      "proof of work algorithm or KAWPOW verification",
+      "consensus deployment or activation machinery",
+      "asset consensus rules",
+      "block index or chainstate storage semantics",
+      "checkpoint handling",
+      "the nHeight binding rule itself"
+    ]
+  },
+  "promotion": {
+    "note": "Conditions for automatic promotion to KNOWN_SAFE. Every one is required; absence of evidence is never treated as evidence.",
+    "requires": [
+      "repository is in candidateSources.allowed",
+      "all mandatory tests PASS",
+      "all mandatory-with-chain-data tests PASS",
+      "all mandatory-when-artifact-pinned tests PASS when an artifact is pinned",
+      "no test result is SKIPPED, UNAVAILABLE or ERROR",
+      "no reviewRequiredTriggers area is flagged",
+      "certification report is produced and hashed",
+      "policy generation and signing both succeed"
+    ],
+    "onAnyFailure": "CERTIFICATION_FAILED",
+    "onAnyAmbiguity": "REVIEW_REQUIRED"
+  },
+  "scopes": {
+    "core": "observes the candidate binaries or runs the candidate's own test suite",
+    "harness": "verifies this project's enforcement rule and fixture integrity, not Core itself",
+    "provenance": "checks release metadata and artifact digests",
+    "advisory": "supplemental human-review evidence; never changes a result"
+  }
+}

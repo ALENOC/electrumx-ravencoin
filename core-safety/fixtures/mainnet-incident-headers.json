@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "fixtureSet": "mainnet-incident-boundary",
+  "profile": "rvn-consensus-2026-08-v1",
+  "provenance": {
+    "network": "mainnet",
+    "source": "getblockheader on a synchronized Ravencoin Core 4.8.0 node (/Ravencoin:4.8.0/), read-only RPC",
+    "collectedAt": "2026-08-15",
+    "verification": "each header was re-hashed with KAWPOW light verification and matched the block hash reported by that node",
+    "checkpointHeight": 4487775,
+    "enforcementHeight": 4487776,
+    "sizeBytes": 120,
+    "declaredHeightOffset": 76
+  },
+  "validHeaders": [
+    {
+      "height": 4487774,
+      "hash": "0000000000020243d6eb25547f23bc25f96954d1df507eef557fbe89772b567a",
+      "declaredHeight": 4487774,
+      "timestamp": 1786117255,
+      "headerHex": "000000300bac281fc9b4c5ad9c8d7e9b01f5bbf05bad9de0ba544d135b23040000000000e2bb466d463637fb48489b815c1a6c4bc9e107cae96e3a81f05b42ebeb39009887fc756acfb3051b5e7a4400a20dc18600000025933426e66542c9233813e52c4eee7d788de3dec759056744860c50a67af481d9",
+      "note": "last block before the incident checkpoint"
+    },
+    {
+      "height": 4487775,
+      "hash": "000000000002d64509e06e76ddbbe418c725291687ec62b41ecfc40386a091fd",
+      "declaredHeight": 4487775,
+      "timestamp": 1786117437,
+      "headerHex": "000000307a562b7789be7f55ef7e50dfd15469f925bc237f5425ebd64302020000000000f41fdf2269cc2f6871d6cd68e86f0e8f8903967abee6384dc588fa2262ccf8973dfd756af2ad051b5f7a44003313e49268e2b7b93f187ed01113c3606445e72c479a8c62a168bc40c22d48103e8cbb766d125d62",
+      "note": "the incident checkpoint itself"
+    },
+    {
+      "height": 4487776,
+      "hash": "0000000000042bb50281ebb2f68d3f9143980b041178849015d95b067d52a841",
+      "declaredHeight": 4487776,
+      "timestamp": 1786370982,
+      "headerHex": "00000030fd91a08603c4cf1eb462ec87162925c718e4bbdd766ee00945d6020000000000c131dc1af83d56f50b907b8cdfc68d1facd3c3346a6cecb59ef0672231c24335a6db796a35c5051b607a4400dc314c34000000320d004688560998f2d42f3030cda7a9fb19b8d5b044242d7275112c789b2fad7c",
+      "note": "first block at the nHeight enforcement boundary"
+    },
+    {
+      "height": 4487777,
+      "hash": "000000000001c1299d132eaf8bafb6477638f0dbd1d42d60f24261513054cca2",
+      "declaredHeight": 4487777,
+      "timestamp": 1786371097,
+      "headerHex": "0000003041a8527d065bd91590847811040b9843913f8df6b2eb8102b52b0400000000009261f7def053eaaf07f8b77dbf0901bd7d7a02f0473b4c1c5b6fa34651ef73e619dc796addc1101b617a4400443ced4c00008079adcbd9d9f4bf1a8bfe1c9cfee00b3bcf70942565396178bdf7d5ec3855c6cae5",
+      "note": "first block after the boundary"
+    }
+  ],
+  "invalidHeaders": [
+    {
+      "name": "forged-nheight-too-low",
+      "chainHeight": 4487776,
+      "declaredHeight": 4487775,
+      "headerHex": "00000030fd91a08603c4cf1eb462ec87162925c718e4bbdd766ee00945d6020000000000c131dc1af83d56f50b907b8cdfc68d1facd3c3346a6cecb59ef0672231c24335a6db796a35c5051b5f7a4400dc314c34000000320d004688560998f2d42f3030cda7a9fb19b8d5b044242d7275112c789b2fad7c",
+      "derivation": "real header at 4487776 with the nHeight field at byte offset 76 overwritten",
+      "expected": "reject",
+      "observedRejectionReason": "Ravencoin KAWPOW header at chain height 4487776 declares nHeight=4487775"
+    },
+    {
+      "name": "forged-nheight-too-high",
+      "chainHeight": 4487776,
+      "declaredHeight": 4487999,
+      "headerHex": "00000030fd91a08603c4cf1eb462ec87162925c718e4bbdd766ee00945d6020000000000c131dc1af83d56f50b907b8cdfc68d1facd3c3346a6cecb59ef0672231c24335a6db796a35c5051b3f7b4400dc314c34000000320d004688560998f2d42f3030cda7a9fb19b8d5b044242d7275112c789b2fad7c",
+      "derivation": "real header at 4487776 with the nHeight field at byte offset 76 overwritten",
+      "expected": "reject",
+      "observedRejectionReason": "Ravencoin KAWPOW header at chain height 4487776 declares nHeight=4487999"
+    },
+    {
+      "name": "forged-nheight-zero",
+      "chainHeight": 4487776,
+      "declaredHeight": 0,
+      "headerHex": "00000030fd91a08603c4cf1eb462ec87162925c718e4bbdd766ee00945d6020000000000c131dc1af83d56f50b907b8cdfc68d1facd3c3346a6cecb59ef0672231c24335a6db796a35c5051b00000000dc314c34000000320d004688560998f2d42f3030cda7a9fb19b8d5b044242d7275112c789b2fad7c",
+      "derivation": "real header at 4487776 with the nHeight field at byte offset 76 overwritten",
+      "expected": "reject",
+      "observedRejectionReason": "Ravencoin KAWPOW header at chain height 4487776 declares nHeight=0"
+    },
+    {
+      "name": "truncated-kawpow-header",
+      "chainHeight": 4487776,
+      "declaredHeight": 4487776,
+      "headerHex": "00000030fd91a08603c4cf1eb462ec87162925c718e4bbdd766ee00945d6020000000000c131dc1af83d56f50b907b8cdfc68d1facd3c3346a6cecb59ef0672231c24335a6db796a35c5051b607a4400dc314c34000000320d004688560998f2d42f3030",
+      "derivation": "real header at 4487776 truncated to 100 bytes",
+      "expected": "reject",
+      "observedRejectionReason": "header size invariant"
+    }
+  ]
+}
