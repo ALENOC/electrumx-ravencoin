@@ -45,7 +45,11 @@ def load_private_key(source: str) -> Ed25519PrivateKey:
     material = None
     path = pathlib.Path(source)
     if path.exists():
-        material = path.read_bytes().strip()
+        raw_material = path.read_bytes()
+        # Raw Ed25519 keys are exactly 32 bytes; do not strip them, as a
+        # valid key may begin or end with a whitespace byte.  Text/base64
+        # inputs can still use surrounding-whitespace tolerance below.
+        material = raw_material if len(raw_material) == 32 else raw_material.strip()
     else:
         material = source.strip().encode()
     if len(material) != 32:
