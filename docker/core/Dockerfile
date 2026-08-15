@@ -1,4 +1,6 @@
-FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS fetch
+# Bullseye keeps the upstream secp256k1 OpenSSL test suite compatible while
+# preserving the exact candidate-source build path for ARM64.
+FROM debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792 AS fetch
 
 ARG TARGETARCH
 ARG RAVENCOIN_VERSION=4.8.0

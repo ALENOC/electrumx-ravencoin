@@ -47,7 +47,10 @@ for attempt in $(seq 1 60); do
     sleep 2
 done
 
-cli generatetoaddress 101 mipcBbFg9gMiCh81KJ8tqqdgoZub1ZJRfn >/dev/null
+# This is the Ravencoin testnet/regtest address used by the candidate's
+# asset-serialization tests; Bitcoin's commonly copied regtest fixture is
+# rejected by Ravencoin's address validation.
+cli generatetoaddress 101 mfe7MqgYZgBuXzrT2QTFqZwBXwRDqagHTp >/dev/null
 block_hash=$(cli getblockhash 1)
 block_json=$(cli getblock "$block_hash" 2)
 txid=$(printf '%s' "$block_json" | python3 -c 'import json, sys; print(json.load(sys.stdin)["tx"][0])')
