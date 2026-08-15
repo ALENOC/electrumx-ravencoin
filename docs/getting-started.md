@@ -53,3 +53,64 @@ production node without a maintenance plan and sufficient storage.
 
 `blocks < headers` is normal during Core initial sync. A healthy container is
 not the same as a synchronized or wallet-usable server.
+
+## What you need
+
+For the bundled path, use a current 64-bit Linux host with Docker Engine,
+Compose v2, Git and OpenSSL. Choose storage before installing: Core's raw
+blocks and chainstate, `txindex`, `assetindex` and the ElectrumX database all
+need persistent space. NVMe or SSD is strongly preferred; microSD is not a
+reasonable location for this workload. See [Hardware](hardware.md) before
+buying a board.
+
+The bundled Core image is the amd64 path exercised by this project. ARM64
+operators should use [existing-Core mode](#existing-core-mode) with a Core
+deployment whose exact identity and policy evidence they understand. A board
+being recommended hardware is not the same as its complete runtime having
+been validated.
+
+## What the setup script changes
+
+`setup.sh` checks that Docker and Compose are available, checks the selected
+architecture, creates `.env` without overwriting an existing file, generates
+RPC credentials below the Git-ignored `.secrets/` directory, and validates the
+Compose files. It does not print credentials or delete blockchain data.
+
+`--enable-reboot` installs a user systemd unit for the bundled stack. If the
+host must start user services before login, configure user lingering as
+described by the script. Read the generated unit and confirm that its behavior
+fits your host before relying on unattended reboot recovery.
+
+## Private readiness checklist
+
+Before public networking, confirm all of these locally:
+
+- Core answers JSON-RPC and reports the expected mainnet network.
+- Core is still making progress or has reached the network tip.
+- `txindex`, `assetindex` and REST are enabled for the bundled deployment.
+- ElectrumX is no longer waiting for Core and its database height advances.
+- `server.ravencoin_backend` reports fresh, coherent backend evidence.
+- The independent chain and asset checks in [Validation status](validation-status.md)
+  are complete for the deployment.
+
+## Existing-Core mode in more detail
+
+This mode is for operators who already manage Core. It does not make an
+unreviewed Core safe merely because it is reachable. The existing node should
+be non-pruned and provide the capabilities ElectrumX needs, including
+`txindex=1`, `assetindex=1` and `rest=1`. Changing those settings can require a
+reindex; plan that work separately and never delete a production database as a
+shortcut.
+
+ElectrumX needs REST because its block-fetch path reads
+`rest/block/<hash>.bin`. If REST is disabled or inaccessible, the index can
+stop even while JSON-RPC appears healthy. Keep Core's JSON-RPC and REST on the
+private network. REST has no authentication of its own.
+
+## Private versus public
+
+The private path ends when your own wallet can use the local Electrum listener.
+It needs no router changes. The public path adds a stable hostname, a stable
+LAN address, inbound TCP forwarding, a CA-valid TLS certificate, renewal and
+tests from another network. Follow [Public node](public-node.md) only after
+private synchronization and indexing are complete.

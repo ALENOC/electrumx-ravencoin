@@ -36,3 +36,30 @@ python -m monitor.cli status
 python -m monitor.cli discover-now --policy safe-core-policy.json
 python -m monitor.cli publish --directory-version 3
 ```
+
+## What the monitor can and cannot say
+
+The monitor is an observability and discovery service. A seed or
+`server.peers.subscribe` response supplies candidates; a voluntary registry
+adds operators who want to be found. Each candidate is then bounded by depth,
+candidate count, concurrency, timeout and response-size limits before health,
+TLS, backend and chain evidence are recorded.
+
+Discovery is not trust. A signed directory is a tamper-evident list of
+observations, not a permission to skip the wallet's independent validation.
+The wallet revalidates every endpoint and fails closed when required evidence
+is absent or contradictory.
+
+SSRF protection rejects loopback, private, link-local, unique-local, reserved,
+multicast, documentation and cloud-metadata destinations. This matters because
+an operator-controlled or malicious peer response must not turn the monitor
+into a way to probe internal services.
+
+`operatorGroup` represents an independently reviewed operator, not an
+endpoint-count vote. Several endpoints run by CIPIG, ALENOC or another one
+operator remain one group; unknown endpoints are not grouped by guesswork. A
+healthy conflicting independent operator is still a conflict.
+
+Observations retain their vantage-point identifier. Thus “unreachable from
+probe A” is not overstated as “globally offline”; basic health remains useful
+without requiring a distributed consensus service.
