@@ -260,11 +260,8 @@ if [ "$mode" = existing ]; then
 fi
 
 case "$(uname -m)" in
-    x86_64|amd64) ;;
-    aarch64|arm64)
-        fail 'the verified bundled Core 4.8.0 artifact is amd64-only; use --existing-core on arm64'
-        ;;
-    *) fail 'unsupported CPU architecture for the bundled Core artifact' ;;
+    x86_64|amd64|aarch64|arm64) ;;
+    *) fail 'unsupported CPU architecture; bundled Core supports x86_64/amd64 and aarch64/arm64' ;;
 esac
 
 command -v openssl >/dev/null 2>&1 || fail 'openssl is required to generate RPC credentials'
