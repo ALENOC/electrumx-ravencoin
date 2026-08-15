@@ -184,7 +184,13 @@ jobs:
                         f"{entry.get('repository')} {entry.get('reason', '')}")
                   continue
               record = reports / f"candidate-{entry['commit'][:12]}.json"
-              record.write_text(json.dumps(entry), encoding="utf-8")
+              candidate_fields = {
+                  "repository", "tag", "commit", "version", "tag_object",
+                  "tag_verified", "commit_verified", "published_at",
+                  "release_url", "artifact_name", "artifact_sha256", "notes",
+              }
+              record.write_text(json.dumps({key: entry[key] for key in candidate_fields
+                                            if key in entry}), encoding="utf-8")
               report = reports / f"report-{entry['commit'][:12]}.json"
               # Source checkout, toolchain and chain data are supplied by the
               # dedicated build stage. Without them the harness reports
