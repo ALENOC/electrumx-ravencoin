@@ -159,12 +159,20 @@ has no host ``ports`` mapping.
 Required Core settings
 ======================
 
-The generated configuration enables ``server=1``, ``txindex=1`` and
-``assetindex=1``.  ElectrumX needs historical raw transactions while indexing,
-and ``blockchain.asset.list_addresses_by_asset`` delegates to Core's asset
-index.  Wallet loading is disabled because ElectrumX does not require a Core
-wallet.  Address, timestamp, and spent indexes are not enabled without a server
-requirement.
+The generated configuration enables ``server=1``, ``txindex=1``,
+``assetindex=1`` and ``rest=1``.  ElectrumX needs historical raw transactions
+while indexing, and ``blockchain.asset.list_addresses_by_asset`` delegates to
+Core's asset index.  Wallet loading is disabled because ElectrumX does not
+require a Core wallet.  Address, timestamp, and spent indexes are not enabled
+without a server requirement.
+
+``rest=1`` is mandatory, not optional: ElectrumX downloads every block from
+Core's REST endpoint ``rest/block/<hash>.bin`` and has no JSON-RPC fallback.
+Without it, Core answers each block request with ``Not Found``, ElectrumX logs
+``daemon service refused: Not Found``, and the index never advances past
+height ``-1``.  Core's REST interface is unauthenticated, so its only access
+control is the ``rpcbind``/``rpcallowip`` pair; keep it on loopback and the
+private bridge, and never publish port 8766.
 
 Verify Ravencoin Core
 =====================
@@ -270,8 +278,21 @@ ElectrumX:
 
 This mode uses host networking so ``127.0.0.1:8766`` remains private and
 reachable.  It does not start a second Core.  The existing daemon must be
-mainnet, non-pruned, have ``txindex=1`` and ``assetindex=1``, and pass every
-version, checkpoint, KAWPOW, canonical-tip, and broadcast check.
+mainnet, non-pruned, have ``txindex=1``, ``assetindex=1`` and ``rest=1``, and
+pass every version, checkpoint, KAWPOW, canonical-tip, and broadcast check.
+
+Adding ``txindex`` or ``assetindex`` to a node that lacks them requires a full
+Core reindex, so confirm both before choosing this mode:
+
+.. code-block:: sh
+
+   raven-cli getrawtransaction <old-confirmed-txid> >/dev/null && echo txindex-ok
+   raven-cli listaddressesbyasset <existing-asset> >/dev/null && echo assetindex-ok
+   curl -sf http://127.0.0.1:8766/rest/chaininfo.json >/dev/null && echo rest-ok
+
+An unindexed node answers ``Use -txindex to enable blockchain transaction
+queries`` or ``not functional unless -assetindex is enabled``, and a node
+without ``rest=1`` fails the third check.
 
 Asset verification
 ==================

@@ -42,6 +42,7 @@ if [ ! -e "$config_file" ]; then
             'rpcallowip=172.29.80.0/24' \
             'txindex=1' \
             'assetindex=1' \
+            'rest=1' \
             'disablewallet=1'
         printf 'rpcuser=%s\n' "$rpc_user"
         printf 'rpcpassword=%s\n' "$rpc_password"
@@ -51,12 +52,20 @@ if [ ! -e "$config_file" ]; then
 else
     configured_user=
     configured_password=
+    configured_rest=false
     while IFS= read -r config_line; do
         case "$config_line" in
             rpcuser=*) configured_user=${config_line#rpcuser=} ;;
             rpcpassword=*) configured_password=${config_line#rpcpassword=} ;;
+            rest=1) configured_rest=true ;;
         esac
     done < "$config_file"
+    # ElectrumX reads raw blocks from Core's REST interface, so a configuration
+    # written before that requirement was documented cannot index anything.
+    if [ "$configured_rest" = false ]; then
+        printf 'rest=1\n' >> "$config_file"
+        printf '%s\n' 'Added the required rest=1 setting to the existing Core configuration.'
+    fi
     if [ "$configured_user" != "$rpc_user" ] || [ "$configured_password" != "$rpc_password" ]; then
         printf '%s\n' \
             'Ravencoin RPC secrets do not match the persistent configuration.' \

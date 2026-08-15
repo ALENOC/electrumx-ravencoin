@@ -125,3 +125,92 @@ class FakeDB:
 async def test_database_tip_mismatch_refuses_to_serve():
     with pytest.raises(RavencoinDatabaseMismatchError, match="rewind or rebuild"):
         await verify_database_chain(FakeDB(), FakeDaemon("22" * 32))
+
+
+@pytest.mark.asyncio
+async def test_unopened_database_is_refused_instead_of_crashing():
+    class UnopenedDB:
+        state = None
+
+    with pytest.raises(RavencoinDatabaseMismatchError, match="state is unavailable"):
+        await verify_database_chain(UnopenedDB(), FakeDaemon("11" * 32))
+
+
+@pytest.mark.asyncio
+async def test_block_processor_verifies_chain_only_after_opening_database(monkeypatch):
+    """The chain check reads on-disk state, so it must follow the database open."""
+    from types import SimpleNamespace
+
+    from electrumx.server import block_processor
+
+    calls = []
+
+    class StubState:
+        height = -1
+        tip = hex_str_to_hash("00" * 32)
+
+        def copy(self):
+            return self
+
+    class StubDB:
+        def __init__(self):
+            self.state = None
+
+        async def open_for_sync(self):
+            calls.append("open_for_sync")
+            self.state = StubState()
+            return self.state
+
+    class StubOnDiskBlock:
+        state = None
+
+        @classmethod
+        async def scan_files(cls):
+            calls.append("scan_files")
+
+    async def stub_verify(db, daemon):
+        assert db.state is not None, "verification ran before the database was open"
+        calls.append("verify_database_chain")
+
+    class StopTest(Exception):
+        pass
+
+    async def stub_next_block_hashes():
+        raise StopTest
+
+    monkeypatch.setattr(block_processor, "verify_database_chain", stub_verify)
+    monkeypatch.setattr(block_processor, "OnDiskBlock", StubOnDiskBlock)
+
+    processor = SimpleNamespace(
+        env=SimpleNamespace(write_bad_vouts_to_file=False),
+        bad_vouts_path="/nonexistent",
+        db=StubDB(),
+        daemon=object(),
+        state=None,
+        next_block_hashes=stub_next_block_hashes,
+    )
+
+    with pytest.raises(StopTest):
+        await block_processor.BlockProcessor.fetch_and_process_blocks(
+            processor, None, None
+        )
+
+    assert calls == ["open_for_sync", "verify_database_chain", "scan_files"]
+
+
+def test_abnormal_startup_failure_exits_non_zero():
+    """Container and systemd restart policies need a non-zero exit on crash."""
+    import pathlib
+    import subprocess
+    import sys
+
+    script = pathlib.Path(__file__).resolve().parents[2] / "electrumx_server"
+    completed = subprocess.run(
+        [sys.executable, str(script)],
+        env={"PATH": "/usr/bin:/bin", "COIN": "Ravencoin"},
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert completed.returncode != 0
+    assert "terminated abnormally" in completed.stdout + completed.stderr

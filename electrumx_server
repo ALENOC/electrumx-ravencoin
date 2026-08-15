@@ -35,6 +35,9 @@ def main():
         asyncio.run(controller.run())
     except Exception:
         logger.exception('ElectrumX server terminated abnormally')
+        # Exit non-zero so process supervisors and container restart policies
+        # observe the failure instead of treating a crash as a clean shutdown.
+        sys.exit(1)
     else:
         logger.info('ElectrumX server terminated normally')
 
