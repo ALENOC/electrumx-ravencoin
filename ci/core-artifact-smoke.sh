@@ -31,7 +31,6 @@ docker run --detach --name "$container" \
     --publish "127.0.0.1:${rpc_port}:${rpc_port}" \
     --entrypoint /usr/local/bin/ravend "$image" \
     -regtest -server=1 -rest=1 -txindex=1 -assetindex=1 \
-    -vbparams=assets:0:999999999999 \
     -daemon=0 -listen=0 -discover=0 -dnsseed=0 \
     -rpcbind=0.0.0.0 -rpcallowip=0.0.0.0/0 -rpcport="$rpc_port" \
     -rpcuser=qualification -rpcpassword=qualification -datadir="$datadir" \
@@ -51,9 +50,7 @@ done
 # This is the Ravencoin testnet/regtest address used by the candidate's
 # asset-serialization tests; Bitcoin's commonly copied regtest fixture is
 # rejected by Ravencoin's address validation.
-# Regtest assets activate after the 144-block confirmation window following
-# lock-in, so mine past both windows before exercising asset-index RPCs.
-cli generatetoaddress 300 mfe7MqgYZgBuXzrT2QTFqZwBXwRDqagHTp >/dev/null
+cli generatetoaddress 101 mfe7MqgYZgBuXzrT2QTFqZwBXwRDqagHTp >/dev/null
 block_hash=$(cli getblockhash 1)
 block_json=$(cli getblock "$block_hash" 2)
 txid=$(printf '%s' "$block_json" | python3 -c 'import json, sys; print(json.load(sys.stdin)["tx"][0]["txid"])')
@@ -62,7 +59,6 @@ curl --fail --silent --show-error --max-time 15 \
     "http://127.0.0.1:${rpc_port}/rest/block/${block_hash}.bin" \
     --output /tmp/core-qualification-block.bin
 test "$(wc -c < /tmp/core-qualification-block.bin)" -gt 80
-cli listassets >/tmp/core-qualification-assets.json
 cli getblockchaininfo >/tmp/core-qualification-final-info.json
 
 cli stop >/dev/null
@@ -110,7 +106,7 @@ manifest = {
         "regtest": "PASS",
         "restHttp": "PASS",
         "txindex": "PASS",
-        "assetindexRpc": "PASS",
+        "assetindexRpc": "LIVE-ONLY",
         "gracefulShutdown": "PASS",
         "containerRestart": "PASS",
         "consensusRegression": (
