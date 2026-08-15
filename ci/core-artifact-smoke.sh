@@ -51,7 +51,9 @@ done
 # This is the Ravencoin testnet/regtest address used by the candidate's
 # asset-serialization tests; Bitcoin's commonly copied regtest fixture is
 # rejected by Ravencoin's address validation.
-cli generatetoaddress 200 mfe7MqgYZgBuXzrT2QTFqZwBXwRDqagHTp >/dev/null
+# Regtest assets activate after the 144-block confirmation window following
+# lock-in, so mine past both windows before exercising asset-index RPCs.
+cli generatetoaddress 300 mfe7MqgYZgBuXzrT2QTFqZwBXwRDqagHTp >/dev/null
 block_hash=$(cli getblockhash 1)
 block_json=$(cli getblock "$block_hash" 2)
 txid=$(printf '%s' "$block_json" | python3 -c 'import json, sys; print(json.load(sys.stdin)["tx"][0]["txid"])')
