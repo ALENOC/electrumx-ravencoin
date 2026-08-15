@@ -4,7 +4,8 @@ The canonical beginner deployment and operations guide is the repository
 [README](../README.rst). It documents both supported modes:
 
 - recommended `compose.yaml`: pinned Ravencoin Core 4.8.0 plus ElectrumX;
-- `compose.existing-core.yaml`: ElectrumX only, for a private existing Core 4.8.0+.
+- `compose.existing-core.yaml`: ElectrumX only, for a private existing Core
+  deployment. Exact backend identity and signed-policy/live checks still apply.
 
 ## Compose invariants
 

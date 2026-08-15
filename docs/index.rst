@@ -1,6 +1,6 @@
-=========
-ElectrumX
-=========
+=======================
+ElectrumX for Ravencoin
+=======================
 
 A reimplementation of Electrum-Server for a future with bigger blocks.
 
@@ -9,10 +9,10 @@ The current version is |release|.
 Source Code
 ===========
 
-The project is hosted on `GitHub <https://github.com/Electrum-RVN-SIG/electrumx-ravencoin>`_.
+This maintained fork is hosted on `GitHub <https://github.com/ALENOC/electrumx-ravencoin>`_.
 
 Please submit an issue on the `bug tracker
-<https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/issues>`_ if you have found a
+<https://github.com/ALENOC/electrumx-ravencoin/issues>`_ if you have found a
 bug or have a suggestion to improve the server.
 
 Authors and License
@@ -21,13 +21,14 @@ Authors and License
 Neil Booth wrote the vast majority of the code; see :ref:`Authors`.
 Python version at least 3.8 is required.
 
-The code is released under the `MIT Licence
-<https://github.com/Electrum-RVN-SIG/electrumx-ravencoin/LICENCE>`_.
+The code remains under the `MIT Licence <../LICENCE>`_. Maintainer and lineage
+notes are in `NOTICE.md <../NOTICE.md>`_.
 
 Getting Started
 ===============
 
-See :ref:`HOWTO`.
+Start with the repository `documentation hub <README.md>`_, then see
+:ref:`HOWTO` for the legacy Sphinx deployment guide.
 
 There is a `Dockerfile`_ available .
 
