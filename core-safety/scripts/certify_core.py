@@ -81,6 +81,7 @@ class Environment:
                  mainnet_datadir: Optional[pathlib.Path] = None,
                  artifact: Optional[pathlib.Path] = None,
                  fixtures: Optional[dict] = None,
+                 validator: Optional[Callable] = None,
                  rpc_timeout: int = 120):
         self.candidate = candidate
         self.source_dir = source_dir
@@ -88,6 +89,10 @@ class Environment:
         self.mainnet_datadir = mainnet_datadir
         self.artifact = artifact
         self.fixtures = fixtures
+        # The header validator under test.  Injectable so the suite can be run
+        # against a deliberately broken implementation: a test that cannot fail
+        # is not evidence of anything.
+        self.validator = validator
         self.rpc_timeout = rpc_timeout
 
     # ---------------------------------------------------------------- helpers
@@ -364,11 +369,12 @@ def _forged_rejected(environment: Environment) -> Outcome:
     except ImportError:
         return Outcome(TestResult.UNAVAILABLE,
                        "the enforcement implementation is not importable here")
+    validate = environment.validator or Ravencoin.validate_header
     rejected = []
     for entry in fixtures["invalidHeaders"]:
         header = bytes.fromhex(entry["headerHex"])
         try:
-            Ravencoin.validate_header(header, entry["chainHeight"])
+            validate(header, entry["chainHeight"])
         except CoinError:
             rejected.append(entry["name"])
         else:
@@ -390,9 +396,10 @@ def _valid_accepted(environment: Environment) -> Outcome:
     except ImportError:
         return Outcome(TestResult.UNAVAILABLE,
                        "the enforcement implementation is not importable here")
+    validate = environment.validator or Ravencoin.validate_header
     for entry in fixtures["validHeaders"]:
         header = bytes.fromhex(entry["headerHex"])
-        Ravencoin.validate_header(header, entry["height"])
+        validate(header, entry["height"])
         if hash_to_hex_str(Ravencoin.header_hash(header)) != entry["hash"]:
             return Outcome(TestResult.FAIL,
                            "a valid fixture did not re-hash to its known block hash",
