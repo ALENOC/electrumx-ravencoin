@@ -164,7 +164,7 @@ def test_fixture_tests_pass_against_the_real_incident_vectors():
         outcome = function(environment)
         expected = TestResult.PASS if test_id == "kawpow-header-shape" else TestResult.REVIEW_REQUIRED
         assert outcome.result is expected, (test_id, outcome.detail)
-        assert scope == "harness"
+        assert scope == ("harness" if test_id == "kawpow-header-shape" else "core")
 
 
 def test_forged_fixture_that_is_accepted_would_fail_the_suite():

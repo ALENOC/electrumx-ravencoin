@@ -82,7 +82,7 @@
       "requires": [
         "built-binaries"
       ],
-      "description": "Asset consensus is still present and functional: an asset can be issued and queried on regtest, and the asset database survives a restart.",
+      "description": "Wallet-independent release gate: the exact candidate's asset transaction validation accepts canonical valid cases and rejects invalid cases. Asset creation, indexing, RPC, and restart persistence remain live-node gates.",
       "scope": "core"
     },
     {
@@ -124,9 +124,9 @@
       "requires": [
         "fixtures"
       ],
-      "description": "Every forged fixture whose declared nHeight disagrees with its chain height is rejected at the enforcement boundary, and a truncated header is rejected as well. Scope is harness: this certifies that the enforcement rule and the real incident fixtures in this project are intact. Evidence about the candidate's own behaviour comes from the core-scope tests.",
+      "description": "The exact candidate contextual validation path rejects forged declared heights while accepting the valid boundary fixtures before, at, and after enforcement.",
       "fixtureSet": "mainnet-incident-boundary",
-      "scope": "harness"
+      "scope": "core"
     },
     {
       "id": "post-boundary-valid-accepted",
@@ -135,15 +135,15 @@
       "requires": [
         "fixtures"
       ],
-      "description": "The real valid headers at and after the enforcement boundary are still accepted, so the rule rejects forgeries without rejecting the honest chain. Scope is harness: this certifies that the enforcement rule and the real incident fixtures in this project are intact. Evidence about the candidate's own behaviour comes from the core-scope tests.",
-      "scope": "harness"
+      "description": "The exact candidate contextual validation path accepts the honest headers before, at, and after the enforcement boundary.",
+      "scope": "core"
     },
     {
       "id": "incident-checkpoint-hash",
       "class": "mandatory",
       "kind": "behavioral",
       "requires": [
-        "mainnet-chain-data"
+        "fixtures"
       ],
       "description": "The exact candidate is checked against the canonical deterministic checkpoint fixture; live presence of this checkpoint is a separate runtime gate.",
       "height": 4487775,
@@ -155,7 +155,7 @@
       "class": "mandatory",
       "kind": "behavioral",
       "requires": [
-        "mainnet-chain-data"
+        "candidate-test-binary"
       ],
       "description": "The exact candidate must reject a canonical asset-transfer overflow fixture through consensus validation; deployment ACTIVE on mainnet is a separate runtime gate.",
       "deployment": "transfer_overflow",

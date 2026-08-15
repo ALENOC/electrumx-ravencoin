@@ -81,6 +81,8 @@ class Environment:
                  bin_dir: Optional[pathlib.Path] = None,
                  mainnet_datadir: Optional[pathlib.Path] = None,
                  artifact: Optional[pathlib.Path] = None,
+                 probe: Optional[pathlib.Path] = None,
+                 test_binary: Optional[pathlib.Path] = None,
                  fixtures: Optional[dict] = None,
                  validator: Optional[Callable] = None,
                  rpc_timeout: int = 120):
@@ -89,6 +91,8 @@ class Environment:
         self.bin_dir = bin_dir
         self.mainnet_datadir = mainnet_datadir
         self.artifact = artifact
+        self.probe = probe
+        self.test_binary = test_binary
         self.fixtures = fixtures
         # The header validator under test.  Injectable so the suite can be run
         # against a deliberately broken implementation: a test that cannot fail
@@ -137,10 +141,14 @@ def _start_node(environment: Environment, datadir: pathlib.Path, *extra) -> Opti
     return None
 
 
-def _stop_node(environment: Environment, datadir: pathlib.Path, process) -> None:
+def _stop_node(environment: Environment, datadir: pathlib.Path, process,
+               *, regtest: bool = False) -> None:
     if process is None:
         return
-    network_args = ["-regtest=1"] if (datadir / "regtest").exists() else []
+    # The isolated certification runners may map a host datadir into a
+    # container, so inspecting the host filesystem is not reliable here.
+    # Carry the network selected by the corresponding start explicitly.
+    network_args = ["-regtest=1"] if regtest else []
     _cli(environment, datadir, *network_args, "-rpcuser=certify",
          "-rpcpassword=certify", "stop")
     try:
@@ -246,7 +254,7 @@ def _regtest_smoke(environment: Environment) -> Outcome:
                 return Outcome(TestResult.FAIL, "getblockchaininfo failed on regtest")
             parsed = json.loads(info.stdout)
         finally:
-            _stop_node(environment, datadir, process)
+            _stop_node(environment, datadir, process, regtest=True)
     if parsed.get("chain") != "regtest":
         return Outcome(TestResult.FAIL, "chain is not regtest", {"chain": parsed.get("chain")})
     if parsed.get("blocks") != parsed.get("headers") or parsed.get("blocks", 0) < 1:
@@ -258,6 +266,17 @@ def _regtest_smoke(environment: Environment) -> Outcome:
 
 @test("regtest-asset-consensus", "core")
 def _regtest_assets(environment: Environment) -> Outcome:
+    # Wallet-disabled production builds cannot create assets through RPC.  The
+    # release gate is the candidate's own wallet-independent asset validation
+    # suite; creation/index/RPC behavior remains a live-node gate.
+    suite = _run_candidate_suite(environment, "asset_tx_tests")
+    if suite is not None:
+        if suite.result is TestResult.PASS:
+            return Outcome(TestResult.PASS,
+                           "wallet-independent candidate asset validation suite passed",
+                           {"suite": "asset_tx_tests", "creation": "not used",
+                            "validation": "candidate consensus code"})
+        return suite
     if environment.binary("ravend") is None:
         return Outcome(TestResult.UNAVAILABLE, "candidate binaries were not supplied")
     asset_name = "CERTIFY.PROFILE.V1"
@@ -281,7 +300,7 @@ def _regtest_assets(environment: Environment) -> Outcome:
             if listed.returncode != 0 or asset_name not in listed.stdout:
                 return Outcome(TestResult.FAIL, "the issued asset was not indexed")
         finally:
-            _stop_node(environment, datadir, process)
+            _stop_node(environment, datadir, process, regtest=True)
     return Outcome(TestResult.PASS, "asset consensus issued and indexed an asset",
                    {"asset": asset_name})
 
@@ -314,19 +333,77 @@ def _required_indexes(environment: Environment) -> Outcome:
             if rest.returncode != 0:
                 return Outcome(TestResult.FAIL, "the node stopped answering RPC")
         finally:
-            _stop_node(environment, datadir, process)
+            _stop_node(environment, datadir, process, regtest=True)
     return Outcome(TestResult.PASS,
                    "txindex answered for a confirmed transaction and the node stayed "
                    "responsive with assetindex and rest enabled")
 
 
-@test("core-unit-test-suite", "core")
-def _core_unit_tests(environment: Environment) -> Outcome:
+def _candidate_suite_path(environment: Environment) -> Optional[pathlib.Path]:
+    if environment.test_binary is not None and environment.test_binary.exists():
+        return environment.test_binary
+    if environment.probe is not None and environment.probe.exists():
+        return environment.probe
     if environment.source_dir is None:
-        return Outcome(TestResult.UNAVAILABLE, "no source checkout was supplied")
+        return None
     candidates = (environment.source_dir / "src" / "test" / "test_raven",
                   environment.source_dir / "test" / "test_raven")
-    binary = next((path for path in candidates if path.exists()), None)
+    return next((path for path in candidates if path.exists()), None)
+
+
+def _run_candidate_suite(environment: Environment, suite: str) -> Optional[Outcome]:
+    binary = _candidate_suite_path(environment)
+    if binary is None:
+        return None
+    completed = environment.run(
+        [str(binary), f"--run_test={suite}", "--log_level=test_suite"], timeout=1800)
+    evidence = completed.stdout + "\n" + completed.stderr
+    if f'Entering test suite "{suite}"' not in evidence:
+        return Outcome(TestResult.REVIEW_REQUIRED,
+                       f"candidate suite {suite} was skipped or absent in the candidate build",
+                       {"suite": suite, "tail": evidence[-1200:]})
+    if completed.returncode != 0 and "error while loading shared libraries" in completed.stderr:
+        return Outcome(TestResult.REVIEW_REQUIRED,
+                       "candidate test binary could not run in this host environment",
+                       {"suite": suite, "stderr": completed.stderr[-500:]})
+    if completed.returncode != 0:
+        return Outcome(TestResult.FAIL, f"candidate suite {suite} failed",
+                       {"suite": suite, "tail": evidence[-1200:]})
+    return Outcome(TestResult.PASS, f"candidate suite {suite} passed",
+                   {"suite": suite, "tail": evidence[-1200:]})
+
+
+def _run_candidate_probe(environment: Environment, case: str) -> Optional[Outcome]:
+    """Run a test-only binary linked to the exact candidate Core objects."""
+    if environment.probe is None or not environment.probe.exists():
+        return None
+    completed = environment.run(
+        [str(environment.probe),
+         f"--run_test=certification_candidate_tests/{case}"], timeout=1800)
+    evidence = completed.stdout + "\n" + completed.stderr
+    entered = (f'Entering test case "{case}"' in evidence or
+               ("Running 1 test case" in evidence and
+                "No errors detected" in evidence))
+    if completed.returncode == 0 and entered:
+        return Outcome(TestResult.PASS,
+                       f"exact candidate probe case {case} passed",
+                       {"case": case, "candidateProbe": str(environment.probe),
+                        "tail": evidence[-1200:]})
+    if not entered:
+        return Outcome(TestResult.REVIEW_REQUIRED,
+                       f"candidate probe case {case} was unavailable or skipped",
+                       {"case": case, "tail": evidence[-1200:]})
+    return Outcome(TestResult.FAIL,
+                   f"exact candidate probe case {case} failed",
+                   {"case": case, "tail": evidence[-1200:]})
+
+
+@test("core-unit-test-suite", "core")
+def _core_unit_tests(environment: Environment) -> Outcome:
+    if (environment.source_dir is None and environment.test_binary is None
+            and environment.probe is None):
+        return Outcome(TestResult.UNAVAILABLE, "no source checkout was supplied")
+    binary = _candidate_suite_path(environment)
     if binary is None:
         return Outcome(TestResult.UNAVAILABLE,
                        "the candidate's own test binary was not built, so its "
@@ -337,27 +414,11 @@ def _core_unit_tests(environment: Environment) -> Outcome:
     suites = ("pow_tests", "kawpow_tests", "asset_tx_tests", "asset_tests")
     passed = []
     for suite in suites:
-        completed = environment.run([str(binary), f"--run_test={suite}"], timeout=1800)
-        evidence = completed.stdout + "\n" + completed.stderr
-        if f'Test suite "{suite}" is skipped' in evidence:
-            return Outcome(TestResult.REVIEW_REQUIRED,
-                           f"candidate suite {suite} was skipped by the candidate build",
-                           {"suite": suite, "tail": evidence[-1200:]})
-        if completed.returncode != 0 and "error while loading shared libraries" in completed.stderr:
-            return Outcome(TestResult.REVIEW_REQUIRED,
-                           "candidate test binary could not run in this host environment",
-                           {"suite": suite, "stderr": completed.stderr[-500:]})
-        if completed.returncode != 0:
-            evidence = evidence[-1200:]
-            # A wallet-disabled build legitimately omits wallet-only asset
-            # fixtures.  It remains REVIEW_REQUIRED until canonical
-            # wallet-independent fixtures are supplied; it is not unsafe.
-            if "skipped" in evidence.lower() and suite.startswith("asset"):
-                return Outcome(TestResult.REVIEW_REQUIRED,
-                               f"candidate suite {suite} was skipped in the wallet-disabled build",
-                               {"suite": suite, "tail": evidence})
-            return Outcome(TestResult.FAIL, f"candidate suite {suite} failed",
-                           {"suite": suite, "tail": evidence})
+        outcome = _run_candidate_suite(environment, suite)
+        if outcome is None:
+            return Outcome(TestResult.UNAVAILABLE, "candidate test binary disappeared")
+        if outcome.result is not TestResult.PASS:
+            return outcome
         passed.append(suite)
     return Outcome(TestResult.PASS, "candidate consensus suites passed",
                    {"suites": passed})
@@ -389,8 +450,11 @@ def _header_shape(environment: Environment) -> Outcome:
                    {"vectors": len(fixtures["validHeaders"])})
 
 
-@test("nheight-binding-rejects-forged", "harness")
+@test("nheight-binding-rejects-forged", "core")
 def _forged_rejected(environment: Environment) -> Outcome:
+    probe = _run_candidate_probe(environment, "certification_candidate_contextual_height_test")
+    if probe is not None:
+        return probe
     fixtures = _load_fixtures(environment)
     if not fixtures:
         return Outcome(TestResult.UNAVAILABLE, "fixtures were not supplied")
@@ -425,8 +489,11 @@ def _forged_rejected(environment: Environment) -> Outcome:
                     "preFixModel": "covered by deterministic harness regression test"})
 
 
-@test("post-boundary-valid-accepted", "harness")
+@test("post-boundary-valid-accepted", "core")
 def _valid_accepted(environment: Environment) -> Outcome:
+    probe = _run_candidate_probe(environment, "certification_candidate_contextual_height_test")
+    if probe is not None:
+        return probe
     fixtures = _load_fixtures(environment)
     if not fixtures:
         return Outcome(TestResult.UNAVAILABLE, "fixtures were not supplied")
@@ -462,6 +529,9 @@ def _valid_accepted(environment: Environment) -> Outcome:
 # ------------------------------------------------------- tests needing the chain
 @test("incident-checkpoint-hash", "core")
 def _checkpoint(environment: Environment) -> Outcome:
+    probe = _run_candidate_probe(environment, "certification_candidate_checkpoint_data_test")
+    if probe is not None:
+        return probe
     fixtures = _load_fixtures(environment)
     if not fixtures:
         return Outcome(TestResult.REVIEW_REQUIRED,
@@ -483,6 +553,9 @@ def _checkpoint(environment: Environment) -> Outcome:
 
 @test("transfer-overflow-deployment", "core")
 def _transfer_overflow(environment: Environment) -> Outcome:
+    probe = _run_candidate_probe(environment, "certification_candidate_transfer_overflow_test")
+    if probe is not None:
+        return probe
     return Outcome(TestResult.REVIEW_REQUIRED,
                    "candidate-local behavioral overflow fixture is not yet available; "
                    "deployment presence alone is insufficient evidence",
@@ -586,6 +659,10 @@ def main(argv=None) -> int:
     parser.add_argument("--bin-dir", default=None)
     parser.add_argument("--mainnet-datadir", default=None)
     parser.add_argument("--artifact", default=None)
+    parser.add_argument("--candidate-probe", default=None,
+                        help="test-only binary linked to exact candidate validation objects")
+    parser.add_argument("--candidate-test-binary", default=None,
+                        help="candidate's normal test_raven binary")
     parser.add_argument("--report", required=True)
     arguments = parser.parse_args(argv)
 
@@ -603,6 +680,9 @@ def main(argv=None) -> int:
         mainnet_datadir=(pathlib.Path(arguments.mainnet_datadir)
                          if arguments.mainnet_datadir else None),
         artifact=pathlib.Path(arguments.artifact) if arguments.artifact else None,
+        probe=pathlib.Path(arguments.candidate_probe) if arguments.candidate_probe else None,
+        test_binary=(pathlib.Path(arguments.candidate_test_binary)
+                     if arguments.candidate_test_binary else None),
         fixtures=fixtures,
     )
     report = certify(candidate, profile, environment)
