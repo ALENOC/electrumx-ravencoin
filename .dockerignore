@@ -1,0 +1,14 @@
+.git
+.env
+**/*.env
+**/*.key
+**/*.pem
+**/*.p12
+**/*.pfx
+AGENT_ROADMAP.md
+build/
+dist/
+docs/_build/
+tls/
+**/__pycache__/
+**/.pytest_cache/

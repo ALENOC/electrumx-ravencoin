@@ -54,15 +54,22 @@ default and must not be used for production.
 Container and service templates
 ===============================
 
-Build the multi-architecture-compatible source image from the repository root:
+For a deployment-ready Linux host, follow the `Docker Compose deployment guide
+<docs/DOCKER_COMPOSE.md>`_.  The supplied ``compose.yaml`` builds the
+multi-architecture-compatible source image, persists the index in a named volume,
+mounts operator-managed TLS read-only, runs non-root without Linux capabilities,
+checks the local management RPC, and leaves Core RPC on loopback.  A complete start
+is then:
 
 ::
 
-   docker build -f contrib/Dockerfile -t electrumx-rvn:dev .
+   docker compose config --quiet
+   docker compose up -d --build
 
-The image runs as a non-root user and does not generate TLS keys.  Mount a
-persistent database and operator-managed CA-valid certificate/key when enabling
-public TLS.  A hardened systemd example is under ``contrib/systemd``.
+Copy the tracked ``.env.example`` and ``contrib/electrumx.env.example`` first;
+the real files are Git-ignored and excluded from the Docker build context.  The
+image does not generate TLS keys.  A hardened systemd example remains under
+``contrib/systemd``.
 
 Operations and migration
 ========================
