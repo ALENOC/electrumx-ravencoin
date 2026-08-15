@@ -1,0 +1,21 @@
+{
+  "note": "Voluntary registry. Adding an entry here is a discovery hint and a statement of who runs what. It grants no trust: the monitor validates the endpoint exactly as it validates one it found through gossip. Operator groups exist so several endpoints run by one organisation count as one independent operator, which is what matters for consensus diversity.",
+  "howToRegister": "Open a pull request adding your hostname, TLS port, operator name and operatorGroup. No private contact details are wanted or stored.",
+  "operators": [
+    {
+      "operatorGroup": "CIPIG",
+      "operator": "cipig",
+      "endpoints": [
+        {"hostname": "electrum1.cipig.net", "sslPort": 50002},
+        {"hostname": "electrum2.cipig.net", "sslPort": 50002},
+        {"hostname": "electrum3.cipig.net", "sslPort": 50002}
+      ]
+    },
+    {
+      "operatorGroup": "ALENOC",
+      "operator": "ALENOC",
+      "note": "Maintainer infrastructure. Several ALENOC endpoints are still one independent operator and are counted once.",
+      "endpoints": []
+    }
+  ]
+}

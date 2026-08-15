@@ -1065,6 +1065,162 @@ Nothing here claims a tested public endpoint. Port forwarding and ISP behaviour
 are specific to your network, and no external Internet test has been performed
 from this repository.
 
+Finding the other public servers
+================================
+
+A wallet is only as resilient as the set of servers it can choose from, and
+today that set is small and mostly hand-maintained. ``monitor/`` discovers,
+probes and classifies public Ravencoin Electrum endpoints so the ecosystem can
+see what actually exists rather than guessing.
+
+**Discovery is not trust.** Everything below produces *candidates*. A candidate
+becomes usable only after it has been validated, and the last step of validation
+is always chain comparison, never a server's own claim about itself.
+
+Three discovery sources feed the same pipeline:
+
+* **bootstrap seeds**, a small built-in list in ``monitor/config/seeds.json``.
+  Being listed says nothing about safety;
+* **Electrum peer gossip**, through ``server.peers.subscribe``. Servers tell each
+  other who else exists, which is how the crawl finds endpoints nobody wrote
+  down;
+* **a voluntary registry**, ``monitor/config/operator-registry.json``, where an
+  operator can name their own node.
+
+::
+
+   seeds + registry
+          |
+          v
+     probe endpoint  <----------------+
+          |                           |
+          +--> server.peers.subscribe |
+          |         new candidates ---+
+          v
+     health and TLS
+          |
+          v
+   backend capability
+          |
+          v
+   certified-release policy
+          |
+          v
+    chain comparison
+          |
+          v
+   classification
+
+Being announced by another server is provenance, not endorsement. The monitor
+records which endpoint announced which so an isolated cluster or a sybil-shaped
+graph is visible, and it never treats a peer edge as a trust edge.
+
+Two states, not one
+-------------------
+
+Availability and safety are tracked separately, because "twelve servers are up,
+four of them are usable" is the truth and a single number is not.
+
+Availability moves ``DISCOVERED``, ``REACHABLE``, ``DEGRADED``, ``OFFLINE``,
+``STALE`` with hysteresis: one timeout is not death, and one good answer after an
+outage is recovery rather than health. Polling adapts, from ten minutes for a
+healthy safe endpoint out to daily for one that has been gone for days, with
+jitter so a restart does not fire every probe at the same second.
+
+Safety is categorical: ``UNKNOWN``, ``UNVERIFIED``, ``BACKEND_MISSING``,
+``UNREVIEWED_CORE``, ``UNSAFE``, ``CONFLICT``, ``SAFE``. A health score may order
+two safe servers by latency or uptime; it can never promote an unsafe one, and it
+is never mixed into the safety decision.
+
+Legacy servers are tracked, not hidden. A server without
+``server.ravencoin_backend`` shows up as reachable and ``BACKEND_MISSING``, which
+is exactly the information needed to see how much of the ecosystem still has to
+upgrade.
+
+Why several endpoints can be one operator
+-----------------------------------------
+
+**This is the part that matters most.** ``electrum1.cipig.net`` and
+``electrum2.cipig.net`` are two endpoints and one operator. If one organisation
+runs six servers, that is still one entity deciding what those six say.
+
+Every endpoint therefore carries an ``operatorGroup``, and diversity is counted
+in groups, never in endpoints. A chain disagreement between two groups is a
+conflict even when one of them has more endpoints, and it is reported rather than
+resolved by counting. Endpoints whose operator is unknown are each treated as
+their own group: lumping strangers together would invent a shared identity, and
+splitting one operator apart would invent diversity.
+
+Group assignment comes from the reviewed registry. A heuristic may *suggest* a
+group from a shared domain, but nothing merges automatically, because an attacker
+who could split their endpoints into apparently unrelated groups would
+manufacture exactly the diversity this is meant to measure.
+
+Crawling somebody else's network, politely and safely
+-----------------------------------------------------
+
+A monitor that follows hostnames handed to it by strangers is a crawler, so it is
+built like one:
+
+* hostnames from peer records are validated, and the IP a peer reports about
+  itself is ignored in favour of resolving the hostname here;
+* every resolved address is classified, and **loopback, private, link-local,
+  unique-local, reserved, multicast and cloud metadata addresses are never
+  connected to**. A hostname that resolves to a mix is refused rather than
+  probed on the public half;
+* documentation ranges are refused too, since nothing real listens there;
+* bounded everything: crawl depth, new candidates per crawl, peers accepted per
+  response, concurrent probes, probes per host per hour, response size, and DNS,
+  TCP, TLS and RPC timeouts;
+* the normal probe is cheap, identity plus features plus tip plus backend
+  evidence. Expensive history queries belong to occasional deep validation, not
+  to a five-minute health check;
+* it identifies itself honestly as ``Ravencoin-Electrum-Monitor`` and never
+  imitates a wallet.
+
+Running it
+----------
+
+.. code-block:: sh
+
+   python -m monitor.cli status
+   python -m monitor.cli discover-now --policy safe-core-policy.json
+   python -m monitor.cli publish --directory-version 3
+
+The monitor is ecosystem infrastructure, not part of a normal node. It is not
+started by the default Compose stack, and if it crashes, Core and ElectrumX carry
+on: nothing in the node depends on it.
+
+The published directory
+-----------------------
+
+``publish`` renders the current classification into a compact snapshot with a
+monotonic version and an expiry, which is then signed. A wallet can use it to
+decide where to try first.
+
+**It is a discovery hint and nothing more.** The signature stops a snapshot from
+being forged or replayed in transit; it does not turn one party's past opinion
+into present proof. A wallet that reads the directory still runs every check
+itself, and a client that trusted the label would be trusting whoever signed it
+instead of the chain.
+
+Registering your node
+---------------------
+
+Open a pull request adding your hostname, TLS port, operator name and
+``operatorGroup`` to ``monitor/config/operator-registry.json``. That is the whole
+process. No contact details are wanted, and being listed grants nothing: the
+monitor validates a registered endpoint exactly as it validates one it stumbled
+across through gossip.
+
+What is watched, and what is not
+--------------------------------
+
+The monitor observes **public server infrastructure**: hostnames, ports,
+reachability, TLS certificates, reported versions, chain tips. It does not
+collect wallet addresses, client IP addresses, or transaction identities beyond
+the protocol calls needed to check that a server answers correctly.
+
 Existing Core mode
 ==================
 
