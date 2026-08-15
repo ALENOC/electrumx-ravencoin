@@ -8,7 +8,7 @@ source_archive_sha256=${4:?source archive digest is required}
 container="core-qualification-${architecture}-${RANDOM}"
 manifest="core-artifact-qualification-${architecture}.json"
 rpc_port=18443
-datadir=/tmp/ravencoin-qualification
+datadir=/var/lib/ravencoin
 
 cleanup() {
     if docker container inspect "$container" >/dev/null 2>&1; then
