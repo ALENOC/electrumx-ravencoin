@@ -1,0 +1,297 @@
+# Copyright (c) 2026, the ElectrumX-RVN community maintainers
+#
+# The MIT License (MIT).  See LICENCE for details.
+
+"""SQLite persistence for the Electrum monitor.
+
+Deliberately small: a few hundred endpoints, one file, no server to run.  The
+schema is versioned and migrations only ever add, so an existing database is
+never rewritten in place by an upgrade.
+
+Retention is bounded because a crawler left running for a year will otherwise
+accumulate observations forever.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import time
+from typing import Iterable, List, Optional
+
+from .model import (
+    Availability, DiscoverySource, EndpointId, EndpointState, ProbeResult, Security,
+    Transport,
+)
+
+SCHEMA_VERSION = 1
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
+
+CREATE TABLE IF NOT EXISTS endpoints (
+    id INTEGER PRIMARY KEY,
+    hostname TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    transport TEXT NOT NULL,
+    availability TEXT NOT NULL,
+    security TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    operator TEXT,
+    operator_group TEXT,
+    sources TEXT NOT NULL DEFAULT '[]',
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    consecutive_successes INTEGER NOT NULL DEFAULT 0,
+    first_seen INTEGER,
+    last_seen INTEGER,
+    last_probe INTEGER,
+    last_success INTEGER,
+    UNIQUE (hostname, port, transport)
+);
+
+CREATE TABLE IF NOT EXISTS observations (
+    id INTEGER PRIMARY KEY,
+    endpoint_id INTEGER NOT NULL REFERENCES endpoints(id) ON DELETE CASCADE,
+    observed_at INTEGER NOT NULL,
+    reachable INTEGER NOT NULL,
+    error_category TEXT,
+    server_version TEXT,
+    height INTEGER,
+    tip_hash TEXT,
+    rpc_latency_ms REAL,
+    backend_json TEXT
+);
+CREATE INDEX IF NOT EXISTS observations_endpoint_time
+    ON observations (endpoint_id, observed_at);
+
+CREATE TABLE IF NOT EXISTS addresses (
+    endpoint_id INTEGER NOT NULL REFERENCES endpoints(id) ON DELETE CASCADE,
+    family TEXT NOT NULL,
+    address TEXT NOT NULL,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    PRIMARY KEY (endpoint_id, family, address)
+);
+
+CREATE TABLE IF NOT EXISTS certificates (
+    endpoint_id INTEGER NOT NULL REFERENCES endpoints(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    issuer TEXT,
+    not_after TEXT,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    PRIMARY KEY (endpoint_id, fingerprint)
+);
+
+CREATE TABLE IF NOT EXISTS peer_edges (
+    source_id INTEGER NOT NULL REFERENCES endpoints(id) ON DELETE CASCADE,
+    target_id INTEGER NOT NULL REFERENCES endpoints(id) ON DELETE CASCADE,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    announcements INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (source_id, target_id)
+);
+
+CREATE TABLE IF NOT EXISTS classification_history (
+    id INTEGER PRIMARY KEY,
+    endpoint_id INTEGER NOT NULL REFERENCES endpoints(id) ON DELETE CASCADE,
+    changed_at INTEGER NOT NULL,
+    availability TEXT NOT NULL,
+    security TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT ''
+);
+"""
+
+
+class Store:
+    """Thin persistence layer.  No business logic lives here."""
+
+    def __init__(self, path: str = "monitor.sqlite3"):
+        self.path = path
+        self.connection = sqlite3.connect(path)
+        self.connection.row_factory = sqlite3.Row
+        self.connection.execute("PRAGMA foreign_keys = ON")
+        self.connection.execute("PRAGMA journal_mode = WAL")
+        self._migrate()
+
+    def close(self) -> None:
+        self.connection.close()
+
+    def _migrate(self) -> None:
+        with self.connection:
+            self.connection.executescript(SCHEMA)
+            row = self.connection.execute(
+                "SELECT version FROM schema_version").fetchone()
+            if row is None:
+                self.connection.execute(
+                    "INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+            elif row["version"] > SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"database schema {row['version']} is newer than this code "
+                    f"understands ({SCHEMA_VERSION}); refusing to touch it")
+
+    # ---------------------------------------------------------------- endpoints
+    def upsert_endpoint(self, endpoint: EndpointId, *,
+                        source: DiscoverySource = DiscoverySource.MANUAL,
+                        operator: Optional[str] = None,
+                        operator_group: Optional[str] = None,
+                        now: Optional[int] = None) -> int:
+        now = int(now if now is not None else time.time())
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT id, sources, operator, operator_group FROM endpoints "
+                "WHERE hostname=? AND port=? AND transport=?",
+                (endpoint.hostname, endpoint.port, endpoint.transport.value)).fetchone()
+            if row is None:
+                cursor = self.connection.execute(
+                    "INSERT INTO endpoints (hostname, port, transport, availability, "
+                    "security, sources, first_seen, last_seen, operator, operator_group)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (endpoint.hostname, endpoint.port, endpoint.transport.value,
+                     Availability.DISCOVERED.value, Security.UNKNOWN.value,
+                     json.dumps([source.value]), now, now, operator, operator_group))
+                return int(cursor.lastrowid)
+            sources = set(json.loads(row["sources"]))
+            sources.add(source.value)
+            self.connection.execute(
+                "UPDATE endpoints SET sources=?, last_seen=?, operator=COALESCE(?, "
+                "operator), operator_group=COALESCE(?, operator_group) WHERE id=?",
+                (json.dumps(sorted(sources)), now, operator, operator_group, row["id"]))
+            return int(row["id"])
+
+    def endpoint_id(self, endpoint: EndpointId) -> Optional[int]:
+        row = self.connection.execute(
+            "SELECT id FROM endpoints WHERE hostname=? AND port=? AND transport=?",
+            (endpoint.hostname, endpoint.port, endpoint.transport.value)).fetchone()
+        return int(row["id"]) if row else None
+
+    def load_state(self, endpoint: EndpointId) -> Optional[EndpointState]:
+        row = self.connection.execute(
+            "SELECT * FROM endpoints WHERE hostname=? AND port=? AND transport=?",
+            (endpoint.hostname, endpoint.port, endpoint.transport.value)).fetchone()
+        return self._row_to_state(row) if row else None
+
+    def all_states(self) -> List[EndpointState]:
+        rows = self.connection.execute(
+            "SELECT * FROM endpoints ORDER BY hostname, port").fetchall()
+        return [self._row_to_state(row) for row in rows]
+
+    @staticmethod
+    def _row_to_state(row: sqlite3.Row) -> EndpointState:
+        endpoint = EndpointId(row["hostname"], int(row["port"]),
+                              Transport(row["transport"]))
+        return EndpointState(
+            endpoint=endpoint,
+            availability=Availability(row["availability"]),
+            security=Security(row["security"]),
+            reason=row["reason"] or "",
+            operator=row["operator"],
+            operator_group=row["operator_group"],
+            sources={DiscoverySource(value) for value in json.loads(row["sources"])},
+            consecutive_failures=int(row["consecutive_failures"]),
+            consecutive_successes=int(row["consecutive_successes"]),
+            first_seen=row["first_seen"],
+            last_seen=row["last_seen"],
+            last_probe=row["last_probe"],
+            last_success=row["last_success"],
+        )
+
+    def save_state(self, state: EndpointState, *, now: Optional[int] = None) -> None:
+        now = int(now if now is not None else time.time())
+        endpoint_id = self.endpoint_id(state.endpoint)
+        if endpoint_id is None:
+            endpoint_id = self.upsert_endpoint(state.endpoint, now=now)
+        previous = self.connection.execute(
+            "SELECT availability, security, reason FROM endpoints WHERE id=?",
+            (endpoint_id,)).fetchone()
+        with self.connection:
+            self.connection.execute(
+                "UPDATE endpoints SET availability=?, security=?, reason=?, "
+                "operator=?, operator_group=?, consecutive_failures=?, "
+                "consecutive_successes=?, last_seen=?, last_probe=?, last_success=? "
+                "WHERE id=?",
+                (state.availability.value, state.security.value, state.reason,
+                 state.operator, state.operator_group, state.consecutive_failures,
+                 state.consecutive_successes, state.last_seen or now,
+                 state.last_probe, state.last_success, endpoint_id))
+            changed = (previous is None
+                       or previous["availability"] != state.availability.value
+                       or previous["security"] != state.security.value)
+            if changed:
+                self.connection.execute(
+                    "INSERT INTO classification_history (endpoint_id, changed_at, "
+                    "availability, security, reason) VALUES (?,?,?,?,?)",
+                    (endpoint_id, now, state.availability.value,
+                     state.security.value, state.reason))
+
+    # ------------------------------------------------------------- observations
+    def record_probe(self, result: ProbeResult, *, now: Optional[int] = None) -> None:
+        now = int(now if now is not None else time.time())
+        endpoint_id = self.endpoint_id(result.endpoint)
+        if endpoint_id is None:
+            endpoint_id = self.upsert_endpoint(result.endpoint, now=now)
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO observations (endpoint_id, observed_at, reachable, "
+                "error_category, server_version, height, tip_hash, rpc_latency_ms, "
+                "backend_json) VALUES (?,?,?,?,?,?,?,?,?)",
+                (endpoint_id, now, 1 if result.reachable else 0,
+                 result.error_category, result.server_version, result.height,
+                 result.tip_hash, result.rpc_latency_ms,
+                 json.dumps(result.backend) if result.backend else None))
+            for family, addresses in (("ipv4", result.resolved_ipv4),
+                                      ("ipv6", result.resolved_ipv6)):
+                for address in addresses:
+                    self.connection.execute(
+                        "INSERT INTO addresses (endpoint_id, family, address, "
+                        "first_seen, last_seen) VALUES (?,?,?,?,?) "
+                        "ON CONFLICT(endpoint_id, family, address) "
+                        "DO UPDATE SET last_seen=excluded.last_seen",
+                        (endpoint_id, family, address, now, now))
+            if result.tls_fingerprint:
+                self.connection.execute(
+                    "INSERT INTO certificates (endpoint_id, fingerprint, issuer, "
+                    "not_after, first_seen, last_seen) VALUES (?,?,?,?,?,?) "
+                    "ON CONFLICT(endpoint_id, fingerprint) "
+                    "DO UPDATE SET last_seen=excluded.last_seen",
+                    (endpoint_id, result.tls_fingerprint, result.tls_issuer,
+                     result.tls_not_after, now, now))
+
+    def record_peer_edge(self, source: EndpointId, target: EndpointId,
+                         *, now: Optional[int] = None) -> None:
+        """Remember who announced whom.  A peer edge is provenance, not trust."""
+        now = int(now if now is not None else time.time())
+        source_id = self.upsert_endpoint(source, now=now)
+        target_id = self.upsert_endpoint(target, source=DiscoverySource.GOSSIP, now=now)
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO peer_edges (source_id, target_id, first_seen, last_seen) "
+                "VALUES (?,?,?,?) ON CONFLICT(source_id, target_id) DO UPDATE SET "
+                "last_seen=excluded.last_seen, announcements=announcements+1",
+                (source_id, target_id, now, now))
+
+    def addresses_for(self, endpoint: EndpointId) -> List[sqlite3.Row]:
+        endpoint_id = self.endpoint_id(endpoint)
+        if endpoint_id is None:
+            return []
+        return self.connection.execute(
+            "SELECT family, address, first_seen, last_seen FROM addresses "
+            "WHERE endpoint_id=? ORDER BY family, address", (endpoint_id,)).fetchall()
+
+    def peer_edges(self) -> List[sqlite3.Row]:
+        return self.connection.execute(
+            "SELECT s.hostname AS source_host, s.port AS source_port, "
+            "t.hostname AS target_host, t.port AS target_port, e.announcements "
+            "FROM peer_edges e JOIN endpoints s ON s.id=e.source_id "
+            "JOIN endpoints t ON t.id=e.target_id").fetchall()
+
+    # ---------------------------------------------------------------- retention
+    def prune(self, *, keep_observation_days: int = 7,
+              now: Optional[int] = None) -> int:
+        """Drop raw observations older than the retention window."""
+        now = int(now if now is not None else time.time())
+        cutoff = now - keep_observation_days * 86400
+        with self.connection:
+            cursor = self.connection.execute(
+                "DELETE FROM observations WHERE observed_at < ?", (cutoff,))
+        return cursor.rowcount
