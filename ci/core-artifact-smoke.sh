@@ -53,7 +53,7 @@ done
 cli generatetoaddress 101 mfe7MqgYZgBuXzrT2QTFqZwBXwRDqagHTp >/dev/null
 block_hash=$(cli getblockhash 1)
 block_json=$(cli getblock "$block_hash" 2)
-txid=$(printf '%s' "$block_json" | python3 -c 'import json, sys; print(json.load(sys.stdin)["tx"][0])')
+txid=$(printf '%s' "$block_json" | python3 -c 'import json, sys; print(json.load(sys.stdin)["tx"][0]["txid"])')
 cli getrawtransaction "$txid" >/dev/null
 curl --fail --silent --show-error --max-time 15 \
     "http://127.0.0.1:${rpc_port}/rest/block/${block_hash}.bin" \
