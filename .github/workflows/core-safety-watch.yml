@@ -152,7 +152,13 @@ jobs:
           python -m pip install pytest==8.3.5
 
       - name: Run the harness self-test
-        run: python -m pytest tests/test_core_safety.py tests/test_core_safety_policy.py -q
+        run: |
+          set -euo pipefail
+          # Initialize the package once before importing a submodule.  The
+          # upstream package exposes controller/env from __init__, and direct
+          # first import of coins can otherwise look circular in a fresh job.
+          python -c 'import electrumx'
+          python -m pytest tests/test_core_safety.py tests/test_core_safety_policy.py -q
 
       - name: Certify each candidate
         env:
