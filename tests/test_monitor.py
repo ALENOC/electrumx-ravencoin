@@ -470,6 +470,20 @@ def test_store_tracks_address_changes_for_a_dynamic_host(tmp_path):
     store.close()
 
 
+def test_store_keeps_observations_separate_by_vantage_point(tmp_path):
+    store = Store(str(tmp_path / "monitor.sqlite3"))
+    target = endpoint()
+    store.upsert_endpoint(target, now=100)
+    store.record_probe(ProbeResult(endpoint=target, reachable=False,
+                                   vantage_point="probe-a"), now=100)
+    store.record_probe(ProbeResult(endpoint=target, reachable=False,
+                                   vantage_point="probe-b"), now=101)
+    rows = store.connection.execute(
+        "SELECT vantage_point FROM observations ORDER BY observed_at").fetchall()
+    assert [row["vantage_point"] for row in rows] == ["probe-a", "probe-b"]
+    store.close()
+
+
 def test_store_records_peer_edges_as_provenance(tmp_path):
     store = Store(str(tmp_path / "monitor.sqlite3"))
     store.record_peer_edge(endpoint("a.example.org"), endpoint("b.example.org"),

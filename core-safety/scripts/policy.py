@@ -34,6 +34,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 SCHEMA_VERSION = 1
 SIGNATURE_ALGORITHM = "ed25519"
+SIGNATURE_DOMAIN = b"ALENOC-RVN-CORE-POLICY-v1\x00"
 VALID_RELEASE_STATUSES = ("KNOWN_SAFE", "KNOWN_UNSAFE", "REVOKED")
 
 
@@ -43,8 +44,9 @@ class PolicyError(ValueError):
 
 def canonical_bytes(document: dict) -> bytes:
     """Serialize deterministically so a signature is over one exact byte string."""
-    return json.dumps(document, sort_keys=True, separators=(",", ":"),
-                      ensure_ascii=True).encode("utf-8")
+    return SIGNATURE_DOMAIN + json.dumps(
+        document, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=True).encode("utf-8")
 
 
 def policy_digest(document: dict) -> str:

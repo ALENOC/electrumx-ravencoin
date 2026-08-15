@@ -49,6 +49,7 @@ CHECKPOINT_HASH = "000000000002d64509e06e76ddbbe418c725291687ec62b41ecfc40386a09
 ENFORCEMENT_HEIGHT = 4_487_776
 DECLARED_HEIGHT_OFFSET = 76
 KAWPOW_HEADER_SIZE = 120
+REGTEST_MINING_ADDRESS = "mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn"
 
 REGISTRY: dict = {}
 
@@ -122,10 +123,11 @@ def _start_node(environment: Environment, datadir: pathlib.Path, *extra) -> Opti
          "-server=1", "-rpcuser=certify", "-rpcpassword=certify", "-printtoconsole=0",
          *extra],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    network_args = ["-regtest=1"] if "-regtest=1" in extra else []
     deadline = time.time() + environment.rpc_timeout
     while time.time() < deadline:
-        completed = _cli(environment, datadir, "-rpcuser=certify", "-rpcpassword=certify",
-                         "getblockchaininfo")
+        completed = _cli(environment, datadir, *network_args, "-rpcuser=certify",
+                         "-rpcpassword=certify", "getblockchaininfo")
         if completed.returncode == 0:
             return process
         if process.poll() is not None:
@@ -138,7 +140,9 @@ def _start_node(environment: Environment, datadir: pathlib.Path, *extra) -> Opti
 def _stop_node(environment: Environment, datadir: pathlib.Path, process) -> None:
     if process is None:
         return
-    _cli(environment, datadir, "-rpcuser=certify", "-rpcpassword=certify", "stop")
+    network_args = ["-regtest=1"] if (datadir / "regtest").exists() else []
+    _cli(environment, datadir, *network_args, "-rpcuser=certify",
+         "-rpcpassword=certify", "stop")
     try:
         process.wait(timeout=180)
     except subprocess.TimeoutExpired:
@@ -235,7 +239,8 @@ def _regtest_smoke(environment: Environment) -> Outcome:
             return Outcome(TestResult.FAIL, "the candidate did not start on regtest")
         try:
             common = ["-regtest=1", "-rpcuser=certify", "-rpcpassword=certify"]
-            _cli(environment, datadir, *common, "generate", "10")
+            _cli(environment, datadir, *common, "generatetoaddress", "10",
+                 REGTEST_MINING_ADDRESS)
             info = _cli(environment, datadir, *common, "getblockchaininfo")
             if info.returncode != 0:
                 return Outcome(TestResult.FAIL, "getblockchaininfo failed on regtest")
@@ -264,12 +269,14 @@ def _regtest_assets(environment: Environment) -> Outcome:
             return Outcome(TestResult.FAIL, "the candidate did not start on regtest")
         try:
             common = ["-regtest=1", "-rpcuser=certify", "-rpcpassword=certify"]
-            _cli(environment, datadir, *common, "generate", "500")
+            _cli(environment, datadir, *common, "generatetoaddress", "500",
+                 REGTEST_MINING_ADDRESS)
             issued = _cli(environment, datadir, *common, "issue", asset_name, "1000")
             if issued.returncode != 0:
                 return Outcome(TestResult.FAIL, "asset issuance was rejected",
                                {"stderr": issued.stderr.strip()[:200]})
-            _cli(environment, datadir, *common, "generate", "1")
+            _cli(environment, datadir, *common, "generatetoaddress", "1",
+                 REGTEST_MINING_ADDRESS)
             listed = _cli(environment, datadir, *common, "listassets", asset_name, "true")
             if listed.returncode != 0 or asset_name not in listed.stdout:
                 return Outcome(TestResult.FAIL, "the issued asset was not indexed")
@@ -291,7 +298,8 @@ def _required_indexes(environment: Environment) -> Outcome:
             return Outcome(TestResult.FAIL, "the candidate did not start on regtest")
         try:
             common = ["-regtest=1", "-rpcuser=certify", "-rpcpassword=certify"]
-            _cli(environment, datadir, *common, "generate", "2")
+            _cli(environment, datadir, *common, "generatetoaddress", "2",
+                 REGTEST_MINING_ADDRESS)
             block_hash = _cli(environment, datadir, *common, "getblockhash", "1").stdout.strip()
             block = _cli(environment, datadir, *common, "getblock", block_hash)
             if block.returncode != 0:

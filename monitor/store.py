@@ -24,7 +24,7 @@ from .model import (
     Transport,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS observations (
     tip_hash TEXT,
     rpc_latency_ms REAL,
     backend_json TEXT
+    ,vantage_point TEXT NOT NULL DEFAULT 'local'
 );
 CREATE INDEX IF NOT EXISTS observations_endpoint_time
     ON observations (endpoint_id, observed_at);
@@ -129,6 +130,12 @@ class Store:
                 raise RuntimeError(
                     f"database schema {row['version']} is newer than this code "
                     f"understands ({SCHEMA_VERSION}); refusing to touch it")
+            elif row["version"] < 2:
+                self.connection.execute(
+                    "ALTER TABLE observations ADD COLUMN vantage_point TEXT "
+                    "NOT NULL DEFAULT 'local'")
+                self.connection.execute(
+                    "UPDATE schema_version SET version=?", (SCHEMA_VERSION,))
 
     # ---------------------------------------------------------------- endpoints
     def upsert_endpoint(self, endpoint: EndpointId, *,
@@ -234,11 +241,12 @@ class Store:
             self.connection.execute(
                 "INSERT INTO observations (endpoint_id, observed_at, reachable, "
                 "error_category, server_version, height, tip_hash, rpc_latency_ms, "
-                "backend_json) VALUES (?,?,?,?,?,?,?,?,?)",
+                "backend_json, vantage_point) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (endpoint_id, now, 1 if result.reachable else 0,
                  result.error_category, result.server_version, result.height,
                  result.tip_hash, result.rpc_latency_ms,
-                 json.dumps(result.backend) if result.backend else None))
+                 json.dumps(result.backend) if result.backend else None,
+                 result.vantage_point))
             for family, addresses in (("ipv4", result.resolved_ipv4),
                                       ("ipv6", result.resolved_ipv6)):
                 for address in addresses:

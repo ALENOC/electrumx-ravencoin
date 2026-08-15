@@ -24,6 +24,7 @@ from typing import Dict, Iterable, Mapping, Optional
 from .model import Availability, Security
 
 SCHEMA_VERSION = 1
+SIGNATURE_DOMAIN = b"ALENOC-RVN-ELECTRUM-DIRECTORY-v1\x00"
 
 
 class DirectoryError(ValueError):
@@ -31,8 +32,9 @@ class DirectoryError(ValueError):
 
 
 def canonical_bytes(body: Mapping) -> bytes:
-    return json.dumps(body, sort_keys=True, separators=(",", ":"),
-                      ensure_ascii=True).encode("utf-8")
+    return SIGNATURE_DOMAIN + json.dumps(
+        body, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=True).encode("utf-8")
 
 
 def build_directory(states: Iterable, *, directory_version: int,

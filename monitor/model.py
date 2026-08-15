@@ -167,6 +167,7 @@ class ProbeResult:
 
     endpoint: EndpointId
     reachable: bool
+    vantage_point: str = "local"
     error: Optional[str] = None
     error_category: Optional[str] = None
     server_version: Optional[str] = None
