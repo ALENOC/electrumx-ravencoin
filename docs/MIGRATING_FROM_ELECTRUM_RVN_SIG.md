@@ -29,6 +29,12 @@ If a mismatch is reported, preserve a backup and follow a reviewed ElectrumX
 rewind procedure. Rebuild only when a safe rewind is unavailable or validation
 still fails. Never delete the sole database copy as an exploratory step.
 
+For a new containerized deployment, follow
+[`DOCKER_COMPOSE.md`](DOCKER_COMPOSE.md). When migrating an existing database into
+the named Compose volume, stop both old and new services first, preserve the
+original, and copy it with ownership suitable for the image's unprivileged
+`electrumx` user. Never start two ElectrumX processes against the same LevelDB.
+
 After startup, query `server.features` and `server.ravencoin_backend`. Confirm:
 
 - ElectrumX and backend Core versions are reported separately;

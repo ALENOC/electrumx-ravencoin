@@ -1,0 +1,40 @@
+services:
+  electrumx:
+    build:
+      context: .
+      dockerfile: contrib/Dockerfile
+    image: alenoc/electrumx-ravencoin:local
+    network_mode: host
+    env_file:
+      - ${ELECTRUMX_ENV_FILE:-contrib/electrumx.env}
+    environment:
+      COIN: Ravencoin
+      DB_DIRECTORY: /var/lib/electrumx/db
+      SERVICES: ssl://:50002,rpc://127.0.0.1:8000
+      EVENT_LOOP_POLICY: uvloop
+    volumes:
+      - electrumx-db:/var/lib/electrumx/db
+      - type: bind
+        source: ${ELECTRUMX_TLS_DIRECTORY:?set ELECTRUMX_TLS_DIRECTORY in .env}
+        target: /run/electrumx/tls
+        read_only: true
+    restart: on-failure:5
+    stop_grace_period: 15m
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ulimits:
+      nofile:
+        soft: 10000
+        hard: 10000
+    healthcheck:
+      test: ["CMD", "electrumx_rpc", "getinfo"]
+      interval: 60s
+      timeout: 35s
+      retries: 3
+      start_period: 5m
+
+volumes:
+  electrumx-db:

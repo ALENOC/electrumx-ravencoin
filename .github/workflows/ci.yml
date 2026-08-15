@@ -39,6 +39,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Validate Compose deployment model
+        env:
+          ELECTRUMX_ENV_FILE: contrib/electrumx.env.example
+          ELECTRUMX_TLS_DIRECTORY: /tmp
+        run: docker compose config --quiet
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Build amd64 and arm64 images without publishing
