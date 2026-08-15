@@ -344,6 +344,18 @@ def test_already_processed_candidate_is_not_reprocessed():
     assert discover.new_candidates(found, processed) == []
 
 
+def test_already_processed_unresolvable_tag_is_not_reprocessed():
+    found = [{
+        "state": CandidateState.REVIEW_REQUIRED.value,
+        "repository": "RavenProject/Ravencoin",
+        "tag": "v4.6.2snapshot",
+        "reason": "tag does not look like a plain version",
+    }]
+    processed = {"RavenProject/Ravencoin#tag:v4.6.2snapshot":
+                 {"tag": "v4.6.2snapshot"}}
+    assert discover.new_candidates(found, processed) == []
+
+
 def test_retagged_commit_is_flagged_for_review():
     pages = annotated_tag_pages(tag="v4.8.0")
     fetch = fake_github(pages)
