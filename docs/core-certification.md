@@ -43,6 +43,29 @@ Core REST endpoint serves blocks correctly is proved by the live-node gate.
 
 The release PASS must not be read as a deployment PASS.
 
+## Architecture artifact qualification
+
+Between release certification and live deployment sits a third, distinct
+check: whether the certified source actually builds and starts correctly on a
+given CPU architecture. This is artifact qualification, and it is neither the
+release certification above nor the live-node validation in [Validation
+status](validation-status.md#live-deployment).
+
+Artifact qualification builds the certified commit for the target
+architecture (from the published release binary on amd64, compiled from the
+certified source archive on ARM64), then runs it in an isolated,
+wallet-disabled regtest container to check startup, RPC, real REST
+(`/rest/block/<hash>.bin`), txindex, graceful shutdown and container restart.
+Because the qualification environment has no wallet, it cannot legitimately
+exercise asset RPC or asset-index behavior; those checks are recorded as
+`LIVE-ONLY` rather than `PASS`, and are only proven later against the
+synchronized mainnet deployment. Current per-architecture results are in
+[Validation status](validation-status.md#architecture-artifact-qualification).
+
+Artifact qualification does not modify, extend or replace release
+certification. Profile revision 1's evidence and digest above are unaffected
+by which architectures have since been artifact-qualified.
+
 ## How a candidate becomes known-safe
 
 The watcher polls the two permitted source repositories:
