@@ -12,8 +12,9 @@ RUN test "$TARGETARCH" = amd64 || test "$TARGETARCH" = arm64
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       autoconf automake build-essential ca-certificates curl libboost-all-dev \
-       libdb++-dev libevent-dev libssl-dev libtool pkg-config python3 \
+       autoconf automake bsdextrautils build-essential ca-certificates curl \
+       libboost-all-dev libdb++-dev libevent-dev libssl-dev libtool pkg-config \
+       python3 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /tmp/ravencoin
