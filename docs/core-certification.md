@@ -37,6 +37,10 @@ separate: it checks the actual canonical chain, checkpoint presence,
 `transfer_overflow` activation, txindex, assetindex, REST, asset RPC, ElectrumX
 historical index, backend evidence and client `SAFE_CORE_VERIFIED`.
 
+In particular, profile revision 1's release evidence must not be described as
+a complete HTTP REST test against a synchronized deployment. Whether the real
+Core REST endpoint serves blocks correctly is proved by the live-node gate.
+
 The release PASS must not be read as a deployment PASS.
 
 ## How a candidate becomes known-safe
