@@ -1,0 +1,33 @@
+{
+  "policy": {
+    "expiresAt": "2026-11-13T19:02:14+00:00",
+    "generatedAt": "2026-08-15T19:02:14+00:00",
+    "policyVersion": 2,
+    "releases": [
+      {
+        "certification": {
+          "finishedAt": 1786820050,
+          "harnessVersion": "1.0.0",
+          "profile": "rvn-consensus-2026-08-v1",
+          "profileRevision": 1,
+          "profileSha256": "1342d079f2eef7ae0803a247d2908c4b031ee4a542b0f837210f92ba36ae27b2",
+          "result": "PASS"
+        },
+        "commit": "b60f50e04f1fba425b28804e61be2694faaf3469",
+        "publishedAt": "2026-08-11T08:16:45Z",
+        "reportDigest": "7a7e04b7c38a651896a5126a99fd9e8a8858c771c0cce5366b13e993f8205e7f",
+        "repository": "2miners/Ravencoin",
+        "status": "KNOWN_SAFE",
+        "tag": "v4.8.0",
+        "version": "4.8.0"
+      }
+    ],
+    "safetyProfile": "rvn-consensus-2026-08-v1",
+    "schemaVersion": 1
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "keyId": "a6b89849cec9eab7",
+    "value": "32lQq8C5XaAAFnL7YackYJpfersYas0zBRQN8ej1Yz1YDM7EeNvhNCRmQTO1A5fMw/P+SN0J+9Ek3ZIn2vBQDQ=="
+  }
+}

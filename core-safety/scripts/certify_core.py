@@ -591,7 +591,23 @@ def _divergence(environment: Environment) -> Outcome:
 
 
 # --------------------------------------------------------------------- driver
+def profile_digest(profile: dict) -> str:
+    """Hash the canonical profile definition, excluding its identity fields."""
+    definition = dict(profile)
+    definition.pop("profileRevision", None)
+    definition.pop("profileSha256", None)
+    return hashlib.sha256(json.dumps(
+        definition, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 def certify(candidate: Candidate, profile: dict, environment: Environment) -> dict:
+    revision = profile.get("profileRevision")
+    declared_digest = profile.get("profileSha256")
+    computed_digest = profile_digest(profile)
+    if not isinstance(revision, int) or revision < 1:
+        raise ValueError("profileRevision must be a positive integer")
+    if declared_digest != computed_digest:
+        raise ValueError("profileSha256 does not match the canonical profile definition")
     started = time.time()
     results = {}
     details = {}
@@ -628,6 +644,8 @@ def certify(candidate: Candidate, profile: dict, environment: Environment) -> di
         "schemaVersion": 1,
         "candidate": candidate.to_dict(),
         "profile": profile["profileId"],
+        "profileRevision": revision,
+        "profileSha256": declared_digest,
         "harnessVersion": HARNESS_VERSION,
         "buildEnvironment": {
             "platform": platform.platform(),

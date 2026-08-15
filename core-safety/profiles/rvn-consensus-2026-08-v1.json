@@ -1,6 +1,8 @@
 {
   "schemaVersion": 1,
   "profileId": "rvn-consensus-2026-08-v1",
+  "profileRevision": 1,
+  "profileSha256": "1342d079f2eef7ae0803a247d2908c4b031ee4a542b0f837210f92ba36ae27b2",
   "title": "Ravencoin consensus safety profile, August 2026 incident baseline",
   "createdAt": "2026-08-15",
   "description": "Behaviour a Ravencoin Core release must demonstrate before this project treats it as safe to sit behind an Electrum server. A release is certified against a profile, never against a version number: a numerically newer release proves nothing until it passes this suite.",

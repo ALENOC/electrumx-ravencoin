@@ -78,6 +78,8 @@ def entry_from_report(report: dict) -> dict:
         "reportDigest": report.get("reportDigest"),
         "certification": {
             "profile": report["profile"],
+            "profileRevision": report.get("profileRevision"),
+            "profileSha256": report.get("profileSha256"),
             "harnessVersion": report.get("harnessVersion"),
             "result": "PASS" if status == "KNOWN_SAFE" else "FAIL",
             "finishedAt": report.get("finishedAt"),

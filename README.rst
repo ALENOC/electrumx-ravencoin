@@ -281,8 +281,9 @@ Implementation and deterministic tests      complete; 388 passed, 5 skipped
 Bundled Core 4.8.0 container                smoke validated, Linux amd64
 Compose models (bundled/TLS/existing-Core)  validated
 Core release certification pipeline         implemented; proven able to FAIL a broken candidate
-First real Core certification run           completed; CERTIFICATION_FAILED, review required
-Signed safe-Core policy                     signing key live; first policy awaits a passing certification
+First real Core certification run           2miners/Ravencoin v4.8.0 at b60f50e04f1fba425b28804e61be2694faaf3469; CERTIFICATION_PASSED (12/12)
+Signed safe-Core policy                     policyVersion 2 published; profile revision 1 and report evidence preserved
+Policy distribution                         stable HTTPS static artifact; signature verified, cache/baseline fallback retained
 Dual-repository release watcher             run live against both sources
 Public Electrum monitor                     first real crawl completed
 Live Core reindex with txindex+assetindex   in progress

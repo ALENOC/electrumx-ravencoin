@@ -1,0 +1,202 @@
+{
+  "buildEnvironment": {
+    "machine": "x86_64",
+    "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3"
+  },
+  "candidate": {
+    "artifact_name": "ravencoin-4.8.0-x86_64-linux-gnu.tar.gz",
+    "artifact_sha256": null,
+    "commit": "b60f50e04f1fba425b28804e61be2694faaf3469",
+    "commit_verified": true,
+    "identity": "2miners/Ravencoin@b60f50e04f1fba425b28804e61be2694faaf3469",
+    "notes": [],
+    "published_at": "2026-08-11T08:16:45Z",
+    "release_url": "https://github.com/2miners/Ravencoin/releases/tag/v4.8.0",
+    "repository": "2miners/Ravencoin",
+    "tag": "v4.8.0",
+    "tag_object": "9f553fcbcd6929acf24c0dfea456398dc6455dae",
+    "tag_verified": false,
+    "version": "4.8.0"
+  },
+  "finishedAt": 1786820050,
+  "harnessVersion": "1.0.0",
+  "liveNodeValidation": [
+    "chainstate-rebuild",
+    "checkpoint-present-at-4487775",
+    "transfer-overflow-active",
+    "txindex-ready",
+    "assetindex-ready",
+    "asset-rpc-live",
+    "canonical-chain",
+    "server-ravencoin-backend",
+    "client-safe-core-verified"
+  ],
+  "overall": "CERTIFICATION_PASSED",
+  "profile": "rvn-consensus-2026-08-v1",
+  "reportDigest": "4e135bcacddf8c5e2ef11abf839af5e0fe15e99bc4c7aa0a482b4fa90c7d2aef",
+  "requiredTests": [
+    "provenance-tag-resolves-to-commit",
+    "build-candidate-commit",
+    "mainnet-genesis",
+    "regtest-consensus-smoke",
+    "regtest-asset-consensus",
+    "required-indexes-usable",
+    "core-unit-test-suite",
+    "kawpow-header-shape",
+    "nheight-binding-rejects-forged",
+    "post-boundary-valid-accepted",
+    "incident-checkpoint-hash",
+    "transfer-overflow-deployment"
+  ],
+  "results": {
+    "build-candidate-commit": {
+      "class": "mandatory",
+      "detail": "candidate binaries run and self-report the candidate version",
+      "evidence": {
+        "versionLine": "Raven Core Daemon version v4.8.0"
+      },
+      "result": "PASS",
+      "scope": "core"
+    },
+    "chainstate-rebuild": {
+      "class": "live-node-validation",
+      "detail": "a chainstate rebuild is a long running job and is only run by the dedicated pipeline stage; it is never assumed to have passed",
+      "evidence": {},
+      "result": "UNAVAILABLE",
+      "scope": "core"
+    },
+    "consensus-divergence-review": {
+      "class": "advisory",
+      "detail": "no baseline commit was configured",
+      "evidence": {},
+      "result": "UNAVAILABLE",
+      "scope": "advisory"
+    },
+    "core-unit-test-suite": {
+      "class": "mandatory",
+      "detail": "candidate consensus suites passed",
+      "evidence": {
+        "suites": [
+          "pow_tests",
+          "kawpow_tests",
+          "asset_tx_tests",
+          "asset_tests"
+        ]
+      },
+      "result": "PASS",
+      "scope": "core"
+    },
+    "incident-checkpoint-hash": {
+      "class": "mandatory",
+      "detail": "exact candidate probe case certification_candidate_checkpoint_data_test passed",
+      "evidence": {
+        "candidateProbe": "/tmp/rvn-probe-runner.sh",
+        "case": "certification_candidate_checkpoint_data_test",
+        "tail": "Running 1 test case...\n\n\n\u001b[1;32;49m*** No errors detected\n\u001b[0;39;49m"
+      },
+      "result": "PASS",
+      "scope": "core"
+    },
+    "kawpow-header-shape": {
+      "class": "mandatory",
+      "detail": "every real boundary fixture is a 120 byte header declaring its own height at offset 76",
+      "evidence": {
+        "vectors": 4
+      },
+      "result": "PASS",
+      "scope": "harness"
+    },
+    "mainnet-genesis": {
+      "class": "mandatory",
+      "detail": "canonical mainnet genesis",
+      "evidence": {
+        "genesis": "0000006b444bc2f2ffe627be9d9e7e7a0730000870ef6eb6da46c8eae389df90"
+      },
+      "result": "PASS",
+      "scope": "core"
+    },
+    "nheight-binding-rejects-forged": {
+      "class": "mandatory",
+      "detail": "exact candidate probe case certification_candidate_contextual_height_test passed",
+      "evidence": {
+        "candidateProbe": "/tmp/rvn-probe-runner.sh",
+        "case": "certification_candidate_contextual_height_test",
+        "tail": "Running 1 test case...\n\n\n\u001b[1;32;49m*** No errors detected\n\u001b[0;39;49m"
+      },
+      "result": "PASS",
+      "scope": "core"
+    },
+    "post-boundary-valid-accepted": {
+      "class": "mandatory",
+      "detail": "exact candidate probe case certification_candidate_contextual_height_test passed",
+      "evidence": {
+        "candidateProbe": "/tmp/rvn-probe-runner.sh",
+        "case": "certification_candidate_contextual_height_test",
+        "tail": "Running 1 test case...\n\n\n\u001b[1;32;49m*** No errors detected\n\u001b[0;39;49m"
+      },
+      "result": "PASS",
+      "scope": "core"
+    },
+    "provenance-artifact-digest": {
+      "class": "mandatory-when-artifact-pinned",
+      "detail": "no artifact digest is pinned",
+      "evidence": {},
+      "result": "UNAVAILABLE",
+      "scope": "provenance"
+    },
+    "provenance-tag-resolves-to-commit": {
+      "class": "mandatory",
+      "detail": "tag resolves to the candidate commit",
+      "evidence": {
+        "commit": "b60f50e04f1fba425b28804e61be2694faaf3469",
+        "repository": "2miners/Ravencoin",
+        "tag": "v4.8.0",
+        "tagObject": "9f553fcbcd6929acf24c0dfea456398dc6455dae",
+        "tagSignatureVerified": false
+      },
+      "result": "PASS",
+      "scope": "provenance"
+    },
+    "regtest-asset-consensus": {
+      "class": "mandatory",
+      "detail": "wallet-independent candidate asset validation suite passed",
+      "evidence": {
+        "creation": "not used",
+        "suite": "asset_tx_tests",
+        "validation": "candidate consensus code"
+      },
+      "result": "PASS",
+      "scope": "core"
+    },
+    "regtest-consensus-smoke": {
+      "class": "mandatory",
+      "detail": "regtest chain advanced coherently",
+      "evidence": {
+        "blocks": 10
+      },
+      "result": "PASS",
+      "scope": "core"
+    },
+    "required-indexes-usable": {
+      "class": "mandatory",
+      "detail": "txindex answered for a confirmed transaction and the node stayed responsive with assetindex and rest enabled",
+      "evidence": {},
+      "result": "PASS",
+      "scope": "core"
+    },
+    "transfer-overflow-deployment": {
+      "class": "mandatory",
+      "detail": "exact candidate probe case certification_candidate_transfer_overflow_test passed",
+      "evidence": {
+        "candidateProbe": "/tmp/rvn-probe-runner.sh",
+        "case": "certification_candidate_transfer_overflow_test",
+        "tail": "Running 1 test case...\n\n\n\u001b[1;32;49m*** No errors detected\n\u001b[0;39;49m"
+      },
+      "result": "PASS",
+      "scope": "core"
+    }
+  },
+  "schemaVersion": 1,
+  "startedAt": 1786820032
+}
