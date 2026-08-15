@@ -11,7 +11,8 @@ Usage: ./setup.sh [--bundled-core | --existing-core] [--enable-reboot]
                   [--configure-ddns]
 
   --bundled-core   Prepare the recommended Core 4.8.0 + ElectrumX stack (default).
-  --existing-core  Prepare ElectrumX for an already-running private Core >= 4.8.0.
+  --existing-core  Prepare ElectrumX for an already-running private Core deployment;
+                   exact backend identity and signed-policy/live checks still apply.
   --enable-reboot  Install and enable a user systemd unit for the bundled stack.
   --configure-ddns Optionally point a free DuckDNS hostname at this host, for a
                    public node on a dynamic residential IP address.  Never

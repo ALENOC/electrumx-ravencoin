@@ -9,9 +9,9 @@ independence. The custom backend RPC is evidence, not consensus proof.
 
 ## Defenses
 
-- Core versions below 4.8.0 fail closed by default using structured numeric
-  parsing; future 4.8.x, 4.9.x, and 5.x versions are not rejected by string
-  comparison.
+- The server deployment must use a Core identity accepted by the signed
+  safe-Core policy. The historical 4.8.0 threshold is metadata, not
+  sufficient trust, and future releases require their own certification.
 - Server and daemon networks must match.
 - Mainnet block 4,487,775 is checked against the last-unaffected checkpoint.
 - Mainnet KAWPOW `nHeight` is checked from block 4,487,776.
@@ -35,6 +35,7 @@ produces critical warnings, and is prohibited for production deployments.
 
 ## Reporting
 
-Open a private security advisory on the maintained GitHub fork when possible.
+Open a private security advisory on the maintained ALENOC fork:
+<https://github.com/ALENOC/electrumx-ravencoin/security/advisories/new>.
 Do not include RPC credentials, wallet material, private keys, or production
 host details in public reports.
