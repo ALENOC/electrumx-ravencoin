@@ -26,8 +26,8 @@ small host is pleasant to operate.
 
 | Platform | Practical starting point | Current wording |
 |---|---|---|
-| Raspberry Pi 5 | 8 GB minimum; 16 GB more comfortable; NVMe | Recommended low-power ARM64 target; use existing-Core mode today |
-| Orange Pi 5-class | 8 GB minimum; 16 GB preferred; NVMe | Recommended low-cost ARM64 target; use existing-Core mode today |
+| Raspberry Pi 5 | 8 GB minimum; 16 GB more comfortable; NVMe | Recommended low-power ARM64 target; bundled Core qualified |
+| Orange Pi 5-class | 8 GB minimum; 16 GB preferred; NVMe | Recommended low-cost ARM64 target; bundled Core qualified |
 | x86-64 mini-PC/NUC | 16 GB or more; NVMe | Fastest and simplest bundled amd64 route |
 | Dedicated server/VPS | 16 GB or more; persistent SSD/NVMe | Useful for a long-lived public node if raw TCP is available |
 
@@ -46,13 +46,13 @@ The Raspberry Pi 5 is the first low-power target to consider:
 - prefer the documented PCIe Gen 2 setting for unattended stability rather than
   assuming every Gen 3 drive/carrier combination is validated.
 
-The bundled Core artifact is amd64-only. Raspberry Pi 5 remains a recommended
-low-power platform, and the repository's ElectrumX service is built for ARM64,
-but an ARM64 operator currently uses the existing-Core pattern. In that mode,
-you provide a separately managed, non-pruned Core and configure ElectrumX to
-use it; the Core's exact identity and policy/live evidence still matter. A
-future ARM64 bundled Core would be a separate build and validation task. This
-is a deployment limitation, not permission to accept an unknown Core release.
+The bundled Core artifact is qualified for both amd64 and ARM64; `docker
+compose up -d --build` on a Raspberry Pi 5 builds and runs the ARM64 Core
+image directly, using the same certified source identity as the amd64 build.
+See [Validation status](validation-status.md) for the current per-architecture
+qualification evidence. Existing-Core mode remains available for operators who
+already manage a separate, non-pruned Core; using it does not by itself make
+an unreviewed Core release safe.
 
 ## Orange Pi 5 family
 
@@ -66,12 +66,12 @@ exact model before buying storage or writing boot instructions:
 - check that the board's thermal solution can sustain a long index build;
 - do not assume an accessory or image for one family member applies to another.
 
-The bundled Core image is also amd64-only on the Orange Pi family, so use the
-existing-Core pattern today. The Orange Pi Zero 3 and other roughly 1–2 GB
-boards are not suitable for a
-combined Core plus ElectrumX workload. They may be useful for a different,
-Core-only experiment, but low memory and swap pressure make them a poor choice
-for a node that must also build the ElectrumX index.
+The bundled Core image is qualified for ARM64 and runs the same way on the
+Orange Pi 5 family as on the Raspberry Pi 5. The Orange Pi Zero 3 and other
+roughly 1-2 GB boards are not suitable for a combined Core plus ElectrumX
+workload regardless of architecture support. They may be useful for a
+different, Core-only experiment, but low memory and swap pressure make them a
+poor choice for a node that must also build the ElectrumX index.
 
 ## x86-64 mini-PC or NUC
 

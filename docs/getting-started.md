@@ -10,10 +10,12 @@ validated history and builds a wallet query index. ElectrumX does not hold
 wallet keys or coins. The default stack keeps Core RPC and REST private and
 starts Electrum on loopback until the operator explicitly enables TLS.
 
-## PATH A — Bundled Core mode (amd64/x86-64)
+## PATH A - Bundled Core mode (amd64/x86-64 and arm64/aarch64)
 
 Requirements: 64-bit Linux, Docker Engine, Compose v2, Git, OpenSSL, an NVMe or
-SSD, and enough memory for the chosen hardware. Run:
+SSD, and enough memory for the chosen hardware. Docker builds the Core image
+for the host's own architecture; the same commands work on amd64 and ARM64.
+Run:
 
 ```sh
 git clone https://github.com/ALENOC/electrumx-ravencoin.git
@@ -28,7 +30,7 @@ without printing them, and validates the Compose model. It does not delete
 existing data. The user service is optional; confirm its behavior before
 relying on it for reboot recovery.
 
-## PATH B — Existing Core mode
+## PATH B - Existing Core mode
 
 Use this only with a non-pruned mainnet Core whose deployment identity is known
 and whose `txindex=1`, `assetindex=1`, and `rest=1` are already active:
@@ -63,13 +65,12 @@ need persistent space. NVMe or SSD is strongly preferred; microSD is not a
 reasonable location for this workload. See [Hardware](hardware.md) before
 buying a board.
 
-The bundled Core image is the amd64 path exercised by this project. ARM64
-operators, including Raspberry Pi 5 and Orange Pi 5-class users, should use
-[PATH B — Existing Core mode](#path-b-existing-core-mode) with a Core
-deployment whose exact identity and policy evidence they understand. The
-ElectrumX ARM64 image is built by CI, but a bundled certified Core artifact for
-ARM64 is not currently provided. A board being recommended hardware is not the
-same as its complete runtime having been validated.
+The bundled Core image is qualified for both amd64 and ARM64, including
+Raspberry Pi 5 and Orange Pi 5-class boards; see [Validation
+status](validation-status.md) for the current per-architecture qualification
+evidence. Existing-Core mode remains available for operators who already
+manage a separate Core deployment. A board being recommended hardware is not
+the same as its complete runtime having been validated.
 
 ## What the setup script changes
 

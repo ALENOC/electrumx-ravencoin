@@ -118,17 +118,13 @@ Start with whichever describes your goal:
 Quick start
 ===========
 
-Choose the installation path before running commands:
+The bundled Core artifact is qualified for both **Linux x86-64/amd64** and
+**Linux ARM64/aarch64** (including Raspberry Pi 5 and Orange Pi 5-class
+boards). Docker selects the matching architecture automatically; the commands
+below are the same for both.
 
-* **x86-64/amd64:** the standard commands below use the currently verified
-  bundled Core image.
-* **ARM64 (including Raspberry Pi 5 and Orange Pi 5-class boards):** use the
-  `ARM64 existing-Core path`_ instead. The bundled certified Core artifact is
-  currently amd64-only; ARM64 ElectrumX deployment uses an existing Core whose
-  identity and live policy evidence are checked separately.
-
-For the bundled amd64 path, use a 64-bit Linux host with Docker Engine,
-Compose v2, Git and OpenSSL:
+For the bundled path, use a 64-bit Linux host with Docker Engine, Compose v2,
+Git and OpenSSL:
 
 .. code-block:: sh
 
@@ -204,12 +200,11 @@ Recommended hardware, briefly
 =============================
 
 * **Raspberry Pi 5, 8 GB or more, plus NVMe:** recommended low-power target;
-  use active cooling, a reliable supply and a 64-bit OS. On ARM64, use the
-  documented existing-Core path; the bundled certified Core image is not yet
-  provided for ARM64.
+  use active cooling, a reliable supply and a 64-bit OS. The bundled certified
+  Core artifact is qualified for ARM64 and runs on the Pi 5 directly.
 * **Orange Pi 5-class, 8 GB or more, plus NVMe:** useful lower-cost target;
   verify the exact 5/5B/5 Plus/5 Pro board before buying a carrier or drive.
-  These ARM64 boards likewise use existing-Core deployment today.
+  These ARM64 boards use the same bundled Core deployment as the Pi 5.
 * **x86-64 mini-PC or NUC, 16 GB or more, plus NVMe:** the fastest and most
   straightforward bundled certified-Core deployment path.
 * **Dedicated server/VPS:** suitable for a long-lived public node when storage,
@@ -298,7 +293,6 @@ channel described in ``SECURITY.md``.
 
 .. _Documentation index: docs/README.md
 .. _Getting started: docs/getting-started.md
-.. _ARM64 existing-Core path: docs/getting-started.md#path-b-existing-core-mode
 .. _Hardware: docs/hardware.md
 .. _Public node: docs/public-node.md
 .. _Operations: docs/operations.md
