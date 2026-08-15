@@ -90,7 +90,8 @@ def load_policy(path: Optional[str]) -> dict:
 async def run_discovery(store: Store, *, seeds_path: pathlib.Path,
                         registry_path: pathlib.Path, policy: dict,
                         limits: Limits, thresholds: Thresholds,
-                        allow_private: bool = False) -> dict:
+                        allow_private: bool = False,
+                        vantage_point: str = "local") -> dict:
     now = int(time.time())
     seeds = []
     for endpoint, group, operator in load_seeds(seeds_path):
@@ -111,6 +112,7 @@ async def run_discovery(store: Store, *, seeds_path: pathlib.Path,
 
     observations = []
     for endpoint, result in results.items():
+        result.vantage_point = vantage_point
         store.record_probe(result, now=now)
         state = store.load_state(endpoint)
         if state is None:
@@ -201,6 +203,8 @@ def main(argv=None) -> int:
                         help="signed safe-Core policy; without it nothing is certified")
     parser.add_argument("--allow-private", action="store_true",
                         help="development only: permit probing private addresses")
+    parser.add_argument("--vantage-point", default="local",
+                        help="stable label for this crawler vantage point")
     parser.add_argument("--max-depth", type=int, default=None,
                         help="crawl depth limit for this run")
     parser.add_argument("--max-candidates", type=int, default=None,
@@ -235,7 +239,8 @@ def main(argv=None) -> int:
             registry_path=pathlib.Path(arguments.registry),
             policy=load_policy(arguments.policy),
             limits=limits, thresholds=Thresholds(),
-            allow_private=arguments.allow_private))
+            allow_private=arguments.allow_private,
+            vantage_point=arguments.vantage_point))
         print(f"probed {summary['probed']} endpoint(s), {summary['edges']} peer edge(s), "
               f"chain {summary['chain']}: {summary['chain_detail']}")
         return 0
