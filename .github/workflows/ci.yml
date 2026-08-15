@@ -65,10 +65,56 @@ jobs:
           file: contrib/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: false
-      - name: Build pinned bundled Core image for amd64 without publishing
+
+  core-artifact:
+    name: Core artifact (${{ matrix.architecture }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: docker/setup-buildx-action@6524bf65af31da8d45b59e8c27de4bd072b392f5  # v3.8.0
+      - name: Build bundled Core artifact
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83  # v6.18.0
         with:
           context: .
           file: docker/core/Dockerfile
-          platforms: linux/amd64
-          push: false
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: rvn-core-qualification:${{ matrix.architecture }}
+          build-args: |
+            RAVENCOIN_VERSION=4.8.0
+            RAVENCOIN_SOURCE_COMMIT=b60f50e04f1fba425b28804e61be2694faaf3469
+            RAVENCOIN_ARCHIVE_SHA256=966cf8978af1f2e3f36e9733d011eb92f4116750af6f8e77c5a5ced525577c4c
+            RAVENCOIN_SOURCE_ARCHIVE_SHA256=ad6e72c18b64835e74582ad2465a72564b12310fa6159f23a67b9ecaf9b5ca71
+            RAVEND_SHA256=13e5c5da527888a870554acdbe0ad3de4f882ee2102d1cfc521e2868fa17b17b
+            RAVEN_CLI_SHA256=fcc7b88bd456e9ef21d9d5e9c9b40b26f0276b371f2108d702c6ce242bfdb109
+          cache-from: type=gha,scope=core-${{ matrix.architecture }}
+          cache-to: type=gha,mode=max,scope=core-${{ matrix.architecture }}
+      - name: Verify architecture selection and Compose model
+        run: |
+          set -euo pipefail
+          ./setup.sh --bundled-core
+          docker compose config --quiet
+      - name: Run Core artifact qualification
+        run: |
+          set -euo pipefail
+          ./ci/core-artifact-smoke.sh \
+            "rvn-core-qualification:${{ matrix.architecture }}" \
+            "${{ matrix.architecture }}" \
+            "b60f50e04f1fba425b28804e61be2694faaf3469" \
+            "ad6e72c18b64835e74582ad2465a72564b12310fa6159f23a67b9ecaf9b5ca71"
+      - name: Upload artifact qualification manifest
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        with:
+          name: core-artifact-qualification-${{ matrix.architecture }}
+          path: core-artifact-qualification-${{ matrix.architecture }}.json
+          if-no-files-found: error
