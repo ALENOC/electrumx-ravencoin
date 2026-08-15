@@ -28,7 +28,6 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install .
-          python -m pip install --require-hashes -r core-safety/requirements.txt
           python -m pip install pytest==8.3.5 pytest-asyncio==0.24.0 flake8==7.1.1
       - name: Unit tests
         run: pytest -q
