@@ -1,6 +1,6 @@
-==========================================================
+============================================================
 ElectrumX for Ravencoin — maintained for Ravencoin Core 4.8+
-==========================================================
+============================================================
 
 This is the maintained ALENOC fork of ElectrumX-RVN.  It is designed for
 modern Ravencoin operation after the August 2026 consensus incident, preserves
@@ -27,6 +27,31 @@ only binary published by the maintainer release.  The ElectrumX image is tested
 for amd64 and arm64.  An arm64 operator can use ``--existing-core`` with a
 separately verified Core 4.8.0+ installation; this repository does not pretend
 that an unverified arm64 Core artifact exists.
+
+Current validation status
+=========================
+
+This table reports what has actually been observed, not what is intended.
+It is updated as live validation progresses.
+
+==========================================  ======================================
+Item                                        Evidence as of 2026-08-15
+==========================================  ======================================
+Implementation and deterministic tests      complete; 176 passed, 5 skipped
+Bundled Core 4.8.0 container                smoke validated, Linux amd64
+Compose models (bundled/TLS/existing-Core)  validated by ``docker compose config``
+Live Core reindex with txindex+assetindex   in progress, Linux amd64
+Full ElectrumX mainnet historical index     in progress, not complete
+Live Raven asset RPC validation             pending the completed index
+Client end-to-end ``SAFE_CORE_VERIFIED``    pending the completed index
+Public CA-valid Electrum TLS endpoint       pending operator network action
+ElectrumX arm64 container                   build validated only
+Bundled Core on arm64                       not published; use existing-Core mode
+==========================================  ======================================
+
+An initial Core reindex plus a full ElectrumX historical index is a
+multi-hour to multi-day job on any hardware.  Do not advertise a server
+until both finish and the checks in this document pass.
 
 Why this fork exists
 ====================
@@ -58,6 +83,108 @@ The maintained code and tests implement:
 * current Python packaging/runtime support and non-root containers;
 * amd64 and arm64 ElectrumX image builds; and
 * a complete, health-gated Core + ElectrumX Compose deployment.
+
+Recommended hardware
+====================
+
+Read this before buying anything.  A *recommended target* is not the same
+as a *runtime-validated configuration*, and this section keeps the two
+apart.
+
+=========================================  =============================  ============  ==============================================================
+Platform                                   RAM                            Data storage  Status
+=========================================  =============================  ============  ==============================================================
+Raspberry Pi 5                             8 GB minimum, 16 GB better     NVMe SSD      recommended low-power target; runtime validation pending
+Orange Pi 5-class (RK3588/RK3588S)         8 GB minimum, 16 GB preferred  NVMe SSD      recommended low-cost target; runtime validation pending
+x86-64 mini PC / NUC                       16 GB or more                  NVMe SSD      fastest initial indexing; bundled Core path validated on amd64
+Dedicated server or VPS                    16 GB or more                  NVMe SSD      optional, for a long-lived public node
+Orange Pi Zero 3 and other ~1-2 GB boards  insufficient                   n/a           not recommended; see the warning below
+=========================================  =============================  ============  ==============================================================
+
+Raspberry Pi 5 — first choice for a low-power node
+--------------------------------------------------
+
+* an 8 GB board is the sensible minimum for Core plus ElectrumX; the 16 GB
+  variant leaves more room for a larger ElectrumX cache;
+* an NVMe SSD, attached through the official Raspberry Pi M.2 HAT+ or an
+  equivalent PCIe adapter.  Raspberry Pi documents the Pi 5 interface as a
+  single-lane PCIe 2.0 connection, and states that the board "is not
+  certified for Gen 3.0 speeds" and that "PCIe Gen 3.0 connections may be
+  unstable".  Plan on the certified Gen 2 setting for an unattended node;
+* check the form factor before ordering: the official M.2 HAT+ M Key takes
+  2230 or 2242 drives, and the Compact version takes 2230 only.  A 2280
+  drive needs a different carrier;
+* active cooling.  Raspberry Pi states the Pi 5 "will perform best with
+  active cooling", and the initial index runs the CPU hard for hours;
+* a quality 5 V / 5 A USB-C Power Delivery supply.  An underpowered supply
+  plus a hungry NVMe drive is a classic source of mid-index corruption;
+* a 64-bit OS with Docker and Compose v2.
+
+The bundled Core artifact is amd64-only, so an arm64 board runs ElectrumX in
+``--existing-core`` mode against a Core 4.8.0+ build you verify yourself.
+
+Orange Pi 5 class — second choice, lower cost
+---------------------------------------------
+
+An RK3588 or RK3588S board with 8 GB or more (16 GB preferred when the price
+difference is small), an NVMe SSD, active cooling and a reliable supply is a
+suitable low-power target.  **Verify your exact variant before buying
+storage.**  The Orange Pi 5, 5B, 5 Plus and 5 Pro differ in M.2 connector,
+lane count, supported drive length and boot behaviour, so follow the vendor
+documentation for your board rather than a generic guide.
+
+x86-64 mini PC or NUC — fastest initial build
+---------------------------------------------
+
+16 GB or more with an NVMe SSD.  This is the only class on which the bundled
+Core 4.8.0 + ElectrumX deployment path itself has been exercised, and more
+cores shorten the one-off Core reindex and historical index considerably.
+
+Not suitable: very low memory boards
+------------------------------------
+
+Boards in the Orange Pi Zero 3 class, around 1-2 GB of RAM, are **not**
+suitable for a combined Core + ElectrumX node.  A controlled attempt on a
+~1.45 GiB board of that class produced severe memory, swap and I/O pressure
+before any index existed.  Such a board can still run Ravencoin Core alone.
+Model names vary, so treat this as a memory-size limit rather than a claim
+about every board in a product family.
+
+Storage: use NVMe or SSD, not microSD
+-------------------------------------
+
+Three separate database workloads stack up here:
+
+1. Core downloads or reindexes raw blocks and rebuilds chainstate;
+2. ``txindex`` and ``assetindex`` add further index writes;
+3. ElectrumX then builds its own historical LevelDB index on top, with its
+   own compaction.
+
+The initial build is far heavier than steady state, and it is dominated by
+storage latency and write endurance rather than by raw CPU.  Once both
+indexes exist, ongoing load is much lighter.
+
+* **Do not put the Ravencoin chain or the ElectrumX database on a microSD
+  card.**  microSD is fine for boot or recovery media, not for this data;
+* prefer a reputable TLC SSD or NVMe drive.  QLC drives do work, but TLC
+  generally holds up better under a long index build;
+* keep free-space headroom, enable normal Linux TRIM, and watch SMART or
+  NVMe health counters;
+* do not substitute a large swap file for missing RAM.
+
+Capacity, from measurements rather than predictions:
+
+* a synchronized mainnet Core datadir without extra indexes measured about
+  **45 GB** in August 2026, of which the raw ``blk*.dat`` payload was about
+  **37 GB**;
+* ``txindex``, ``assetindex`` and the ElectrumX index are additional, and
+  the chain keeps growing.
+
+A 1 TB-class NVMe drive is a reasonable starting point at this scale if you
+monitor free space; 2 TB gives materially more headroom and is the better
+choice for a long-lived public node.  Verify actual sizes on your own
+deployment with the disk-usage commands below instead of trusting a fixed
+number in a document.
 
 Quick start — Core 4.8.0 + ElectrumX
 ====================================
@@ -92,19 +219,40 @@ Architecture
 
 ::
 
-   Electrum client
-          |
-          | Electrum TLS :50002
-          v
-   +----------------------+       private Docker bridge       +------------------+
-   | ElectrumX-RVN        | --------------------------------> | Ravencoin Core    |
-   | non-root             |       JSON-RPC :8766 (not         | 4.8.0, non-root  |
-   | persistent index     |       published on the host)      | persistent chain |
-   +----------------------+                                    +---------+--------+
-                                                                       |
-                                                                       | P2P :8767
-                                                                       v
-                                                               Ravencoin network
+                          Internet
+                             |
+                             |  Electrum TCP / TLS  (operator opt-in)
+                             v
+                  +--------------------------+
+                  |    electrumx-ravencoin   |   non-root, persistent index
+                  +--------------------------+
+                             |
+                             |  private Docker network only:
+                             |  Ravencoin JSON-RPC :8766
+                             |  Ravencoin REST     :8766/rest/...
+                             v
+                  +--------------------------+
+                  |  Ravencoin Core >= 4.8.0 |   non-root, persistent chain
+                  +--------------------------+
+                             |
+                             |  P2P :8767  (operator opt-in inbound)
+                             v
+                       Ravencoin network
+
+Public, only if the operator enables it:
+
+* the Electrum service, TCP 50001 or preferably TLS 50002;
+* Ravencoin P2P inbound on 8767.
+
+Private, never published:
+
+* Ravencoin JSON-RPC on 8766;
+* Ravencoin REST on the same 8766 listener.
+
+Core JSON-RPC and Core REST share one HTTP listener.  REST has **no
+authentication at all**, so the ``rpcbind``/``rpcallowip`` pair is the only
+access control.  The shipped Compose model binds that listener to the container
+loopback and one private bridge address and gives it no host port mapping.
 
 Core provenance and integrity
 ==============================
@@ -226,25 +374,105 @@ installing netcat:
            print(stream.readline().decode().rstrip())
    PY
 
-``server.version`` is the ElectrumX software identity.  Backend Core evidence
-comes only from ``server.ravencoin_backend``.  The current sanitized schema
-contains server identity, Core version/versionNumber/subversion/network,
-blocks/headers/IBD, minimum safe Core, network/sync/checkpoint/KAWPOW flags, and
-an observation time.  It never contains RPC credentials, wallet data, or file
-paths.  Clients must still verify genesis and chain history.
+``server.version`` is the ElectrumX software identity, for example
+``ElectrumX-RVN 1.13.0.dev1``.  It is never the Ravencoin Core version.  Backend
+Core evidence comes only from ``server.ravencoin_backend``, whose sanitized
+schema is:
+
+* ``server``, ``serverVersion`` — ElectrumX identity;
+* ``backend.name``, ``backend.version``, ``backend.versionNumber``,
+  ``backend.subversion``, ``backend.network`` — the daemon's own report, for
+  example ``4.8.0``, ``4080000`` and ``/Ravencoin:4.8.0/``;
+* ``backend.blocks``, ``backend.headers``, ``backend.initialBlockDownload``;
+* ``compatibility.minimumSafeCore`` — ``4.8.0``;
+* ``compatibility.coreSafe`` — version, network and checkpoint policy all hold;
+* ``compatibility.networkMatches``, ``compatibility.backendSynchronized``;
+* ``compatibility.kawpowHeightValidation`` — this server enforces the
+  post-KAWPOW ``nHeight`` rule;
+* ``compatibility.checkpoint4487775`` — see below;
+* ``observedAt`` — when the evidence was collected.
+
+It never contains RPC credentials, wallet data, or file paths.
+
+Checkpoint semantics are deliberately strict, and two different questions are
+kept apart internally:
+
+* *known* — a backend still below height 4,487,775 cannot violate the
+  checkpoint, so it is allowed to start and to keep syncing;
+* *verified* — the server actually asked the daemon for the hash at 4,487,775
+  and it matched.
+
+Only the second is published.  ``compatibility.checkpoint4487775`` is therefore
+``false`` on a backend that has not yet reached that height, together with
+``backendSynchronized: false``, and becomes ``true`` once the comparison has
+really been made.  A server must never advertise verification it has not
+performed, and a client must not accept a server that has not performed it.
+
+None of this replaces the client's own work: clients must still verify the
+genesis hash and validate chain history independently.
+
+Monitoring and reading the state
+================================
+
+Copy and paste, in this order:
+
+.. code-block:: sh
+
+   # containers, restart counts and health
+   docker compose ps
+
+   # Core identity, chain position and peers
+   docker compose exec ravencoin-core raven-cli \
+       -conf=/var/lib/ravencoin-config/raven.conf -datadir=/var/lib/ravencoin \
+       getnetworkinfo | grep -E '"version"|subversion'
+   docker compose exec ravencoin-core raven-cli \
+       -conf=/var/lib/ravencoin-config/raven.conf -datadir=/var/lib/ravencoin \
+       getblockchaininfo | grep -E 'chain|blocks|headers|verificationprogress|size_on_disk'
+   docker compose exec ravencoin-core raven-cli \
+       -conf=/var/lib/ravencoin-config/raven.conf -datadir=/var/lib/ravencoin \
+       getconnectioncount
+
+   # logs, most recent first-level problems only
+   docker compose logs --tail=50 ravencoin-core
+   docker compose logs --tail=50 electrumx
+
+   # ElectrumX indexed height and cache state
+   docker compose exec electrumx electrumx_rpc getinfo
+
+   # storage growth of both databases
+   docker system df -v | grep -E 'ravencoin-data|electrumx-data'
+   df -h /var/lib/docker
+
+Then read the state from that output:
+
+==========================================  ==================================================  ======================================================
+What you see                                What it means                                       What to do
+==========================================  ==================================================  ======================================================
+Core log ``Reindexing block file ...``      rebuilding the block index from local ``blk*.dat``  wait; ``blocks`` stays 0 during this phase
+Core ``blocks`` far below ``headers``       downloading or connecting blocks                    wait; check peers and disk space
+Core ``blocks`` == ``headers``, IBD false   Core is caught up                                   verify the indexes, then watch ElectrumX
+ElectrumX ``db height`` 0 or far behind     historical index still building                     wait; this is the longest phase
+``daemon service refused: Not Found``       Core REST is unavailable                            confirm ``rest=1`` in the Core configuration
+ElectrumX ``db height`` ~= Core ``blocks``  index caught up                                     run the backend, chain and asset checks
+``checkpoint4487775`` false                 backend has not verified the checkpoint yet         expected while syncing; must be true before publishing
+==========================================  ==================================================  ======================================================
+
+A healthy Core container only means Core answers JSON-RPC.  It does not mean
+the chain is synchronized, and it certainly does not mean ElectrumX is ready.
 
 Ports and TLS
 =============
 
-=================  =====  ================================================
-Service            Port   Default exposure
-=================  =====  ================================================
-Ravencoin P2P       8767   Public TCP
-Ravencoin JSON-RPC  8766   Private bridge only; never publish
-Electrum TCP        50001  Host loopback only; indexing/diagnostics
-Electrum TLS        50002  Public only with ``compose.tls.yaml``
-Management RPC       8000  Container loopback only
-=================  =====  ================================================
+========================  =====  =====================================================
+Service                   Port   Default exposure
+========================  =====  =====================================================
+Ravencoin P2P             8767   Public TCP if the operator forwards it
+Ravencoin JSON-RPC        8766   Private bridge only; never publish
+Ravencoin REST            8766   Same private listener; unauthenticated, never publish
+Electrum TCP              50001  Host loopback only; indexing and diagnostics
+Electrum TLS              50002  Public only with ``compose.tls.yaml``
+ElectrumX management RPC  8000   Container loopback only
+========================  =====  =====================================================
 
 Obtain a CA-valid certificate for the Electrum hostname.  Put
 ``fullchain.pem`` and ``privkey.pem`` in one host directory, keep the private
@@ -297,14 +525,32 @@ without ``rest=1`` fails the third check.
 Asset verification
 ==================
 
-After indexing, make read-only Electrum calls for a real asset controlled or
-known by the operator: ``blockchain.asset.get_meta``,
-``blockchain.asset.get_assets_with_prefix``,
-``blockchain.asset.list_addresses_by_asset``, asset-aware scripthash balance,
-history, listunspent and mempool methods, plus owner/unique/restricted asset
-queries as applicable.  Test ``blockchain.transaction.broadcast`` only with an
-operator-controlled signed transaction; read-only checks do not prove
-broadcast eligibility.
+Ravencoin asset support is **implemented and covered by the automated test
+suite**; end-to-end validation against a completed mainnet index is **still in
+progress** and this section will be updated when it finishes.  The asset
+handlers registered by this server are:
+
+* ``blockchain.asset.get_meta``, ``blockchain.asset.get_meta_history``;
+* ``blockchain.asset.get_assets_with_prefix`` — also how owner tokens
+  (``NAME!``) and unique assets (``NAME#TAG``) are discovered;
+* ``blockchain.asset.list_addresses_by_asset`` — delegates to Core's
+  ``assetindex``;
+* ``blockchain.asset.broadcasts``, ``blockchain.asset.is_frozen``,
+  ``blockchain.asset.verifier_string``,
+  ``blockchain.asset.restricted_associations``, each with a ``_history`` or
+  subscription variant where implemented;
+* ``blockchain.tag.check``, ``blockchain.tag.qualifier.list``,
+  ``blockchain.tag.h160.list`` and their history/subscription variants;
+* asset-aware ``blockchain.scripthash.get_balance``, ``listunspent``,
+  ``get_history`` and ``get_mempool``;
+* ``blockchain.asset.subscribe`` / ``unsubscribe``.
+
+After indexing, exercise them read-only against a real asset you know.
+``blockchain.asset.list_addresses_by_asset`` additionally requires Core to have
+passed asset activation, height 435,456; before that Core answers ``THIS COMMAND
+IS NOT YET ACTIVE!``.  Test ``blockchain.transaction.broadcast`` only with an
+operator-controlled signed transaction; read-only checks do not prove broadcast
+eligibility, and a malformed payload only proves the boundary rejects it.
 
 Backups
 -------
