@@ -1,39 +1,131 @@
-# Hardware
+# Hardware guide
 
 Documentation: [Home](../README.rst) · [Docs index](README.md) ·
-[Getting started](getting-started.md) · [Status](validation-status.md)
+[Getting started](getting-started.md) · [Operations](operations.md) ·
+[Validation status](validation-status.md)
 
-## Practical targets
+This guide helps choose a host for a combined Ravencoin Core and ElectrumX
+node. A recommended target is not automatically a fully runtime-validated
+configuration; current evidence is in [Validation status](validation-status.md).
 
-| Platform | Recommendation | Evidence |
+## What the hardware is doing
+
+The first synchronization is the demanding part. The host must:
+
+1. write raw blockchain files and rebuild Core's chainstate;
+2. maintain `txindex` for historical transaction lookup;
+3. maintain `assetindex` for Ravencoin asset queries;
+4. serve block data to ElectrumX through the private Core interface; and
+5. let ElectrumX build and compact its own LevelDB history index.
+
+That is a write-heavy database workload. Once synchronized, keeping up with
+new blocks is much lighter, but the initial build still determines whether a
+small host is pleasant to operate.
+
+## Practical choices
+
+| Platform | Practical starting point | Current wording |
 |---|---|---|
-| Raspberry Pi 5 | 8 GB minimum, 16 GB preferred, NVMe and active cooling | Recommended target; runtime validation pending |
-| Orange Pi 5-class | 8 GB minimum, 16 GB preferred, NVMe and active cooling | Recommended target; exact board validation pending |
-| x86-64 mini-PC/NUC | 16 GB+, NVMe | Bundled amd64 path exercised |
-| Dedicated server/VPS | 16 GB+, fast persistent SSD/NVMe | Suitable for public operation |
+| Raspberry Pi 5 | 8 GB minimum; 16 GB more comfortable; NVMe | Recommended low-power target; full ARM64 runtime validation remains a separate status gate |
+| Orange Pi 5-class | 8 GB minimum; 16 GB preferred; NVMe | Recommended low-cost target; verify the exact board variant |
+| x86-64 mini-PC/NUC | 16 GB or more; NVMe | Fastest and simplest bundled amd64 route |
+| Dedicated server/VPS | 16 GB or more; persistent SSD/NVMe | Useful for a long-lived public node if raw TCP is available |
 
-The table distinguishes a recommendation from a completed runtime validation.
-Do not describe an SBC as fully validated until the live status document says so.
+## Raspberry Pi 5
 
-## Storage
+The Raspberry Pi 5 is the first low-power target to consider:
 
-Core raw blocks, `txindex`, `assetindex`, chainstate and the ElectrumX LevelDB
-all write heavily during first synchronization. Use a reputable TLC or
-enterprise-oriented SSD/NVMe with substantial free space. QLC can work but has
-less endurance margin under long index workloads. A 1 TB drive is a reasonable
-minimum starting point; 2 TB gives better long-term headroom.
+- choose 8 GB or more; 16 GB leaves more room for Core cache, ElectrumX cache
+  and the operating system;
+- use an NVMe SSD through a compatible M.2 carrier. Check the carrier's drive
+  length and key before ordering; the official Pi 5 carrier variants do not
+  all accept the same physical drive sizes;
+- use active cooling. Initial indexing can keep the CPU busy for hours;
+- use a reliable 5 V / 5 A USB-C Power Delivery supply;
+- install a 64-bit Linux distribution with supported Docker and Compose;
+- prefer the documented PCIe Gen 2 setting for unattended stability rather than
+  assuming every Gen 3 drive/carrier combination is validated.
 
-Do not put chain or index data on microSD. Keep normal backups of configuration
-and secrets, monitor SMART/NVMe health, and do not use swap as a substitute for
-memory.
+The bundled Core artifact is amd64-only. An ARM64 Pi therefore uses the
+existing-Core pattern unless a separately built and independently reviewed Core
+binary is supplied. That is a deployment detail, not permission to accept an
+unknown Core release.
 
-## Board notes
+## Orange Pi 5 family
 
-Raspberry Pi 5 needs active cooling, a reliable 5 V/5 A supply and a compatible
-M.2 carrier. Prefer the documented PCIe Gen 2 setting for unattended use.
-Orange Pi 5, 5B, 5 Plus and 5 Pro differ in M.2 layout and drive length; check
-the exact board manual.
+An Orange Pi 5-class RK3588/RK3588S board with 8 GB or more, NVMe, active
+cooling and a reliable power supply can be a useful low-cost target. Verify the
+exact model before buying storage or writing boot instructions:
 
-Boards around 1–2 GB RAM, including Orange Pi Zero-class systems, are not
-appropriate for combined Core and ElectrumX indexing. Core-only use is a
-different workload.
+- Orange Pi 5, 5B, 5 Plus and 5 Pro differ in M.2 connector, PCIe lanes,
+  supported drive length and boot behavior;
+- follow the vendor documentation for the exact board and OS image;
+- check that the board's thermal solution can sustain a long index build;
+- do not assume an accessory or image for one family member applies to another.
+
+The Orange Pi Zero 3 and other roughly 1–2 GB boards are not suitable for a
+combined Core plus ElectrumX workload. They may be useful for a different,
+Core-only experiment, but low memory and swap pressure make them a poor choice
+for a node that must also build the ElectrumX index.
+
+## x86-64 mini-PC or NUC
+
+An x86-64 mini-PC with 16 GB or more and a fast NVMe drive is the easiest
+starting point. It has the broadest binary compatibility and the shortest
+initial indexing path among the recommended choices. More cores reduce the
+one-off wait, but storage latency, cooling and free space still matter.
+
+## Server or VPS
+
+A dedicated server or VPS can be a good public-node host when it offers:
+
+- persistent local SSD/NVMe rather than temporary or network-block storage;
+- enough memory for Core, indexes and ElectrumX;
+- reliable disk I/O and a way to monitor capacity and health;
+- inbound raw TCP or a reviewed TCP relay design;
+- a backup and recovery plan that does not depend on deleting live data.
+
+Do not assume a generic HTTP reverse proxy or HTTP-only tunnel can carry
+Electrum's raw TCP/TLS protocol. Confirm the provider's transport semantics.
+
+## Storage: why NVMe matters
+
+The workload has several layers:
+
+```text
+raw blocks -> chainstate -> txindex + assetindex -> ElectrumX LevelDB index
+```
+
+Each layer adds reads, writes and compaction. HDD-only operation is not
+recommended for the initial build, and microSD is a poor location for chain or
+index data because of latency, write endurance and failure recovery.
+
+Prefer a reputable TLC SSD/NVMe or an enterprise-oriented drive. QLC can work,
+but has less endurance margin during long sustained writes. Keep free-space
+headroom instead of filling a drive to its nominal capacity. Actual chain and
+index sizes grow, so measure your deployment rather than relying on a fixed
+number in this document.
+
+## Memory and swap
+
+8 GB is a practical minimum for a combined SBC deployment; 16 GB is more
+comfortable and preferable when affordable. On x86, 16 GB or more gives a
+better margin for the OS, Core and ElectrumX. Swap can prevent an immediate
+out-of-memory kill, but it is not a replacement for RAM and can make an
+already-busy index painfully slow.
+
+## Power, cooling and maintenance
+
+Use active cooling on small boards, a stable supply, and a host that can remain
+powered for the initial synchronization. Watch temperatures, disk utilization,
+SMART/NVMe health counters and filesystem errors. Enable normal Linux TRIM
+where supported. Keep the host ventilated and do not place it where a fan or
+drive can collect dust and heat.
+
+## What is and is not validated
+
+The project can certify a Core software release with bounded deterministic
+fixtures. That does not prove that every SBC, carrier, power supply, kernel and
+storage combination will complete a live mainnet index. Live platform status,
+asset RPC readiness and ElectrumX catch-up are intentionally tracked separately
+in [Validation status](validation-status.md).

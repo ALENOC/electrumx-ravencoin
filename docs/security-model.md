@@ -3,6 +3,33 @@
 Documentation: [Home](../README.rst) · [Docs index](README.md) ·
 [Core certification](core-certification.md) · [Status](validation-status.md)
 
+## Why a version number is not enough
+
+A version such as `4.8.0` tells us which release label a program reports; it
+does not prove which repository commit is running or whether that code handles
+consensus edge cases safely. A future `4.9.0` could contain a regression, so it
+is not accepted merely because the number is higher.
+
+The beginner-friendly trust path is:
+
+```text
+candidate release
+  ↓
+behavioural tests
+  ↓
+certification
+  ↓
+signed safe-Core policy
+  ↓
+fresh backend evidence
+  ↓
+independent chain validation
+```
+
+The signed policy answers whether a software identity passed release
+certification. It does not prove that an unrelated remote server is actually
+running that binary; the live server and chain checks still matter.
+
 ## Trust is identity-based
 
 The historical 4.8.0 threshold is not a trust rule. A release is identified by

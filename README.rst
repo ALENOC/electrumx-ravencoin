@@ -2,59 +2,125 @@
 ElectrumX for Ravencoin
 ============================================
 
-The maintained ALENOC ElectrumX server fork for Ravencoin wallets. It preserves
-Ravencoin asset support and adds a fail-closed safety boundary around the Core
-backend and the chain served to clients.
+The maintained community edition of the Ravencoin ElectrumX server. It
+combines Ravencoin Core and ElectrumX deployment tooling, asset-aware wallet
+queries, and additional safety checks introduced after the August 2026
+consensus incident.
 
-.. warning::
+If this is your first node, start here
+======================================
 
-   This is not an official Ravencoin or Electrum release. The initial certified
-   Core is ``2miners/Ravencoin`` tag ``v4.8.0`` at commit
-   ``b60f50e04f1fba425b28804e61be2694faaf3469``. A version number alone never
-   grants trust; future Core releases must pass certification and appear in a
-   valid signed safe-Core policy.
+This guide explains the pieces before asking you to run commands. If you
+already operate Ravencoin Core and ElectrumX, use the `Documentation index`_
+to jump to the operator and reference guides.
 
-Quick links
-===========
+What is Ravencoin?
+------------------
 
-==============================  ============================================================
-Guide                           Purpose
-==============================  ============================================================
-`Documentation index`_          Complete guide map
-`Getting started`_              First deployment and what to expect
-`Hardware`_                     NVMe, memory, SBC and x86 guidance
-`Public node`_                  DDNS, CGNAT, port forwarding and TLS
-`Operations`_                   Start, stop, logs, backups and upgrades
-`Security model`_               Certified Core, backend evidence and chain validation
-`Core certification`_           Release certification and signed policy
-`Electrum monitor`_             Discovery, health and operator groups
-`Validation status`_             Current evidence and pending live gates
-`Troubleshooting`_              Common failures and safe recovery
-`Upstream and credits`_         Lineage, MIT license and attribution
-==============================  ============================================================
+Ravencoin is a public blockchain for recording ownership and transfers. Every
+transaction is part of a shared history called the blockchain. Many computers
+keep copies of that history and check new blocks against the network rules.
+That independent checking is what makes the network decentralized: no single
+server gets to declare which history is true.
 
-Why this fork exists
-====================
+What is a node?
+---------------
 
-ElectrumX indexes the full Ravencoin chain so lightweight wallets can query
-balances and history without storing the chain themselves. More independent
-servers improve privacy and availability, but a reachable server is not
-automatically trustworthy.
+A Ravencoin *full node* is a computer running Ravencoin Core. Core downloads
+the blockchain, verifies blocks and transactions against the consensus rules,
+and exchanges the result with other nodes. It does not simply ask another
+server what is true; it checks the data itself.
 
-This fork separates software-release trust from deployment trust:
+A node is not a wallet. A wallet manages keys and signs transactions for its
+owner. Core can run with its wallet disabled, and this project deliberately
+does so. Running this server does not give it your seed, private keys or coins.
 
-``exact repository + commit`` -> ``behavioural certification`` ->
-``signed policy`` -> ``backend evidence`` -> ``independent chain validation``
+What is ElectrumX?
+------------------
 
-The signed policy says that a Core release passed the release profile. It does
-not attest that an unrelated third-party Electrum server is running that exact
-binary. The server and wallet therefore remain fail-closed when evidence is
-missing, stale, contradictory or on the wrong chain.
+A full node has the complete chain, but it is not designed to answer every
+light wallet's address-history question quickly. ElectrumX reads Core's
+validated chain and builds a lookup database. A wallet can then ask for
+transactions, balances, history and Ravencoin asset data without downloading
+and indexing the whole blockchain itself.
+
+ElectrumX answers those queries; it does not hold wallet keys, sign payments or
+take custody of funds. The layers look like this::
+
+   wallet (keys and signing)
+          |
+          v
+   ElectrumX (fast wallet-query index)
+          |
+          v
+   Ravencoin Core (full verified chain)
+          |
+          v
+   Ravencoin peer-to-peer network
+
+Why run an Electrum server?
+---------------------------
+
+More independent Electrum servers improve the network in three practical ways:
+
+* **Privacy:** an Electrum server can see which addresses a wallet asks about.
+  More unrelated operators spread that knowledge instead of concentrating it.
+* **Availability:** wallets have alternatives when one host is offline or
+  overloaded.
+* **Resilience:** independent servers let wallets compare answers and make it
+  harder for one operator or outage to shape everyone's view of the chain.
+
+Several hostnames run by one company are still one operator. This project
+tracks operator groups rather than counting endpoints as if each were an
+independent authority. Discovery is useful, but discovery is not trust; see
+the `Electrum monitor`_ guide.
+
+Why this maintained fork exists
+-------------------------------
+
+In August 2026, a consensus-critical weakness in Ravencoin's KAWPOW header
+validation was exploited on mainnet. A header carries a declared ``nHeight``.
+Vulnerable software did not consistently check that declaration against the
+block's real position in the chain, even though the value affects proof-of-work
+validation behavior. The affected history also created restart, index-reload
+and header-synchronization problems.
+
+The 2miners 4.8.0 response rejects the height mismatch from the affected
+boundary, preserves the last unaffected checkpoint, and adds recovery behavior
+for damaged index history. The maintained server adds defense in depth: exact
+Core identity, behavioral release certification, signed policy evidence,
+backend checks and independent chain validation. Read the detailed `August
+2026 incident guide`_ for the boundary, consequences and primary source.
+
+This is a community-maintained fork, not a publication of the Ravencoin
+Foundation or the original Electrum maintainers. Lineage and licensing are
+described in `Upstream and credits`_.
+
+Documentation menu
+==================
+
+Start with whichever describes your goal:
+
+* `Getting started`_ — beginner concepts, bundled Core and existing-Core paths.
+* `Hardware`_ — Raspberry Pi, Orange Pi, x86, storage and cooling decisions.
+* `Public node`_ — dynamic DNS, DuckDNS, CGNAT, forwarding and TLS.
+* `Operations`_ — lifecycle commands, progress checks, backups and upgrades.
+* `Security model`_ — what release and server evidence can, and cannot, prove.
+* `August 2026 incident guide`_ — technical incident background and recovery.
+* `Core certification`_ — candidate releases, profile and signed policy.
+* `Electrum monitor`_ — discovery, health, operator groups and vantage points.
+* `Architecture`_ — service boundaries and data flow.
+* `Troubleshooting`_ — symptoms, checks and safe fixes.
+* `Validation status`_ — the single source for current release/live status.
+* `Documentation index`_ — the complete user-oriented map, including protocol
+  and RPC references.
 
 Quick start
 ===========
 
-For a new Linux x86-64 host with Docker Engine and Compose v2::
+For a new 64-bit Linux host with Docker Engine, Compose v2, Git and OpenSSL:
+
+.. code-block:: sh
 
    git clone https://github.com/ALENOC/electrumx-ravencoin.git
    cd electrumx-ravencoin
@@ -62,65 +128,160 @@ For a new Linux x86-64 host with Docker Engine and Compose v2::
    docker compose up -d --build
    docker compose ps
 
-The bundled path supplies the pinned certified Core and ElectrumX. Core first
-synchronizes or rebuilds its indexes; ElectrumX then builds its historical
-index. A private listener is the safe starting point. Do not publish the node
-until both indexes and the live validation checks are complete. For an already
-running compatible Core, use the `existing-Core guide`_.
+What each command does:
 
-What happens next
------------------
+* ``git clone`` downloads this repository to the host;
+* ``setup.sh`` checks Docker and architecture, creates local configuration and
+  ignored RPC credentials, and validates the Compose model;
+* ``docker compose up`` starts the bundled Core plus ElectrumX services;
+* ``docker compose ps`` shows service state and health.
 
-``Core sync/reindex -> ElectrumX historical index -> read-only validation ->
-optional public TLS``
+The script does not print credentials or delete existing data. ``--enable-reboot``
+is optional and installs a user service for reboot recovery. Read `Getting
+started`_ before using an existing Core instead of the bundled mode.
 
-The initial process can take hours or days and resumes after a restart. Never
-delete chainstate, Core indexes, or the ElectrumX database to solve a temporary
-sync problem; see `Operations`_.
+Nothing is ready immediately after Docker starts, and that is normal
+----------------------------------------------------------------------
 
-Recommended hardware
+Startup happens in stages:
+
+1. Ravencoin Core starts and becomes JSON-RPC healthy.
+2. Core downloads the chain, or scans/rebuilds indexes from existing block
+   files. Required ``txindex``, ``assetindex`` and REST behavior are part of
+   the deployment model.
+3. ElectrumX waits for usable Core and then builds its historical database.
+4. Core catches up to the network and ElectrumX catches up to Core.
+5. Read-only backend, checkpoint, asset and chain checks are performed.
+6. Only then should you consider publishing a public TLS endpoint.
+
+An initial sync or index can take hours or days. A healthy container only means
+that a process answers its health check; it does not mean the chain is current.
+During Core initial synchronization, ``blocks < headers`` is normal. During a
+block-file reindex, some progress fields can remain at zero while the log is
+advancing. Do not restart Core or delete chain data because of that phase.
+
+The complete path from first purchase to public service
+========================================================
+
+Use the following as a mental map. The first seven steps produce a useful
+private server; publishing is optional:
+
+1. Choose hardware from the `Hardware`_ guide.
+2. Install a current 64-bit Linux, Docker Engine and Compose v2.
+3. Clone this repository and run the setup script.
+4. Start Core and ElectrumX.
+5. Wait for Core to synchronize and build its indexes.
+6. Wait for ElectrumX to finish its historical index.
+7. Test the stack privately on the host or LAN.
+8. If you want to serve others, choose a stable hostname such as DuckDNS.
+9. Check for CGNAT, reserve a stable LAN address and forward only TCP 50002.
+10. Obtain a CA-valid TLS certificate for the hostname.
+11. Test DNS, TCP, TLS and the Electrum protocol from outside your LAN.
+12. Advertise the endpoint only after the live validation gates pass.
+
+Private node first, public node later
+-------------------------------------
+
+A **private node** serves your own wallets on your LAN or VPN. It needs no
+router port forwarding and is the recommended first milestone.
+
+A **public node** serves other wallets. It needs reliable inbound networking,
+TLS, monitoring and ongoing maintenance. Neither mode gives the server your
+wallet keys. Get the private mode working and synchronized before taking on
+public networking; see `Public node`_.
+
+Recommended hardware, briefly
+=============================
+
+* **Raspberry Pi 5, 8 GB or more, plus NVMe:** recommended low-power target;
+  use active cooling, a reliable supply and a 64-bit OS.
+* **Orange Pi 5-class, 8 GB or more, plus NVMe:** useful lower-cost target;
+  verify the exact 5/5B/5 Plus/5 Pro board before buying a carrier or drive.
+* **x86-64 mini-PC or NUC, 16 GB or more, plus NVMe:** the fastest and most
+  straightforward bundled deployment path.
+* **Dedicated server/VPS:** suitable for a long-lived public node when storage,
+  memory and raw TCP networking are appropriate.
+
+NVMe/SSD is strongly preferred because raw blocks, chainstate, ``txindex``,
+``assetindex`` and the ElectrumX database are all written during the initial
+build. Do not place chain or index data on microSD. See `Hardware`_ for RAM,
+cooling, TLC/QLC, free-space and board-specific guidance. Recommended hardware
+is not the same as completed runtime validation.
+
+Private checks after startup
+============================
+
+Run these from the repository directory:
+
+.. code-block:: sh
+
+   docker compose ps
+   docker compose logs --tail=100 ravencoin-core
+   docker compose logs --tail=100 electrumx
+   docker compose exec electrumx electrumx_rpc getinfo
+   docker compose exec ravencoin-core raven-cli \
+       -conf=/var/lib/ravencoin-config/raven.conf \
+       -datadir=/var/lib/ravencoin getblockchaininfo
+
+Core's ``blocks`` and ``headers`` show chain progress. ElectrumX's ``getinfo``
+shows its own indexed height. Read `Operations`_ for the configured RPC paths,
+disk checks and a safe interpretation of waiting versus failure.
+
+Publishing later
+================
+
+For a changing residential IP, dynamic DNS keeps a hostname pointed at your
+current address. DuckDNS is one beginner-friendly example, and the setup script
+has an optional ``--configure-ddns`` path. DNS alone does not bypass CGNAT or
+open a router port. The full `Public node`_ guide explains stable LAN addresses,
+port forwarding, ACME/TLS, renewal and external testing.
+
+Never publish Core JSON-RPC or REST. Core REST is unauthenticated. The normal
+public service is Electrum TLS on TCP 50002; the management interface and
+unencrypted listener remain private unless you have a deliberate, reviewed
+reason to expose them.
+
+Security in one page
 ====================
 
-* **Raspberry Pi 5 + NVMe** — recommended low-power target; runtime validation
-  pending.
-* **Orange Pi 5-class + NVMe** — recommended low-cost target; runtime
-  validation pending.
-* **x86-64 mini-PC + NVMe** — fastest path; bundled amd64 deployment exercised.
-* **Server/VPS + NVMe** — suitable for a long-lived public node.
+The project separates software-release evidence from deployment evidence:
 
-Use 8 GB RAM as a practical SBC minimum and 16 GB+ for x86 or comfortable
-indexing. Use TLC/enterprise-oriented NVMe storage with free-space headroom;
-microSD is not suitable for chain or index data. See `Hardware`_ for board
-variants, cooling, power and the Orange Pi Zero-class warning.
+``exact Core repository + commit``
+   -> behavioral release certification
+   -> signed safe-Core policy
+   -> fresh ``server.ravencoin_backend`` evidence
+   -> independent chain validation
+   -> wallet/server eligibility
 
-Current status
-==============
+The current certified release is documented in `Core certification`_. A version
+number by itself does not establish trust, and the release certification does
+not prove that an unrelated third-party Electrum server is running that exact
+binary. Missing, stale, contradictory or unknown evidence fails closed. The
+full explanation, including anti-rollback, revocation and operator diversity,
+is in `Security model`_.
 
-* Core release certification: **CERTIFICATION_PASSED**, 12/12 mandatory tests.
-* Certified identity: ``2miners/Ravencoin`` ``v4.8.0`` at the exact commit above.
-* Signed safe-Core policy: persisted and verified; current policy version 2.
-* Live Core reindex and ElectrumX historical indexing: **in progress**.
-* Asset RPC, public endpoint and client ``SAFE_CORE_VERIFIED``: **pending live
-  validation**.
+Current project status
+======================
 
-Release certification is complete; live deployment validation is not. The
-authoritative details are in `Validation status`_.
+The authoritative status distinction is:
 
-Public node
-===========
+* **Core release certification:** the maintained v4.8.0 candidate passed all
+  mandatory release tests and a signed policy exists.
+* **Live mainnet deployment validation:** still in progress. Core synchronization,
+  ElectrumX historical indexing, live asset/index checks, backend evidence,
+  public TLS and client ``SAFE_CORE_VERIFIED`` remain deployment gates.
 
-Want to publish a node? First finish private validation, then follow the
-`Public node`_ guide. It covers stable LAN addressing, dynamic DNS, CGNAT,
-TCP 50002, certificates, renewal and external testing. Never expose Core JSON-
-RPC or unauthenticated REST to the Internet.
+Do not call the live deployment fully validated or publish a wallet release
+until the gates in `Validation status`_ are complete.
 
-License and credits
-===================
+Contributing and credits
+========================
 
-The project remains MIT-licensed. Original ElectrumX, Electrum-RVN-SIG and
-Ravencoin-related attribution is preserved; ALENOC maintains this fork and does
-not claim authorship of the upstream software. See `Upstream and credits`_,
-``LICENCE`` and ``NOTICE.md``.
+This repository is maintained by ALENOC as a community fork. ElectrumX and the
+Ravencoin adaptation have earlier authors and maintainers; the original MIT
+notices remain in ``LICENCE``. See `Upstream and credits`_ and ``NOTICE.md``.
+Security reports should use the maintained repository's security advisory
+channel described in ``SECURITY.md``.
 
 .. _Documentation index: docs/README.md
 .. _Getting started: docs/getting-started.md
@@ -128,9 +289,10 @@ not claim authorship of the upstream software. See `Upstream and credits`_,
 .. _Public node: docs/public-node.md
 .. _Operations: docs/operations.md
 .. _Security model: docs/security-model.md
+.. _August 2026 incident guide: docs/incident-2026.md
 .. _Core certification: docs/core-certification.md
 .. _Electrum monitor: docs/electrum-monitor.md
-.. _Validation status: docs/validation-status.md
+.. _Architecture: docs/architecture.md
 .. _Troubleshooting: docs/troubleshooting.md
+.. _Validation status: docs/validation-status.md
 .. _Upstream and credits: docs/upstream-and-credits.md
-.. _existing-Core guide: docs/getting-started.md#existing-core-mode
