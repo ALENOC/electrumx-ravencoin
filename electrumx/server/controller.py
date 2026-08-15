@@ -16,9 +16,7 @@ from electrumx.server.daemon import Daemon
 from electrumx.server.db import DB
 from electrumx.server.mempool import MemPool, MemPoolAPI
 from electrumx.server.session import SessionManager
-from electrumx.server.ravencoin_backend import (
-    enforce_backend_policy, verify_database_chain,
-)
+from electrumx.server.ravencoin_backend import enforce_backend_policy
 
 
 class Notifications(object):
@@ -204,7 +202,8 @@ class Controller(ServerBase):
                 f'headers={backend_status.headers:,d} '
                 f'synchronized={backend_status.synchronized}'
             )
-            await verify_database_chain(db, daemon)
+            # The database chain check needs an open database, so the block
+            # processor performs it immediately after opening one.
             bp = block_proc.BlockProcessor(env, db, daemon, notifications)
 
             # Set notifications up to implement the MemPoolAPI

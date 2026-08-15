@@ -45,6 +45,7 @@ from electrumx.server.db import (
 )
 from electrumx.server.env import Env
 from electrumx.server.daemon import Daemon
+from electrumx.server.ravencoin_backend import verify_database_chain
 
 
 class OPPushDataGeneric:
@@ -1688,6 +1689,9 @@ class BlockProcessor:
             os.mkdir(self.bad_vouts_path)
         
         self.state = OnDiskBlock.state = (await self.db.open_for_sync()).copy()
+        # Refuse a stale or forked index before extending or serving it.  This
+        # requires the open database above, so it cannot run any earlier.
+        await verify_database_chain(self.db, self.daemon)
         await OnDiskBlock.scan_files()
         
         try:

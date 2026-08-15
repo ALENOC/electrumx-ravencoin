@@ -170,7 +170,18 @@ def enforce_backend_policy(status, allow_unsafe=False):
 
 
 async def verify_database_chain(db, daemon):
-    """Refuse a stale/forked ElectrumX database instead of serving it silently."""
+    """Refuse a stale/forked ElectrumX database instead of serving it silently.
+
+    The database must already be open: its on-disk state is the evidence being
+    checked.  Verifying an unopened database would silently pass, so this fails
+    closed with a diagnosable error instead.
+    """
+    if getattr(db, "state", None) is None:
+        raise RavencoinDatabaseMismatchError(
+            "ElectrumX database state is unavailable; open the database before "
+            "verifying it against Ravencoin Core"
+        )
+
     height = db.state.height
     if height < 0:
         return
