@@ -1,0 +1,214 @@
+name: Core safety watch
+
+# Watches the two allowed Ravencoin Core sources, certifies new candidates, and
+# proposes an updated safe-Core policy.
+#
+# Security boundary:
+#   * discovery, build and certification run with contents: read and no secrets;
+#   * signing happens in a separate job bound to a protected environment, so the
+#     signing key is never present in a job that executes candidate source code;
+#   * pull_request never triggers this workflow, so a fork cannot reach the key;
+#   * third-party actions are pinned by commit sha.
+#
+# A run that cannot certify a candidate publishes a REVIEW_REQUIRED report and
+# stops. Nothing is ever promoted because a job was inconclusive.
+
+on:
+  schedule:
+    # Twice a day at odd minutes. Core releases are rare; polling harder buys
+    # nothing and only burns API quota.
+    - cron: "37 4,16 * * *"
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "Restrict discovery to one allowed repository"
+        required: false
+        type: choice
+        options:
+          - all
+          - 2miners/Ravencoin
+          - RavenProject/Ravencoin
+        default: all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-safety-watch
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    name: Discover candidates
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      candidates: ${{ steps.discover.outputs.candidates }}
+      count: ${{ steps.discover.outputs.count }}
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Discover releases from the allowed sources
+        id: discover
+        env:
+          # Read-only token, used only to raise the API rate limit.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p core-safety/state
+          python core-safety/scripts/discover_releases.py \
+            --state-file core-safety/state/processed.json \
+            --output core-safety/state/new-candidates.json
+          {
+            echo "candidates<<EOF"
+            cat core-safety/state/new-candidates.json
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, pathlib
+          entries = json.loads(pathlib.Path("core-safety/state/new-candidates.json").read_text())
+          print(f"count={len(entries)}")
+          PY
+
+      - name: Upload candidate records
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f97e3e9  # v4.6.0
+        with:
+          name: core-safety-candidates
+          path: core-safety/state/new-candidates.json
+          if-no-files-found: error
+
+  certify:
+    name: Build and certify
+    needs: discover
+    if: needs.discover.outputs.count != '0'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Install harness dependencies
+        run: python -m pip install --require-hashes -r core-safety/requirements.txt ||
+             python -m pip install cryptography
+
+      - name: Run the harness self-test
+        run: python -m pytest tests/test_core_safety.py tests/test_core_safety_policy.py -q
+
+      - name: Certify each candidate
+        env:
+          # Candidate source is untrusted input. This job holds no secrets, and
+          # the build runs here rather than in the signing job for that reason.
+          CANDIDATES: ${{ needs.discover.outputs.candidates }}
+        run: |
+          set -euo pipefail
+          mkdir -p core-safety/state/reports
+          python - <<'PY'
+          import json, os, pathlib, subprocess, sys
+          candidates = json.loads(os.environ["CANDIDATES"])
+          reports = pathlib.Path("core-safety/state/reports")
+          reports.mkdir(parents=True, exist_ok=True)
+          for entry in candidates:
+              if not entry.get("commit"):
+                  print(f"skipping non-certifiable entry: {entry.get('state')} "
+                        f"{entry.get('repository')} {entry.get('reason', '')}")
+                  continue
+              record = reports / f"candidate-{entry['commit'][:12]}.json"
+              record.write_text(json.dumps(entry), encoding="utf-8")
+              report = reports / f"report-{entry['commit'][:12]}.json"
+              # Source checkout, toolchain and chain data are supplied by the
+              # dedicated build stage. Without them the harness reports
+              # UNAVAILABLE, which becomes REVIEW_REQUIRED rather than a pass.
+              completed = subprocess.run([
+                  sys.executable, "core-safety/scripts/certify_core.py",
+                  "--candidate-file", str(record),
+                  "--profile", "core-safety/profiles/rvn-consensus-2026-08-v1.json",
+                  "--fixtures", "core-safety/fixtures/mainnet-incident-headers.json",
+                  "--report", str(report),
+              ], check=False)
+              print(f"{entry['repository']}@{entry['commit'][:12]} exit "
+                    f"{completed.returncode}")
+          PY
+
+      - name: Upload certification reports
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f97e3e9  # v4.6.0
+        with:
+          name: core-safety-reports
+          path: core-safety/state/reports
+          if-no-files-found: error
+
+  propose_policy:
+    name: Propose signed policy
+    needs: [discover, certify]
+    runs-on: ubuntu-24.04
+    # The signing key lives in this protected environment and nowhere else.
+    # Required reviewers on the environment are what stops an automated run from
+    # promoting a candidate without a human looking at the report.
+    environment: core-safety-signing
+    permissions:
+      contents: read
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Install signing dependencies
+        run: python -m pip install cryptography
+
+      - name: Download certification reports
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16  # v4.1.8
+        with:
+          name: core-safety-reports
+          path: core-safety/state/reports
+
+      - name: Generate and sign the policy
+        env:
+          POLICY_SIGNING_KEY: ${{ secrets.POLICY_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          reports=()
+          for report in core-safety/state/reports/report-*.json; do
+            [ -e "$report" ] || continue
+            overall=$(python -c "import json,sys;print(json.load(open(sys.argv[1]))['overall'])" "$report")
+            if [ "$overall" = "CERTIFICATION_PASSED" ] || [ "$overall" = "CERTIFICATION_FAILED" ]; then
+              reports+=(--report "$report")
+            else
+              echo "$report is $overall, leaving it out of the policy"
+            fi
+          done
+          if [ ${#reports[@]} -eq 0 ]; then
+            echo "no conclusive certification report, so no policy is generated"
+            exit 0
+          fi
+          python core-safety/scripts/generate_policy.py "${reports[@]}" \
+            --profile core-safety/profiles/rvn-consensus-2026-08-v1.json \
+            --output core-safety/state/safe-core-policy.json
+
+      - name: Upload the proposed policy
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f97e3e9  # v4.6.0
+        with:
+          name: safe-core-policy
+          path: core-safety/state/safe-core-policy*.json
+          if-no-files-found: warn

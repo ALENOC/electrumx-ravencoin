@@ -15,6 +15,7 @@ from aiorpcx import Service, ServicePart
 
 from electrumx.lib.coins import Coin
 from electrumx.lib.env_base import EnvBase
+from electrumx.server.ravencoin_backend import BackendIdentity
 
 
 class ServiceError(Exception):
@@ -80,6 +81,16 @@ class Env(EnvBase):
         )
         self.ravencoin_backend_info_max_age = self.integer(
             'RAVENCOIN_BACKEND_INFO_MAX_AGE', 5
+        )
+        # Where the backend Core is claimed to come from.  This is deployment
+        # configuration on purpose: the daemon must not be able to choose its own
+        # identity, so nothing here is read from the daemon at runtime.
+        self.ravencoin_backend_identity = BackendIdentity.from_config(
+            repository=self.default('RAVENCOIN_SOURCE_REPOSITORY', ''),
+            tag=self.default('RAVENCOIN_SOURCE_TAG', ''),
+            commit=self.default('RAVENCOIN_SOURCE_COMMIT', ''),
+            artifact_sha256=self.default('RAVENCOIN_ARTIFACT_SHA256', ''),
+            evidence=self.default('RAVENCOIN_IDENTITY_EVIDENCE', ''),
         )
         if self.ravencoin_backend_check_interval < 10:
             raise self.Error('RAVENCOIN_BACKEND_CHECK_INTERVAL must be at least 10 seconds')

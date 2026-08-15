@@ -9,6 +9,7 @@ identity and health of the Ravencoin Core daemon behind it.
 """
 
 from dataclasses import dataclass
+import re
 import time
 
 from electrumx.lib.hash import hash_to_hex_str
@@ -20,6 +21,97 @@ INCIDENT_CHECKPOINT_HEIGHT = 4_487_775
 INCIDENT_CHECKPOINT_HASH = (
     "000000000002d64509e06e76ddbbe418c725291687ec62b41ecfc40386a091fd"
 )
+
+#: The safety profile this deployment claims its backend was certified against.
+#: A profile describes required behaviour; a version number does not.
+SAFETY_PROFILE = "rvn-consensus-2026-08-v1"
+
+#: Repositories a Ravencoin Core release may legitimately come from.  Being on
+#: this list makes a release a candidate for certification, never trusted.
+KNOWN_SOURCE_REPOSITORIES = ("2miners/Ravencoin", "RavenProject/Ravencoin")
+
+
+class IdentityEvidence:
+    """How much is really known about which Core binary is running.
+
+    These labels exist so a wallet is never shown a self-reported commit that
+    looks cryptographically proven.  Only the first means this deployment pinned
+    and checked the artifact itself.
+    """
+
+    #: This deployment built or pinned the Core artifact and verified its digest
+    #: at image build time, so the identity comes from trusted build config.
+    BUILD_VERIFIED = "BUILD_IDENTITY_VERIFIED"
+    #: An operator configured the identity by hand.  Plausible, unproven.
+    ATTESTED = "BUILD_IDENTITY_ATTESTED"
+    #: Only the daemon's own version and subversion strings are known.
+    VERSION_ONLY = "VERSION_ONLY"
+    #: Nothing usable was reported.
+    UNKNOWN = "UNKNOWN"
+
+    ALL = (BUILD_VERIFIED, ATTESTED, VERSION_ONLY, UNKNOWN)
+
+
+@dataclass(frozen=True)
+class BackendIdentity:
+    """Where the running Ravencoin Core is claimed to have come from.
+
+    Built from deployment configuration, never from a value the daemon echoes
+    back at runtime: a compromised daemon must not be able to choose its own
+    identity.
+    """
+
+    repository: str = None
+    tag: str = None
+    commit: str = None
+    artifact_sha256: str = None
+    evidence: str = IdentityEvidence.VERSION_ONLY
+
+    @classmethod
+    def from_config(cls, repository=None, tag=None, commit=None,
+                    artifact_sha256=None, evidence=None):
+        repository = (repository or "").strip() or None
+        tag = (tag or "").strip() or None
+        commit = (commit or "").strip().lower() or None
+        artifact_sha256 = (artifact_sha256 or "").strip().lower() or None
+        declared = (evidence or "").strip().upper() or None
+
+        if commit is not None and not re.fullmatch(r"[0-9a-f]{40}", commit):
+            raise ValueError("configured Ravencoin source commit is malformed")
+        if artifact_sha256 is not None and not re.fullmatch(r"[0-9a-f]{64}",
+                                                            artifact_sha256):
+            raise ValueError("configured Ravencoin artifact digest is malformed")
+        if repository is not None and repository not in KNOWN_SOURCE_REPOSITORIES:
+            raise ValueError(
+                f"configured Ravencoin source repository {repository!r} is not one of "
+                f"{', '.join(KNOWN_SOURCE_REPOSITORIES)}"
+            )
+        if declared is not None and declared not in IdentityEvidence.ALL:
+            raise ValueError(f"unknown identity evidence level {declared!r}")
+
+        if repository is None or commit is None:
+            # Without an identity there is nothing to attest to, whatever the
+            # operator configured.
+            return cls(evidence=IdentityEvidence.VERSION_ONLY)
+        if declared == IdentityEvidence.BUILD_VERIFIED and artifact_sha256 is None:
+            raise ValueError(
+                "BUILD_IDENTITY_VERIFIED requires the pinned artifact digest, "
+                "otherwise the claim cannot be checked at image build time"
+            )
+        evidence = declared or IdentityEvidence.ATTESTED
+        return cls(repository=repository, tag=tag, commit=commit,
+                   artifact_sha256=artifact_sha256, evidence=evidence)
+
+    def public_dict(self):
+        if self.repository is None or self.commit is None:
+            return {"evidence": self.evidence}
+        return {
+            "evidence": self.evidence,
+            "sourceRepository": self.repository,
+            "sourceTag": self.tag,
+            "sourceCommit": self.commit,
+            "artifactSha256": self.artifact_sha256,
+        }
 
 
 class RavencoinBackendError(RuntimeError):
@@ -78,8 +170,14 @@ class RavencoinBackendStatus:
     def core_safe(self):
         return self.version_safe and self.network_matches and self.checkpoint_known
 
-    def public_dict(self, server_version):
-        """Return only non-secret backend evidence suitable for public RPC clients."""
+    def public_dict(self, server_version, identity=None):
+        """Return only non-secret backend evidence suitable for public RPC clients.
+
+        ``identity`` describes where the running Core is claimed to come from.  It
+        is deployment configuration, and its evidence level says plainly how much
+        that claim is worth, so a wallet can weigh it against its signed policy.
+        """
+        identity = identity or BackendIdentity()
         return {
             "server": "ElectrumX-RVN",
             "serverVersion": server_version,
@@ -92,9 +190,16 @@ class RavencoinBackendStatus:
                 "blocks": self.blocks,
                 "headers": self.headers,
                 "initialBlockDownload": self.initial_block_download,
+                "identity": identity.public_dict(),
             },
             "compatibility": {
+                # Kept for older clients: it is the floor below which nothing is
+                # ever safe.  It is not a statement that anything above it is.
                 "minimumSafeCore": MINIMUM_SAFE_CORE_STRING,
+                # The profile this deployment claims its backend satisfies.  A
+                # wallet decides trust from its own signed policy, not from here.
+                "safetyProfile": SAFETY_PROFILE,
+                "identityEvidence": identity.evidence,
                 "coreSafe": self.core_safe,
                 "networkMatches": self.network_matches,
                 "backendSynchronized": self.synchronized,

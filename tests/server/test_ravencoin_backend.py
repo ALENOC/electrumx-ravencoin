@@ -250,3 +250,82 @@ def test_wrong_checkpoint_above_height_is_unsafe():
     assert status.public_dict("v")["compatibility"]["checkpoint4487775"] is False
     with pytest.raises(UnsafeRavencoinCoreError, match="checkpoint"):
         enforce_backend_policy(status)
+
+
+# ---------------------------------------------------------- backend identity
+from electrumx.server.ravencoin_backend import (  # noqa: E402
+    BackendIdentity, IdentityEvidence, SAFETY_PROFILE,
+)
+
+CERTIFIED_COMMIT = "b60f50e04f1fba425b28804e61be2694faaf3469"
+CERTIFIED_ARTIFACT = (
+    "966cf8978af1f2e3f36e9733d011eb92f4116750af6f8e77c5a5ced525577c4c"
+)
+
+
+def test_identity_defaults_to_version_only():
+    identity = BackendIdentity.from_config()
+    assert identity.evidence == IdentityEvidence.VERSION_ONLY
+    assert identity.public_dict() == {"evidence": "VERSION_ONLY"}
+
+
+def test_identity_without_commit_cannot_be_attested():
+    identity = BackendIdentity.from_config(repository="2miners/Ravencoin",
+                                           evidence="BUILD_IDENTITY_ATTESTED")
+    assert identity.evidence == IdentityEvidence.VERSION_ONLY
+    assert "sourceRepository" not in identity.public_dict()
+
+
+def test_operator_configured_identity_is_only_attested():
+    identity = BackendIdentity.from_config(repository="RavenProject/Ravencoin",
+                                           tag="v4.8.0", commit=CERTIFIED_COMMIT)
+    assert identity.evidence == IdentityEvidence.ATTESTED
+    assert identity.public_dict()["sourceCommit"] == CERTIFIED_COMMIT
+
+
+def test_build_verified_requires_the_pinned_artifact_digest():
+    with pytest.raises(ValueError, match="requires the pinned artifact digest"):
+        BackendIdentity.from_config(repository="2miners/Ravencoin", tag="v4.8.0",
+                                    commit=CERTIFIED_COMMIT,
+                                    evidence="BUILD_IDENTITY_VERIFIED")
+
+
+def test_build_verified_identity_is_published_in_full():
+    identity = BackendIdentity.from_config(
+        repository="2miners/Ravencoin", tag="v4.8.0", commit=CERTIFIED_COMMIT,
+        artifact_sha256=CERTIFIED_ARTIFACT, evidence="BUILD_IDENTITY_VERIFIED")
+    published = identity.public_dict()
+    assert published["evidence"] == "BUILD_IDENTITY_VERIFIED"
+    assert published["artifactSha256"] == CERTIFIED_ARTIFACT
+
+
+@pytest.mark.parametrize("kwargs, message", [
+    ({"repository": "attacker/Ravencoin", "commit": CERTIFIED_COMMIT}, "not one of"),
+    ({"repository": "2miners/Ravencoin", "commit": "short"}, "commit is malformed"),
+    ({"repository": "2miners/Ravencoin", "commit": CERTIFIED_COMMIT,
+      "artifact_sha256": "nothex"}, "artifact digest is malformed"),
+    ({"repository": "2miners/Ravencoin", "commit": CERTIFIED_COMMIT,
+      "evidence": "TOTALLY_PROVEN"}, "unknown identity evidence"),
+])
+def test_malformed_identity_configuration_is_refused(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        BackendIdentity.from_config(**kwargs)
+
+
+def test_published_evidence_and_profile_travel_together():
+    status = evaluate_backend(network_info(), blockchain_info(), "mainnet",
+                             INCIDENT_CHECKPOINT_HASH, observed_at=100)
+    identity = BackendIdentity.from_config(
+        repository="2miners/Ravencoin", tag="v4.8.0", commit=CERTIFIED_COMMIT,
+        artifact_sha256=CERTIFIED_ARTIFACT, evidence="BUILD_IDENTITY_VERIFIED")
+    published = status.public_dict("ElectrumX-RVN 1.13.0.dev1", identity)
+    assert published["compatibility"]["safetyProfile"] == SAFETY_PROFILE
+    assert published["compatibility"]["identityEvidence"] == "BUILD_IDENTITY_VERIFIED"
+    assert published["backend"]["identity"]["sourceCommit"] == CERTIFIED_COMMIT
+
+
+def test_identity_is_optional_for_older_callers():
+    status = evaluate_backend(network_info(), blockchain_info(), "mainnet",
+                             INCIDENT_CHECKPOINT_HASH, observed_at=100)
+    published = status.public_dict("ElectrumX-RVN 1.13.0.dev1")
+    assert published["backend"]["identity"] == {"evidence": "VERSION_ONLY"}

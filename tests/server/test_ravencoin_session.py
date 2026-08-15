@@ -8,6 +8,7 @@ import electrumx
 from electrumx.lib.coins import Ravencoin
 from electrumx.server.ravencoin_backend import (
     INCIDENT_CHECKPOINT_HASH,
+    BackendIdentity,
     evaluate_backend,
 )
 from electrumx.server.session import ElectrumX
@@ -37,6 +38,15 @@ def fake_session(status):
             coin=Ravencoin,
             ravencoin_backend_info_max_age=5,
             allow_unsafe_ravencoin_core=False,
+            ravencoin_backend_identity=BackendIdentity.from_config(
+                repository="2miners/Ravencoin",
+                tag="v4.8.0",
+                commit="b60f50e04f1fba425b28804e61be2694faaf3469",
+                artifact_sha256=(
+                    "966cf8978af1f2e3f36e9733d011eb92f4116750af6f8e77c5a5ced525577c4c"
+                ),
+                evidence="BUILD_IDENTITY_VERIFIED",
+            ),
         ),
         session_mgr=SimpleNamespace(
             daemon=daemon,
@@ -67,8 +77,24 @@ async def test_backend_rpc_returns_sanitized_fresh_evidence():
     assert result['observedAt'] == 123
     assert set(result['backend']) == {
         'name', 'version', 'versionNumber', 'subversion', 'network',
-        'blocks', 'headers', 'initialBlockDownload',
+        'blocks', 'headers', 'initialBlockDownload', 'identity',
     }
+    identity = result['backend']['identity']
+    assert identity == {
+        'evidence': 'BUILD_IDENTITY_VERIFIED',
+        'sourceRepository': '2miners/Ravencoin',
+        'sourceTag': 'v4.8.0',
+        'sourceCommit': 'b60f50e04f1fba425b28804e61be2694faaf3469',
+        'artifactSha256':
+            '966cf8978af1f2e3f36e9733d011eb92f4116750af6f8e77c5a5ced525577c4c',
+    }
+    assert result['compatibility']['safetyProfile'] == 'rvn-consensus-2026-08-v1'
+    assert result['compatibility']['identityEvidence'] == 'BUILD_IDENTITY_VERIFIED'
+    # Nothing secret may ride along with the identity.
+    serialized = repr(result).lower()
+    for forbidden in ('rpcuser', 'rpcpassword', 'secret', 'token', '/run/',
+                      'privkey'):
+        assert forbidden not in serialized
 
 
 @pytest.mark.asyncio
