@@ -2,6 +2,93 @@
 ElectrumX for Ravencoin: maintained for Ravencoin Core 4.8+
 ===========================================================
 
+Never run a node before? Start here
+===================================
+
+If you already know what ElectrumX is, skip to `Quick start: Core 4.8.0 +
+ElectrumX`_. If you do not, read this page once. Nothing here assumes you have
+run server software before, and running one of these does not require you to be
+a developer.
+
+**Ravencoin** is a public network that records who owns what. Every transaction
+ever made is stored in a shared history called the blockchain. Nobody owns that
+history, and that is the point: it works because thousands of independent
+computers each keep their own copy and check each other's work.
+
+**A Ravencoin node** is one of those computers. It is a program, called
+Ravencoin Core, that downloads the whole history, verifies every single block
+against the rules, and refuses anything invalid. A node does not ask anyone what
+is true. It works it out. When people say the network is decentralised, they mean
+there are many nodes, run by many unrelated people, and no single one of them can
+lie to the others.
+
+**A wallet is not a node.** A phone or a laptop wallet cannot store and verify
+tens of gigabytes of history. So wallets ask a server instead: "what is my
+balance, and are there new payments for my addresses?" Something has to sit
+between the tiny wallet and the full node and answer that question quickly.
+
+**That something is an ElectrumX server.** It talks to a Ravencoin node, reads
+the entire history once, and builds an index: a lookup table from addresses to
+transactions. After that it can answer a wallet's question in milliseconds
+instead of hours. This project is that server.
+
+::
+
+   your phone wallet          somebody's ElectrumX server        a Ravencoin node
+   (knows your keys)   <--->  (an index of the whole chain) <--->  (the full,
+    tiny, no history           answers wallet queries fast          verified history)
+
+Why the network needs more of these
+-----------------------------------
+
+Here is the uncomfortable part. There are thousands of Ravencoin nodes, but only
+a handful of public ElectrumX servers. Almost every light wallet in the ecosystem
+depends on that handful. That matters for three reasons:
+
+* **privacy.** The server you connect to sees which addresses you ask about. A
+  small number of servers means a small number of operators can see a large part
+  of the network's wallet activity.
+* **availability.** If those few servers go down, or their operators lose
+  interest, wallets stop working, even though the Ravencoin network itself is
+  perfectly healthy.
+* **honesty.** A wallet that has only one place to ask is easier to mislead. More
+  independent servers, run by unrelated people, means a wallet can compare
+  answers and notice when one of them is wrong.
+
+Running a server is the single most useful thing a non-programmer can do for
+Ravencoin. You do not need permission, you do not need to be listed anywhere, and
+you do not need to know C++. You need a small computer, a disk, and the patience
+to let it index once.
+
+What running one actually asks of you
+-------------------------------------
+
+* **A small always-on computer.** A Raspberry Pi 5 with 8 GB of RAM and an NVMe
+  SSD is enough. See `Recommended hardware`_.
+* **Disk space.** The Ravencoin history was about 45 GB in August 2026, plus the
+  indexes on top. A 1 TB drive is comfortable.
+* **Patience, once.** The first build downloads and indexes years of history. That
+  takes hours on a fast machine and can take longer on a small one. After that,
+  keeping up with new blocks is light work.
+* **Electricity and a bit of bandwidth.** Roughly what a phone charger uses.
+
+What it does not ask of you
+---------------------------
+
+* **It does not touch your coins.** This server has no wallet. It cannot spend,
+  receive or hold anything. The Core node it runs has its wallet disabled.
+* **It does not need your keys.** Wallets keep their own keys and sign their own
+  transactions. A server never sees a private key or a seed phrase.
+* **It does not have to be public.** Many people run one purely for their own
+  wallets, on their own network. That is a completely valid use, and it already
+  improves your own privacy.
+* **It does not require you to open your home network** unless you decide to serve
+  other people. If you do want to, see `Publishing a public node`_.
+
+If any of that sounds like more than you want to take on, run it privately for
+yourself first. A private node is still a real node, and you can always publish it
+later.
+
 This is the maintained ALENOC fork of ElectrumX-RVN.  It is designed for
 modern Ravencoin operation after the August 2026 consensus incident, preserves
 Ravencoin asset indexing and RPC methods, and adds explicit validation of the
