@@ -1,6 +1,7 @@
 .git
 .env
 **/*.env
+.secrets/
 **/*.key
 **/*.pem
 **/*.p12

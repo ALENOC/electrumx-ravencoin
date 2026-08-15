@@ -40,10 +40,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Validate Compose deployment model
-        env:
-          ELECTRUMX_ENV_FILE: contrib/electrumx.env.example
-          ELECTRUMX_TLS_DIRECTORY: /tmp
-        run: docker compose config --quiet
+        run: |
+          mkdir -p .secrets
+          printf 'ci-user\n' > .secrets/raven_rpc_user
+          printf 'ci-password-not-for-production\n' > .secrets/raven_rpc_password
+          cp .env.example .env
+          cp contrib/electrumx.env.example contrib/electrumx.env
+          bash -n setup.sh docker/core/entrypoint.sh docker/core/healthcheck.sh \
+            contrib/docker/electrumx-entrypoint.sh
+          docker compose config --quiet
+          docker compose -f compose.yaml -f compose.tls.yaml config --quiet
+          docker compose -f compose.existing-core.yaml config --quiet
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Build amd64 and arm64 images without publishing
@@ -52,4 +59,11 @@ jobs:
           context: .
           file: contrib/Dockerfile
           platforms: linux/amd64,linux/arm64
+          push: false
+      - name: Build pinned bundled Core image for amd64 without publishing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/core/Dockerfile
+          platforms: linux/amd64
           push: false
