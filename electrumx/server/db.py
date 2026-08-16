@@ -38,6 +38,11 @@ UTXO = namedtuple("UTXO", "tx_num tx_pos tx_hash height name value")
 NULL_U32 = b'\xff\xff\xff\xff'
 NULL_TXNUMB = b'\xff\xff\xff\xff\xff'
 
+#: A short prefix (even a single character) can match a large share of the
+#: asset namespace; bound the scan so cost is proportional to a worst case
+#: fixed in advance, not to how many assets happen to match.
+MAX_ASSETS_WITH_PREFIX = 1000
+
 PREFIX_UTXO_HISTORY = b'h'
 PREFIX_HASHX_LOOKUP = b'u'
 PREFIX_UTXO_UNDO = b'U'
@@ -1573,9 +1578,14 @@ class DB:
             return ret_val
         return await run_in_thread(read_messages)
 
-    async def get_assets_with_prefix(self, prefix: bytes):
+    async def get_assets_with_prefix(self, prefix: bytes, limit: int = MAX_ASSETS_WITH_PREFIX):
         def find_assets():
-            return [asset[1:].decode('ascii') for asset, _ in self.suid_db.iterator(prefix=PREFIX_ASSET_TO_ID+prefix)]
+            matches = []
+            for asset, _ in self.suid_db.iterator(prefix=PREFIX_ASSET_TO_ID + prefix):
+                if len(matches) >= limit:
+                    break
+                matches.append(asset[1:].decode('ascii'))
+            return matches
         return await run_in_thread(find_assets)
 
     async def lookup_asset_meta_history(self, asset_name: bytes):

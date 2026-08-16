@@ -1948,9 +1948,14 @@ class ElectrumX(SessionBase):
 
     
     async def get_assets_with_prefix(self, prefix: str):
+        from electrumx.server.db import MAX_ASSETS_WITH_PREFIX  # avoid an import cycle
         check_asset(prefix)
+        # Charged before the scan, at the bound's worst case: a short prefix can
+        # match a large share of the namespace, and the work below is capped to
+        # MAX_ASSETS_WITH_PREFIX regardless, so cost must not wait to be
+        # measured after doing potentially unbounded work for free.
+        self.bump_cost(1.0 + MAX_ASSETS_WITH_PREFIX / 10)
         ret = await self.db.get_assets_with_prefix(prefix.encode('ascii'))
-        self.bump_cost(1.0 + len(ret) / 10)
         return ret
 
     async def get_messages(self, name):
