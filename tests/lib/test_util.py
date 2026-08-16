@@ -216,3 +216,55 @@ def test_pack_varbytes():
         data = util.pack_varbytes(test)
         value, size = tx.read_varbytes(data, 0)
         assert value == test and size == len(data)
+
+
+def test_data_parser_is_finished_only_true_at_end():
+    # RVN-09: is_finished() must report done only when every byte has been
+    # consumed, not when exactly one byte remains unread.
+    parser = util.DataParser(b'\x01\x02\x03')
+    assert not parser.is_finished()
+    parser.read_byte()
+    assert not parser.is_finished()
+    parser.read_byte()
+    # One byte still unread: must NOT report finished here.
+    assert not parser.is_finished()
+    parser.read_byte()
+    assert parser.is_finished()
+
+
+def test_data_parser_is_finished_does_not_silently_drop_trailing_byte():
+    # A caller pattern used throughout block_processor.py/mempool.py:
+    # `while not parser.is_finished(): read_byte()`. With the off-by-one,
+    # the loop stops one byte early and silently drops the last byte
+    # instead of consuming (or rejecting) it.
+    parser = util.DataParser(b'\xaa\xbb\xcc')
+    consumed = []
+    while not parser.is_finished():
+        consumed.append(parser.read_byte())
+    assert consumed == [b'\xaa', b'\xbb', b'\xcc']
+
+
+def test_data_parser_is_finished_empty_data():
+    assert util.DataParser(b'').is_finished()
+
+
+def test_deeply_nested_json_becomes_a_clean_protocol_error():
+    # RVN-08: json.loads() raises RecursionError (not JSONDecodeError) on
+    # a deeply nested payload, which upstream aiorpcx only catches
+    # JSONDecodeError/UnicodeDecodeError for. Left unpatched, a
+    # RecursionError bypasses the clean PARSE_ERROR/ProtocolError
+    # response path every other malformed-JSON case goes through.
+    import aiorpcx
+    deeply_nested = (b'[' * 20000) + (b']' * 20000)
+    with pytest.raises(aiorpcx.ProtocolError) as excinfo:
+        aiorpcx.JSONRPCAutoDetect._message_to_payload(deeply_nested)
+    assert excinfo.value.code == aiorpcx.JSONRPC.PARSE_ERROR
+    assert 'nesting' in excinfo.value.message
+
+
+def test_ordinary_malformed_json_is_unaffected():
+    import aiorpcx
+    with pytest.raises(aiorpcx.ProtocolError) as excinfo:
+        aiorpcx.JSONRPCAutoDetect._message_to_payload(b'{not valid json')
+    assert excinfo.value.code == aiorpcx.JSONRPC.PARSE_ERROR
+    assert 'invalid JSON' in excinfo.value.message

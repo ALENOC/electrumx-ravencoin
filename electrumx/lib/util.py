@@ -28,6 +28,7 @@
 
 import array
 import inspect
+import json
 import logging
 import sys
 from collections.abc import Container, Mapping
@@ -463,7 +464,7 @@ class DataParser:
         if self.data is None:
             return True
         else:
-            return self.cursor >= self.length - 1
+            return self.cursor >= self.length
 
 
 # We monkey-patch aiorpcx.TaskGroup._add_task.
@@ -533,3 +534,31 @@ _aiorpcx_orig_unset_task_deadline = aiorpcx.curio._unset_task_deadline
 aiorpcx.curio._set_new_deadline = _aiorpcx_monkeypatched_set_new_deadline
 aiorpcx.curio._set_task_deadline = _aiorpcx_monkeypatched_set_task_deadline
 aiorpcx.curio._unset_task_deadline = _aiorpcx_monkeypatched_unset_task_deadline
+
+
+# We monkey-patch aiorpcx.JSONRPC._message_to_payload (RVN-08).
+# json.loads() uses a recursive-descent parser: a deeply nested payload
+# (e.g. thousands of nested '[' or '{') exhausts Python's recursion limit
+# and raises RecursionError instead of json.JSONDecodeError. The upstream
+# method only catches JSONDecodeError/UnicodeDecodeError, so a
+# RecursionError here bypasses the clean PARSE_ERROR/ProtocolError
+# response path every other malformed-JSON case goes through. This patch
+# adds exactly that one extra case, reusing the same cls._error(...)
+# construction as the two cases upstream already handles the same way.
+# TODO: this monkey-patch can be removed once aiorpcx catches
+#       RecursionError itself (or the message size/depth is bounded
+#       earlier, before json.loads sees it).
+def _patched_message_to_payload(cls, message):
+    '''Returns a Python object or a ProtocolError.'''
+    try:
+        return json.loads(message.decode())
+    except UnicodeDecodeError:
+        error_message = 'messages must be encoded in UTF-8'
+    except json.JSONDecodeError:
+        error_message = 'invalid JSON'
+    except RecursionError:
+        error_message = 'JSON nesting too deep'
+    raise cls._error(cls.PARSE_ERROR, error_message, True, None)
+
+
+aiorpcx.JSONRPC._message_to_payload = classmethod(_patched_message_to_payload)
