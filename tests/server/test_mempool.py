@@ -288,12 +288,47 @@ def _plain_tx(hash160s):
     return double_sha256(raw), raw
 
 
+async def _fetch_and_accept_in_order(mempool, hashes):
+    # Calls the lower-level per-batch fetch directly with an explicit,
+    # ordered `hashes` tuple, bypassing MemPool.keep_synchronized()'s
+    # set-based hash collection entirely (see RA-1 in
+    # test_verifier_state_does_not_leak_across_transactions for why that
+    # matters). `hashes` is iterated in this exact order by
+    # deserialize_txs()'s `for tx_hash, raw_tx in zip(hashes, raw_txs):`.
+    all_hashes = frozenset(hashes)
+    return await mempool._fetch_and_accept(
+        tuple(hashes), all_hashes,
+        set(), set(), set(), set(), set(), set(), set(), set(),
+    )
+
+
 @pytest.mark.asyncio
 async def test_verifier_state_does_not_leak_across_transactions():
     # RVN-03: verifier_string/restricted_asset were declared once, outside
     # the per-tx loop in deserialize_txs(). A tx that set them left the
     # values in place for whatever tx was processed after it, even if that
     # next tx had nothing to do with a restricted asset at all.
+    #
+    # RA-1 design note: an earlier version of this test drove the scenario
+    # through MemPool.keep_synchronized(), whose hash-collection pipeline is
+    # set-based (`hashes = set(...)` in _refresh_hashes,
+    # `new_hashes = list(all_hashes.difference(txs))` in _process_mempool).
+    # Set iteration order for bytes depends on both the interpreter's hash
+    # seed and the actual byte content, and both were effectively
+    # randomized here (os.urandom -> unpredictable tx hash), so which
+    # transaction got parsed first -- and therefore whether the leak's
+    # precondition (the restricted tx parsed BEFORE the unrelated one) was
+    # even exercised -- was not deterministic. Reproduced empirically: with
+    # the RVN-03 fix reverted, the old test failed only 4-6 times out of 10
+    # repeated runs, under the default randomized hash seed and under
+    # several fixed PYTHONHASHSEED values alike (a fixed seed alone does
+    # not fix it, since the hashed byte content differs every run too).
+    #
+    # This version calls the lower-level MemPool._fetch_and_accept directly
+    # with an explicit, ordered `hashes` tuple (see
+    # _fetch_and_accept_in_order above), bypassing set-based ordering
+    # entirely, and exercises both orderings explicitly instead of leaving
+    # the ordering to chance.
     api = API()
     hash160 = os.urandom(20)
 
@@ -307,21 +342,26 @@ async def test_verifier_state_does_not_leak_across_transactions():
     tx2_hash, raw2 = _plain_tx([hash160])
 
     api.raw_txs = {tx1_hash: raw1, tx2_hash: raw2}
-    api.txs = {tx1_hash: object(), tx2_hash: object()}  # only hashes are used
-    api.ordered_adds = [tx1_hash, tx2_hash]
 
-    mempool = MemPool(env, api)
-    event = Event()
-    async with TaskGroup() as group:
-        await group.spawn(mempool.keep_synchronized, event)
-        await event.wait()
-        await group.cancel_remaining()
-
-    assert tx1_hash in mempool.verifiers.get('$RESTRICTED', {})
-    assert tx2_hash not in mempool.verifiers.get('$RESTRICTED', {}), (
+    # Ordering A: the restricted/verifier tx is parsed BEFORE the unrelated
+    # tx. This is the ordering that actually exercises the leak.
+    mempool_a = MemPool(env, api)
+    await _fetch_and_accept_in_order(mempool_a, (tx1_hash, tx2_hash))
+    assert tx1_hash in mempool_a.verifiers.get('$RESTRICTED', {})
+    assert tx2_hash not in mempool_a.verifiers.get('$RESTRICTED', {}), (
         'a transaction with no restricted asset or verifier output must '
         'not inherit a prior transaction\'s parsing state')
-    assert mempool.txs[tx2_hash].out_pairs[0][2] is None
+    assert mempool_a.txs[tx2_hash].out_pairs[0][2] is None
+
+    # Ordering B: the reverse. The unrelated tx is parsed first (nothing to
+    # leak into it yet), then the restricted/verifier tx. Confirms the
+    # reset happens on every iteration, not just once, and that the second
+    # tx still correctly picks up its own state after a prior unrelated tx.
+    mempool_b = MemPool(env, api)
+    await _fetch_and_accept_in_order(mempool_b, (tx2_hash, tx1_hash))
+    assert tx1_hash in mempool_b.verifiers.get('$RESTRICTED', {})
+    assert tx2_hash not in mempool_b.verifiers.get('$RESTRICTED', {})
+    assert mempool_b.txs[tx2_hash].out_pairs[0][2] is None
 
 
 @pytest.mark.asyncio
