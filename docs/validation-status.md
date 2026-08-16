@@ -30,16 +30,51 @@ what the qualification suite does and does not prove.
 
 | Architecture | Status | Notes |
 |---|---|---|
-| linux/amd64 | QUALIFIED | Prebuilt release binary, checksum-verified against the certified commit |
-| linux/arm64 | QUALIFIED | Compiled from the certified source archive; `make check` passed as part of the build |
+| linux/amd64 | QUALIFIED | Prebuilt release binary, checksum-verified against the certified commit; report persisted under `core-safety/production/certifications/` |
+| linux/arm64 | BUILD + PARTIAL CERTIFICATION | Native ARM64 GitHub Actions runner (`ubuntu-24.04-arm`), same pinned source commit. `make check` (the build-time consensus test suite) and a startup/RPC/REST/txindex/restart smoke suite both PASS - runs [31912711067](https://github.com/ALENOC/electrumx-ravencoin/actions/runs/31912711067) and [31913521218](https://github.com/ALENOC/electrumx-ravencoin/actions/runs/31913521218), artifacts `core-artifact-qualification-arm64` (expire 2026-11-13). Observed `ravend` sha256 `7e23e00a470c05ac39921ef3548284f93befad7a174587d0118f4f941648991b`, `raven-cli` sha256 `4797c653d9a51eb27ed2b694f222ff145bae4fb24139b62c3ec733bba567891b`. Not run: the incident-specific probes (`kawpow-header-shape`, `nheight-binding-rejects-forged`, `post-boundary-valid-accepted`, `incident-checkpoint-hash`, `transfer-overflow-deployment`) and mainnet (rather than regtest) genesis that back the amd64 status. No report is persisted in this repository; the CI artifacts are the only copy and they expire. A physical Raspberry Pi 5 deployment reproduced these exact hashes and validated the deployment path end to end; see the next subsection. |
 
-Both architectures: version, genesis, regtest startup, real REST
+For linux/amd64: version, genesis, regtest startup, real REST
 (`/rest/block/<hash>.bin`), txindex, graceful shutdown and container restart
-all PASS. `assetindexRpc` is `LIVE-ONLY` on both architectures: the
-qualification environment runs a wallet-disabled regtest node, which cannot
-legitimately exercise asset RPC/index behavior. Live asset RPC is proven
-separately, against the synchronized mainnet node, in the live deployment
-gates below.
+all PASS. `assetindexRpc` is `LIVE-ONLY`: the qualification environment runs a
+wallet-disabled regtest node, which cannot legitimately exercise asset
+RPC/index behavior. Live asset RPC is proven separately, against the
+synchronized mainnet node, in the live deployment gates below. linux/arm64
+passed the same startup/REST/txindex/restart checks plus `make check`, but
+has not been run through the incident-specific mandatory probes above, so it
+is not at parity with the amd64 row.
+
+### Physical Raspberry Pi 5 deployment (2026-08-16)
+
+A real deployment executed the documented Raspberry Pi procedure on physical
+hardware: Raspberry Pi 5 (8 GB, aarch64), Raspberry Pi OS Lite 64-bit
+(Debian 13 trixie) on microSD, a 2 TB SSD/NVMe in a USB enclosure mounted
+by UUID at `/srv/ravencoin`, Docker data-root `/srv/ravencoin/docker`
+guarded by `RequiresMountsFor=/srv/ravencoin`, and the documented JMicron
+`152d:a580` usb-storage quirk applied as the USB compatibility fallback.
+
+| Check | Result |
+|---|---|
+| `docker compose up -d --build` | PASS; 35/35 build steps, 967.9 s total, Core ARM64 compile-and-test stage ~951 s (some cached dependency layers reused; a single observed deployment, not a clean-build guarantee) |
+| Docker storage | PASS; `DockerRootDir=/srv/ravencoin/docker`; `/srv/ravencoin` on `/dev/sda1 ext4 rw,noatime`; Compose named volumes on the SSD-backed data-root |
+| Binary identity | PASS; `ravend --version` reported `Raven Core Daemon version v4.8.0.0-gb60f50e04f`, matching the pinned commit `b60f50e04f1fba425b28804e61be2694faaf3469` |
+| RPC identity | PASS; `getnetworkinfo` reported `"version": 4080000`, `"subversion": "/Ravencoin:4.8.0/"` |
+| Containers | PASS; `ravencoin-core` healthy, `electrumx` healthy, one-shot `rpc-secrets-init` completed |
+| ARM64 binary hashes | MATCH the native ARM64 CI observations above (`ravend` `7e23e00a...`, `raven-cli` `4797c653...`): the physical Raspberry Pi 5 build produced the same SHA-256 values previously observed on the native ARM64 CI build. Evidence of matching build outputs across the two tested ARM64 environments, not a formal reproducible-build guarantee, and not equivalence with the amd64 release artifact |
+| Storage stability | PASS; after the quirk, no Buffer I/O errors, critical target errors, USB resets, device offline events or Read Capacity errors during the test period; ~30.8 MB/s direct read observed on the fallback |
+| Power/thermal | PASS; `vcgencmd get_throttled` = `throttled=0x0`, ~67.5 C during operation |
+
+Still pending from this physical run, so ARM64 is not consensus-qualified:
+full initial blockchain synchronization, full ElectrumX indexing to chain
+tip, the incident-specific KAWPOW/nHeight probes, checkpoint validation
+around height 4,487,775, affected-chain validation from height 4,487,776,
+`transfer_overflow` activation around height 4,493,664, and full
+restart/reboot persistence after complete synchronization. At observation
+time the node was in initial synchronization (`blocks` 0, headers
+increasing) and ElectrumX, while healthy, correctly remained at daemon and
+database height 0.
+
+Summary: native ARM64 build validated; physical Raspberry Pi 5 deployment
+validated; full incident-specific ARM64 consensus qualification pending.
 
 ## Live deployment
 
