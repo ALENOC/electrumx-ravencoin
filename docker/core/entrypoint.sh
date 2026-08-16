@@ -62,7 +62,16 @@ else
     done < "$config_file"
     # ElectrumX reads raw blocks from Core's REST interface, so a configuration
     # written before that requirement was documented cannot index anything.
+    # Set RAVEN_CONFIG_NO_AUTO_REST=1 to opt out of this automatic edit and
+    # require rest=1 to already be present instead.
     if [ "$configured_rest" = false ]; then
+        if [ "${RAVEN_CONFIG_NO_AUTO_REST:-0}" = "1" ]; then
+            printf '%s\n' \
+                'rest=1 is required but missing from the existing Core configuration,' \
+                'and RAVEN_CONFIG_NO_AUTO_REST=1 disables automatic config edits.' \
+                'Add rest=1 to raven.conf yourself and restart.' >&2
+            exit 1
+        fi
         printf 'rest=1\n' >> "$config_file"
         printf '%s\n' 'Added the required rest=1 setting to the existing Core configuration.'
     fi
