@@ -194,6 +194,29 @@ def test_reference_anchor_present_allows_promotion_with_one_group(monkeypatch, t
     assert security["solo.example.org"] is Security.SAFE
 
 
+def test_unknown_operator_hostnames_do_not_manufacture_promotion_quorum(monkeypatch, tmp_path):
+    """SRV-05 applied to the SRV-04 gate: endpoints with no known operator
+    identity (operatorGroup absent from seeds/registry) fall back to a
+    per-hostname UNKNOWN-<hostname> group each. Two agreeing unknown
+    hostnames must not satisfy the two-independent-groups requirement,
+    since minting more of them costs an attacker nothing."""
+    security = asyncio.run(_run(monkeypatch, tmp_path, [
+        ("unknown1.example.org", 50002, None, 4_500_000, "a" * 64),
+        ("unknown2.example.org", 50002, None, 4_500_000, "a" * 64),
+    ]))
+    assert all(value is not Security.SAFE for value in security.values())
+
+
+def test_one_known_and_one_unknown_group_does_not_promote(monkeypatch, tmp_path):
+    """A single attested operator plus an unrelated unknown hostname is
+    still only one attested independent group."""
+    security = asyncio.run(_run(monkeypatch, tmp_path, [
+        ("known.example.org", 50002, "OPERATOR-A", 4_500_000, "a" * 64),
+        ("unknown.example.org", 50002, None, 4_500_000, "a" * 64),
+    ]))
+    assert all(value is not Security.SAFE for value in security.values())
+
+
 def test_reference_anchor_present_but_disagreeing_does_not_promote(monkeypatch, tmp_path):
     reference = ChainObservation(
         endpoint=EndpointId("(operator reference)", 0, Transport.TCP),
