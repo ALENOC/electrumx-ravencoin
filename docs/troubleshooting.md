@@ -60,6 +60,21 @@ waiting to historical indexing and then follow the tip. A missing `txindex` or
 `assetindex`, a disabled REST interface, or an unhealthy Core is a configuration
 problem to fix deliberately, not a reason to recreate databases.
 
+## ElectrumX served clients while far behind Core
+
+ElectrumX opens its client-facing TCP/SSL ports the first time it catches up
+to whatever height Core reported at that moment, and does not re-check after.
+If Core was itself still low (early in its own reindex) when ElectrumX first
+matched it, ElectrumX will keep serving clients from then on even while Core
+goes on to reindex much further and ElectrumX falls behind again; its own
+`blockchain.headers.subscribe` height stays honest, but it is a stale one.
+This is most likely after recovering from a Core reindex on a host that was
+also running ElectrumX throughout. Restarting the ElectrumX container resets
+this: it will not reopen client ports until it has genuinely caught up to
+Core's current tip. Restarting is normally cheap early (little indexed
+progress to redo) and expensive late; do it as soon as you notice, not after
+hours of indexing.
+
 ## Disk space is low
 
 Check `df -h`, Docker's storage usage and the filesystem containing the mounted
