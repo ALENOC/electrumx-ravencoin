@@ -61,6 +61,14 @@ mainnet server. If policy distribution is unavailable, the client uses its last
 verified cache or built-in baseline. It never treats an unknown future Core as
 safe merely because its version is higher.
 
+The same principle governs the optional monitor's SAFE promotion (see
+[Electrum monitor](electrum-monitor.md)): SAFE requires positively verified
+chain evidence for the specific endpoint being promoted. The absence of a
+detected conflict is not evidence of safety; a configured reference with no
+comparable evidence, and height alone, are not agreement. A suspected
+conflict is fail-closed on its own and only escalates to a demotion once a
+later, independent observation confirms it.
+
 ## What remains unchanged
 
 This server has no wallet and does not handle wallet seeds or private keys.

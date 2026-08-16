@@ -32,13 +32,27 @@ appear: `status` reports them separately instead. Observations retain a
 vantage-point identifier so unreachable-from-one-probe is not overstated as
 globally offline.
 
-A backend is promoted from certified-but-unverified to SAFE only once its
-chain evidence compares cleanly *and* is independently corroborated: either
-agreement across at least two independent (known) operator groups, or
-agreement with an explicit trusted reference (`--reference-height` /
-`--reference-tip-hash`, e.g. your own Core node). A suspected-but-unconfirmed
-disagreement or a lag never promotes, and neither does a single
-self-consistent group by itself.
+A backend is promoted from certified-but-unverified to SAFE only once its own
+chain evidence was actually compared and agreed, never merely because the
+overall crawl came back clean. Corroboration is scoped to what was actually
+compared: either a height/tip pair independently reported by at least two
+attested (known) operator groups, or genuine agreement with an explicit
+trusted reference (`--reference-height` / `--reference-tip-hash`, e.g. your
+own Core node; `--reference-checkpoint-hash` / `--reference-genesis-hash` are
+optional, stronger evidence for that reference). A configured reference with
+no comparable evidence, an endpoint claiming a height nobody actually checked
+it against, and a bare height being higher than everyone else's, are all *not*
+agreement by themselves: only the specific endpoints whose evidence was
+verified are promoted, not every reachable, otherwise-unverified endpoint in
+the crawl. A suspected-but-unconfirmed disagreement or a lag never promotes,
+and neither does a single self-consistent group by itself.
+
+A disagreement first classifies as suspected; it only escalates to a
+confirmed conflict, which demotes the offending group, once a *later*,
+independent crawl observes the same group conflicting again. Recovery from a
+confirmed conflict requires a positively verified clean comparison on a
+subsequent crawl, not merely one crawl where the offending endpoint went
+quiet or stopped answering.
 
 ## Running it
 
