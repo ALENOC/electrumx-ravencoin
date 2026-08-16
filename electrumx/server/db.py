@@ -1146,16 +1146,26 @@ class DB:
                 return []
             asset_ids = [asset_id]
         else:
-            asset_name_to_id = dict()
-            for asset_name in asset:
-                if asset_name is None:
-                    asset_name_to_id[None] = NULL_U32
-                    continue
-                if asset_name in asset_name_to_id: continue
-                idb = self.get_id_for_asset(asset_name.encode())
-                if idb is None: continue
-                asset_name_to_id[asset_name] = idb
-            asset_ids = asset_name_to_id.values()
+            asset_filter = asset
+
+            def resolve_asset_ids():
+                # RVN-01: resolving a whole asset-name filter is a
+                # synchronous, per-name LevelDB lookup. For an
+                # attacker-controlled filter this must run in the thread
+                # pool like read_utxos() below, not directly on the event
+                # loop where it would block every other session.
+                asset_name_to_id = dict()
+                for asset_name in asset_filter:
+                    if asset_name is None:
+                        asset_name_to_id[None] = NULL_U32
+                        continue
+                    if asset_name in asset_name_to_id: continue
+                    idb = self.get_id_for_asset(asset_name.encode())
+                    if idb is None: continue
+                    asset_name_to_id[asset_name] = idb
+                return list(asset_name_to_id.values())
+
+            asset_ids = await run_in_thread(resolve_asset_ids)
 
         def read_utxos():
             utxos = []
