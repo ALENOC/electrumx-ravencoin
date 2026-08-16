@@ -26,8 +26,8 @@ small host is pleasant to operate.
 
 | Platform | Practical starting point | Current wording |
 |---|---|---|
-| Raspberry Pi 5 | 8 GB minimum; 16 GB more comfortable; NVMe | Recommended low-power ARM64 target; bundled Core qualified |
-| Orange Pi 5-class | 8 GB minimum; 16 GB preferred; NVMe | Recommended low-cost ARM64 target; bundled Core qualified |
+| Raspberry Pi 5 | 8 GB minimum; 16 GB more comfortable; NVMe | Recommended low-power ARM64 target; bundled Core builds natively in CI and passes `make check` plus a basic smoke suite, not the full incident-specific certification |
+| Orange Pi 5-class | 8 GB minimum; 16 GB preferred; NVMe | Recommended low-cost ARM64 target; same partial CI validation as Raspberry Pi 5 |
 | x86-64 mini-PC/NUC | 16 GB or more; NVMe | Fastest and simplest bundled amd64 route |
 | Dedicated server/VPS | 16 GB or more; persistent SSD/NVMe | Useful for a long-lived public node if raw TCP is available |
 
@@ -46,13 +46,26 @@ The Raspberry Pi 5 is the first low-power target to consider:
 - prefer the documented PCIe Gen 2 setting for unattended stability rather than
   assuming every Gen 3 drive/carrier combination is validated.
 
-The bundled Core artifact is qualified for both amd64 and ARM64; `docker
-compose up -d --build` on a Raspberry Pi 5 builds and runs the ARM64 Core
-image directly, using the same certified source identity as the amd64 build.
-See [Validation status](validation-status.md) for the current per-architecture
-qualification evidence. Existing-Core mode remains available for operators who
-already manage a separate, non-pruned Core; using it does not by itself make
-an unreviewed Core release safe.
+The bundled Core artifact is qualified for amd64. `docker compose up -d
+--build` on a Raspberry Pi 5 builds and runs an ARM64 Core image directly,
+from the same certified source identity as the amd64 build. That ARM64 build
+has passed on native ARM64 GitHub Actions hardware (`make check` plus a
+startup/RPC/REST/txindex/restart smoke suite; run IDs and hashes in
+[Validation status](validation-status.md)), but has not been run through the
+incident-specific consensus probes that back the amd64 status, and no report
+is persisted in this repository. A physical Raspberry Pi 5 deployment has
+since executed the documented SSD procedure end to end: local ARM64 build
+(about 16 minutes observed, with cached dependency layers), Core and
+ElectrumX startup and healthchecks, RPC identity checks and binary hashes
+matching the native ARM64 CI build; full incident-specific consensus
+qualification is still pending. Existing-Core mode remains available for
+operators who already manage a separate, non-pruned Core; using it does not
+by itself make an unreviewed Core release safe.
+
+For a complete walk-through that keeps the operating system on the microSD
+and puts Docker, the blockchain and the ElectrumX database on a USB SSD or
+an M.2 NVMe drive, see the Raspberry Pi 5 section of the repository
+[README](../README.rst).
 
 ## Orange Pi 5 family
 
@@ -66,8 +79,10 @@ exact model before buying storage or writing boot instructions:
 - check that the board's thermal solution can sustain a long index build;
 - do not assume an accessory or image for one family member applies to another.
 
-The bundled Core image is qualified for ARM64 and runs the same way on the
-Orange Pi 5 family as on the Raspberry Pi 5. The Orange Pi Zero 3 and other
+The bundled Core image builds and runs the same way on the Orange Pi 5 family
+as on the Raspberry Pi 5, from the same pinned ARM64 source path described
+above, with the same partial CI validation and the same gap versus full
+qualification. The Orange Pi Zero 3 and other
 roughly 1-2 GB boards are not suitable for a combined Core plus ElectrumX
 workload regardless of architecture support. They may be useful for a
 different, Core-only experiment, but low memory and swap pressure make them a

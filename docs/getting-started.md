@@ -65,10 +65,14 @@ need persistent space. NVMe or SSD is strongly preferred; microSD is not a
 reasonable location for this workload. See [Hardware](hardware.md) before
 buying a board.
 
-The bundled Core image is qualified for both amd64 and ARM64, including
-Raspberry Pi 5 and Orange Pi 5-class boards; see [Validation
-status](validation-status.md) for the current per-architecture qualification
-evidence. Existing-Core mode remains available for operators who already
+The bundled Core image is qualified for amd64. It also builds for ARM64,
+including Raspberry Pi 5 and Orange Pi 5-class boards, from the same pinned
+source commit, on native ARM64 GitHub Actions hardware, passing `make check`
+plus a startup/RPC/REST/txindex/restart smoke suite; it has not been run
+through the incident-specific probes the amd64 status rests on, and no report
+is persisted in this repository. See [Validation
+status](validation-status.md) for the current per-architecture evidence.
+Existing-Core mode remains available for operators who already
 manage a separate Core deployment. A board being recommended hardware is not
 the same as its complete runtime having been validated.
 
