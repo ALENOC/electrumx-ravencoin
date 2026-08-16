@@ -11,8 +11,9 @@ from aiorpcx import Event, TaskGroup, sleep, ignore_after
 
 from electrumx.lib.coins import Ravencoin
 from electrumx.lib.hash import HASHX_LEN, hex_str_to_hash, hash_to_hex_str, double_sha256
+from electrumx.lib.script import OpCodes, Script
 from electrumx.lib.tx import Tx, TxInput, TxOutput
-from electrumx.server.mempool import MemPool, MemPoolAPI
+from electrumx.server.mempool import MemPool, MemPoolAPI, MemPoolTx
 
 coin = Ravencoin
 env = SimpleNamespace(coin=coin)
@@ -260,6 +261,130 @@ def in_caplog(caplog, message):
     return any(message in record.message for record in caplog.records)
 
 
+def _transfer_asset_script(hash160, asset_name, value=1):
+    # A standard P2PKH prefix followed by an OP_RVN_ASSET transfer payload,
+    # matching what mempool.py's deserialize_txs() (elif 0 < op_ptr:) parses:
+    # a 3-byte marker, a 1-byte type ('t'), a var_bytes asset name, and an
+    # 8-byte LE value.
+    payload = b'rvn' + b't' + bytes([len(asset_name)]) + asset_name.encode('ascii') \
+        + value.to_bytes(8, 'little')
+    return (coin.hash160_to_P2PKH_script(hash160) + bytes([OpCodes.OP_RVN_ASSET])
+            + Script.push_data(payload))
+
+
+
+def _null_verifier_script(verifier_string):
+    # ASSET_NULL_VERIFIER_TEMPLATE: OP_RVN_ASSET OP_RESERVED <push>, with no
+    # P2PKH prefix (op_ptr == 0), matching deserialize_txs()'s op_ptr == 0
+    # branch's ASSET_NULL_VERIFIER_TEMPLATE case.
+    payload = bytes([len(verifier_string)]) + verifier_string.encode('ascii')
+    return bytes([OpCodes.OP_RVN_ASSET, OpCodes.OP_RESERVED]) + Script.push_data(payload)
+
+
+def _plain_tx(hash160s):
+    tx = Tx(2, [TxInput(bytes(32), 4294967295, b'', 4294967295)],
+             [TxOutput(1000, coin.hash160_to_P2PKH_script(hash160s[0]))], 0, [])
+    raw = tx.serialize()
+    return double_sha256(raw), raw
+
+
+@pytest.mark.asyncio
+async def test_verifier_state_does_not_leak_across_transactions():
+    # RVN-03: verifier_string/restricted_asset were declared once, outside
+    # the per-tx loop in deserialize_txs(). A tx that set them left the
+    # values in place for whatever tx was processed after it, even if that
+    # next tx had nothing to do with a restricted asset at all.
+    api = API()
+    hash160 = os.urandom(20)
+
+    restricted_script = _transfer_asset_script(hash160, '$RESTRICTED')
+    verifier_script = _null_verifier_script('SOMEQUALIFIER')
+    tx1 = Tx(2, [TxInput(bytes(32), 4294967295, b'', 4294967295)],
+             [TxOutput(0, restricted_script), TxOutput(0, verifier_script)], 0, [])
+    raw1 = tx1.serialize()
+    tx1_hash = double_sha256(raw1)
+
+    tx2_hash, raw2 = _plain_tx([hash160])
+
+    api.raw_txs = {tx1_hash: raw1, tx2_hash: raw2}
+    api.txs = {tx1_hash: object(), tx2_hash: object()}  # only hashes are used
+    api.ordered_adds = [tx1_hash, tx2_hash]
+
+    mempool = MemPool(env, api)
+    event = Event()
+    async with TaskGroup() as group:
+        await group.spawn(mempool.keep_synchronized, event)
+        await event.wait()
+        await group.cancel_remaining()
+
+    assert tx1_hash in mempool.verifiers.get('$RESTRICTED', {})
+    assert tx2_hash not in mempool.verifiers.get('$RESTRICTED', {}), (
+        'a transaction with no restricted asset or verifier output must '
+        'not inherit a prior transaction\'s parsing state')
+    assert mempool.txs[tx2_hash].out_pairs[0][2] is None
+
+
+@pytest.mark.asyncio
+async def test_malformed_null_template_output_falls_back_not_fatal():
+    # RVN-05 (mempool side, op_ptr == 0 branch): a malformed
+    # qualifier/verifier/freeze null-template output must fall back to a
+    # standard hashX for that output, symmetric to the op_ptr > 0 branch's
+    # existing fallback, rather than raising out of deserialize_txs().
+    api = API()
+    hash160 = os.urandom(20)
+    # ASSET_NULL_TEMPLATE shape (OP_RVN_ASSET, <20-byte push>, <push>) but
+    # with an empty asset-portion push, which DataParser cannot read a
+    # length-prefixed name from.
+    malformed_script = (bytes([OpCodes.OP_RVN_ASSET]) + Script.push_data(hash160)
+                         + Script.push_data(b''))
+    tx = Tx(2, [TxInput(bytes(32), 4294967295, b'', 4294967295)],
+             [TxOutput(1000, malformed_script)], 0, [])
+    raw = tx.serialize()
+    tx_hash = double_sha256(raw)
+
+    api.raw_txs = {tx_hash: raw}
+    api.txs = {tx_hash: object()}
+    api.ordered_adds = [tx_hash]
+
+    mempool = MemPool(env, api)
+    event = Event()
+    async with TaskGroup() as group:
+        await group.spawn(mempool.keep_synchronized, event)
+        await event.wait()
+        await group.cancel_remaining()
+
+    assert tx_hash in mempool.txs
+    assert mempool.txs[tx_hash].out_pairs[0][2] is None
+
+
+@pytest.mark.asyncio
+async def test_malformed_mempool_tx_is_dropped_not_fatal(caplog):
+    # RVN-05 (mempool side): a single malformed mempool transaction must
+    # not kill keep_synchronized for every session. The well-formed tx in
+    # the same batch must still be accepted.
+    api = API()
+    hash160 = os.urandom(20)
+    good_hash, good_raw = _plain_tx([hash160])
+    bad_hash = os.urandom(32)
+    bad_raw = b'\xff' * 10  # not a parseable transaction
+
+    api.raw_txs = {good_hash: good_raw, bad_hash: bad_raw}
+    api.txs = {good_hash: object(), bad_hash: object()}
+    api.ordered_adds = [good_hash, bad_hash]
+
+    mempool = MemPool(env, api)
+    event = Event()
+    with caplog.at_level(logging.WARNING):
+        async with TaskGroup() as group:
+            await group.spawn(mempool.keep_synchronized, event)
+            await event.wait()
+            await group.cancel_remaining()
+
+    assert good_hash in mempool.txs
+    assert bad_hash not in mempool.txs
+    assert in_caplog(caplog, 'failed to parse mempool tx')
+
+
 @pytest.mark.asyncio
 async def test_keep_synchronized(caplog):
     api = API()
@@ -300,6 +425,42 @@ async def test_balance_delta():
         expected = deltas.get(hashX, 0)
         result = await mempool.balance_delta(hashX, None)
         assert result.get(None, 0) == expected
+
+
+@pytest.mark.asyncio
+async def test_balance_delta_does_not_leak_across_assets():
+    # RVN-02: is_asset_valid() closed over the `asset` parameter of
+    # balance_delta(), but the per-pair loop used the same name
+    # (`for h168, v, asset in tx.in_pairs/out_pairs`), rebinding it on
+    # every iteration. Once a tx carried more than one asset, every
+    # filter check after the first pair used whichever asset the loop
+    # last saw instead of the caller's actual filter -- so a client
+    # asking for one asset's unconfirmed balance could see another
+    # asset's amount folded in, or its own amount dropped.
+    api = API()
+    mempool = MemPool(env, api)
+    hashX = os.urandom(HASHX_LEN)
+    tx_hash = os.urandom(32)
+    # A single tx with three outputs to the same address: native RVN,
+    # then two different assets. The native-RVN pair is iterated first
+    # so a shadowing bug corrupts every check after it.
+    tx = MemPoolTx(
+        prevouts=(),
+        in_pairs=(),
+        out_pairs=(
+            (hashX, 1000, None),
+            (hashX, 500, 'FOO'),
+            (hashX, 700, 'BAR'),
+        ),
+        fee=0, size=200)
+    mempool.txs[tx_hash] = tx
+    mempool.hashXs[hashX].add(tx_hash)
+
+    assert dict(await mempool.balance_delta(hashX, 'FOO')) == {'FOO': 500}
+    assert dict(await mempool.balance_delta(hashX, 'BAR')) == {'BAR': 700}
+    assert dict(await mempool.balance_delta(hashX, False)) == {None: 1000}
+    # A filter list must isolate FOO from BAR too.
+    assert dict(await mempool.balance_delta(hashX, ['FOO'])) == {'FOO': 500}
 
 
 @pytest.mark.asyncio
@@ -379,6 +540,33 @@ async def test_unordered_UTXOs():
         mempool_result = await mempool.unordered_UTXOs(hashX, None)
         our_result = utxos.get(hashX, [])
         assert set(our_result) == set(mempool_result)
+
+
+@pytest.mark.asyncio
+async def test_unordered_UTXOs_scalar_asset_filter_is_exact_and_safe():
+    # RVN-02 sibling defect: is_asset_valid() treated a scalar string
+    # filter as Iterable (true for str) and did substring/membership
+    # matching (`db_asset in asset`) instead of equality, crashing with
+    # TypeError as soon as a native-RVN (None) pair was present. This is
+    # in the direct call path of RVN-01's hashX_listunspent.
+    api = API()
+    mempool = MemPool(env, api)
+    hashX = os.urandom(HASHX_LEN)
+    tx_hash = os.urandom(32)
+    tx = MemPoolTx(
+        prevouts=(),
+        in_pairs=(),
+        out_pairs=(
+            (hashX, 1000, None),
+            (hashX, 500, 'FOO'),
+            (hashX, 700, 'FO'),
+        ),
+        fee=0, size=200)
+    mempool.txs[tx_hash] = tx
+    mempool.hashXs[hashX].add(tx_hash)
+
+    result = await mempool.unordered_UTXOs(hashX, 'FOO')
+    assert [u.name for u in result] == ['FOO']
 
 
 @pytest.mark.asyncio

@@ -681,234 +681,258 @@ class MemPool(object):
             read_tx_and_size = read_tx
             # hashx -> txid -> txpos -> (data, expirey)
             maybe_broadcast = defaultdict(lambda: defaultdict(dict))  # type: Dict[bytes, Dict[bytes, Dict[int, Tuple[str, bytes, int]]]]
-            verifier_string = None
-            verifier_string_pos = None
-            restricted_asset = None
-            restricted_asset_pos = None
             txs = {}
             for tx_hash, raw_tx in zip(hashes, raw_txs):
                 # The daemon may have evicted the tx from its
                 # mempool or it may have gotten in a block
                 if not raw_tx:
                     continue
-                tx, tx_size, wit_hash = read_tx_and_size(raw_tx, 0)
-                # Convert the inputs and outputs into (hashX, value) pairs
-                # Drop generation-like inputs from MemPoolTx.prevouts
-                txin_pairs = tuple(
-                    (txin.prev_hash, txin.prev_idx)
-                    for txin in tx.inputs
-                    if not txin.is_generation()
-                )
-                txout_tuple_list = []
-                for vout_n, txout in enumerate(tx.outputs):
-                    value = txout.value
-
-                    # Every vout needs to be added for other methods to work properly
-
-                    # Best effort for standard scripts
-                    ops = Script.get_ops(txout.pk_script)
-                    op_ptr = -1
-                    for i in range(len(ops)):
-                        op = ops[i][0]  # The OpCode
-                        if op == OpCodes.OP_RVN_ASSET:
-                            op_ptr = i
-                            break
-
-                    if op_ptr > 0:
-                        # This script has OP_RVN_ASSET. Use everything before this for the script hash.
-                        # Get the raw script bytes ending ptr from the previous opcode.
-                        script_hash_end = ops[op_ptr - 1][1]
-                        hashX = to_hashX(txout.pk_script[:script_hash_end])
-                    else:
-                        # There is no OP_RVN_ASSET. Hash as-is.
-                        hashX = to_hashX(txout.pk_script)
-
-                    # Best effort for standard asset portions
-                    if op_ptr == 0:
-                        if match_script_against_template(ops, ASSET_NULL_TEMPLATE) > -1:
-                            h160 = ops[1][2]
-                            asset_portion = ops[2][2]
-                            asset_portion_deserializer = DataParser(asset_portion)
-                            asset_name = (
-                                asset_portion_deserializer.read_var_bytes_as_ascii()
-                            )
-                            flag = asset_portion_deserializer.read_boolean()
-                            qualifier_tags[asset_name][tx_hash] = (h160, vout_n, flag)
-                            tx_to_qualifier_tags[tx_hash].add(asset_name)
-                            h160_tags[h160][tx_hash] = (asset_name, vout_n, flag)
-                            tx_to_h160_tags[tx_hash].add(h160)
-                        elif (
-                            match_script_against_template(
-                                ops, ASSET_NULL_VERIFIER_TEMPLATE
-                            )
-                            > -1
-                        ):
-                            qualifiers_b = ops[2][2]
-                            qualifiers_deserializer = DataParser(qualifiers_b)
-                            verifier_string = (
-                                qualifiers_deserializer.read_var_bytes_as_ascii()
-                            )
-                            verifier_string_pos = vout_n
-                        elif (
-                            match_script_against_template(
-                                ops, ASSET_GLOBAL_RESTRICTION_TEMPLATE
-                            )
-                            > -1
-                        ):
-                            asset_portion = ops[3][2]
-                            asset_portion_deserializer = DataParser(asset_portion)
-                            asset_name = (
-                                asset_portion_deserializer.read_var_bytes_as_ascii()
-                            )
-                            flag = asset_portion_deserializer.read_boolean()
-                            freezes[asset_name][tx_hash] = (vout_n, flag)
-                            tx_to_freeze[tx_hash].add(asset_name)
-                        txout_tuple_list.append((hashX, value, None))
-                    elif 0 < op_ptr:
-                        try:
-                            next_op = ops[op_ptr + 1]
-                            asset_script = next_op[2]
-                            asset_deserializer = DataParser(asset_script)
-                            asset_deserializer.read_bytes(3)
-                            asset_type = asset_deserializer.read_int()
-                            asset_name = asset_deserializer.read_var_bytes_as_ascii()
-                            if asset_name[0] == "$":
-                                restricted_asset = asset_name
-                                restricted_asset_pos = vout_n
-                            if asset_type == b"o"[0]:
-                                creates[asset_name] = {
-                                    "sats_in_circulation": 100_000_000,
-                                    "divisions": 0,
-                                    "reissuable": False,
-                                    "has_ipfs": False,
-                                    "source": {
-                                        "tx_hash": hash_to_hex_str(tx_hash),
-                                        "tx_pos": vout_n,
-                                        "height": -1,
-                                    },
-                                }
-                                tx_to_create[tx_hash].add(asset_name)
-                                txout_tuple_list.append(
-                                    (hashX, 100_000_000, asset_name)
-                                )
-                            else:
-                                value = int.from_bytes(
-                                    asset_deserializer.read_bytes(8),
-                                    "little",
-                                    signed=False,
-                                )
-                                # Asset reissue chaining is not allowed. There may only be
-                                # one reissue in the mempool per asset name
-                                if asset_type == b"r"[0]:
-                                    divisions = asset_deserializer.read_int()
-                                    reissuable = asset_deserializer.read_int()
-                                    if (
-                                        asset_deserializer.cursor + 34
-                                        <= asset_deserializer.length
-                                    ):
-                                        asset_data = asset_deserializer.read_bytes(34)
-                                    else:
-                                        asset_data = None
-                                    d = {
-                                        "sats_in_circulation": value,
-                                        "divisions": divisions,
-                                        "reissuable": True
-                                        if reissuable != 0
-                                        else False,
-                                        "has_ipfs": True if asset_data else False,
-                                    }
-                                    if asset_data:
-                                        d["ipfs"] = (
-                                            base_encode(asset_data, 58)
-                                            if asset_data
-                                            else None
-                                        )
-
-                                    d["source"] = {
-                                        "tx_hash": hash_to_hex_str(tx_hash),
-                                        "tx_pos": vout_n,
-                                        "height": -1,
-                                    }
-
-                                    reissues[asset_name] = d
-                                    tx_to_reissue[tx_hash].add(asset_name)
-                                elif asset_type == b"q"[0]:
-                                    divisions = asset_deserializer.read_int()
-                                    reissuable = asset_deserializer.read_int()
-                                    has_meta = asset_deserializer.read_byte()
-                                    if has_meta != b"\0":
-                                        asset_data = asset_deserializer.read_bytes(34)
-                                    else:
-                                        asset_data = None
-
-                                    d = {
-                                        "sats_in_circulation": value,
-                                        "divisions": divisions,
-                                        "has_ipfs": True if asset_data else False,
-                                        "reissuable": True
-                                        if reissuable != 0
-                                        else False,
-                                    }
-                                    if asset_data:
-                                        d["ipfs"] = (
-                                            base_encode(asset_data, 58)
-                                            if asset_data
-                                            else None
-                                        )
-                                    d["source"] = {
-                                        "tx_hash": hash_to_hex_str(tx_hash),
-                                        "tx_pos": vout_n,
-                                        "height": -1,
-                                    }
-
-                                    creates[asset_name] = d
-                                    tx_to_create[tx_hash].add(asset_name)
-                                elif asset_type == b"t"[0]:
-                                    if not asset_deserializer.is_finished():
-                                        data = asset_deserializer.read_bytes(34)
-                                        expire_bytes = None
-                                        if not asset_deserializer.is_finished():
-                                            expire_bytes = (
-                                                asset_deserializer.read_bytes(8)
-                                            )
-                                        maybe_broadcast[hashX][tx_hash][vout_n] = (
-                                            asset_name,
-                                            data,
-                                            int.from_bytes(expire_bytes, "little")
-                                            if expire_bytes
-                                            else None,
-                                        )
-                                txout_tuple_list.append((hashX, value, asset_name))
-                        except Exception as e:
-                            self.logger.warn(
-                                f"failed to parse asset in mempool, defaulting to standard hashX: {e}"
-                            )
-                            hashX = to_hashX(txout.pk_script)
-                            value = txout.value
-                            txout_tuple_list.append((hashX, value, None))
-                    else:
-                        txout_tuple_list.append((hashX, value, None))
-
-                if restricted_asset and verifier_string:
-                    verifiers[restricted_asset][tx_hash] = (
-                        verifier_string_pos,
-                        restricted_asset_pos,
-                        verifier_string,
+                # RVN-03: verifier/restricted-asset parsing state must
+                # never survive from one transaction into the next.
+                verifier_string = None
+                verifier_string_pos = None
+                restricted_asset = None
+                restricted_asset_pos = None
+                try:
+                    tx, tx_size, wit_hash = read_tx_and_size(raw_tx, 0)
+                    # Convert the inputs and outputs into (hashX, value) pairs
+                    # Drop generation-like inputs from MemPoolTx.prevouts
+                    txin_pairs = tuple(
+                        (txin.prev_hash, txin.prev_idx)
+                        for txin in tx.inputs
+                        if not txin.is_generation()
                     )
-                    tx_to_verifier[tx_hash].add(restricted_asset)
-                    qualifiers = re.findall(r"([A-Z0-9_.]+)", verifier_string)
-                    for qualifier in qualifiers:
-                        qualifier_associations[qualifier][tx_hash] = (
+                    txout_tuple_list = []
+                    for vout_n, txout in enumerate(tx.outputs):
+                        value = txout.value
+
+                        # Every vout needs to be added for other methods to work properly
+
+                        # Best effort for standard scripts
+                        ops = Script.get_ops(txout.pk_script)
+                        op_ptr = -1
+                        for i in range(len(ops)):
+                            op = ops[i][0]  # The OpCode
+                            if op == OpCodes.OP_RVN_ASSET:
+                                op_ptr = i
+                                break
+
+                        if op_ptr > 0:
+                            # This script has OP_RVN_ASSET. Use everything before this for the script hash.
+                            # Get the raw script bytes ending ptr from the previous opcode.
+                            script_hash_end = ops[op_ptr - 1][1]
+                            hashX = to_hashX(txout.pk_script[:script_hash_end])
+                        else:
+                            # There is no OP_RVN_ASSET. Hash as-is.
+                            hashX = to_hashX(txout.pk_script)
+
+                        # Best effort for standard asset portions
+                        if op_ptr == 0:
+                            try:
+                                if match_script_against_template(ops, ASSET_NULL_TEMPLATE) > -1:
+                                    h160 = ops[1][2]
+                                    asset_portion = ops[2][2]
+                                    asset_portion_deserializer = DataParser(asset_portion)
+                                    asset_name = (
+                                        asset_portion_deserializer.read_var_bytes_as_ascii()
+                                    )
+                                    flag = asset_portion_deserializer.read_boolean()
+                                    qualifier_tags[asset_name][tx_hash] = (h160, vout_n, flag)
+                                    tx_to_qualifier_tags[tx_hash].add(asset_name)
+                                    h160_tags[h160][tx_hash] = (asset_name, vout_n, flag)
+                                    tx_to_h160_tags[tx_hash].add(h160)
+                                elif (
+                                    match_script_against_template(
+                                        ops, ASSET_NULL_VERIFIER_TEMPLATE
+                                    )
+                                    > -1
+                                ):
+                                    qualifiers_b = ops[2][2]
+                                    qualifiers_deserializer = DataParser(qualifiers_b)
+                                    verifier_string = (
+                                        qualifiers_deserializer.read_var_bytes_as_ascii()
+                                    )
+                                    verifier_string_pos = vout_n
+                                elif (
+                                    match_script_against_template(
+                                        ops, ASSET_GLOBAL_RESTRICTION_TEMPLATE
+                                    )
+                                    > -1
+                                ):
+                                    asset_portion = ops[3][2]
+                                    asset_portion_deserializer = DataParser(asset_portion)
+                                    asset_name = (
+                                        asset_portion_deserializer.read_var_bytes_as_ascii()
+                                    )
+                                    flag = asset_portion_deserializer.read_boolean()
+                                    freezes[asset_name][tx_hash] = (vout_n, flag)
+                                    tx_to_freeze[tx_hash].add(asset_name)
+                            except Exception as e:
+                                # RVN-05: symmetric to the op_ptr > 0 case below --
+                                # a malformed null-asset/verifier/freeze portion must
+                                # not leave partial qualifier/h160/freeze mutations
+                                # behind for a tx that otherwise fails to parse.
+                                self.logger.warn(
+                                    f"failed to parse asset in mempool, defaulting to standard hashX: {e}"
+                                )
+                                hashX = to_hashX(txout.pk_script)
+                            txout_tuple_list.append((hashX, value, None))
+                        elif 0 < op_ptr:
+                            try:
+                                next_op = ops[op_ptr + 1]
+                                asset_script = next_op[2]
+                                asset_deserializer = DataParser(asset_script)
+                                asset_deserializer.read_bytes(3)
+                                asset_type = asset_deserializer.read_int()
+                                asset_name = asset_deserializer.read_var_bytes_as_ascii()
+                                if asset_name[0] == "$":
+                                    restricted_asset = asset_name
+                                    restricted_asset_pos = vout_n
+                                if asset_type == b"o"[0]:
+                                    creates[asset_name] = {
+                                        "sats_in_circulation": 100_000_000,
+                                        "divisions": 0,
+                                        "reissuable": False,
+                                        "has_ipfs": False,
+                                        "source": {
+                                            "tx_hash": hash_to_hex_str(tx_hash),
+                                            "tx_pos": vout_n,
+                                            "height": -1,
+                                        },
+                                    }
+                                    tx_to_create[tx_hash].add(asset_name)
+                                    txout_tuple_list.append(
+                                        (hashX, 100_000_000, asset_name)
+                                    )
+                                else:
+                                    value = int.from_bytes(
+                                        asset_deserializer.read_bytes(8),
+                                        "little",
+                                        signed=False,
+                                    )
+                                    # Asset reissue chaining is not allowed. There may only be
+                                    # one reissue in the mempool per asset name
+                                    if asset_type == b"r"[0]:
+                                        divisions = asset_deserializer.read_int()
+                                        reissuable = asset_deserializer.read_int()
+                                        if (
+                                            asset_deserializer.cursor + 34
+                                            <= asset_deserializer.length
+                                        ):
+                                            asset_data = asset_deserializer.read_bytes(34)
+                                        else:
+                                            asset_data = None
+                                        d = {
+                                            "sats_in_circulation": value,
+                                            "divisions": divisions,
+                                            "reissuable": True
+                                            if reissuable != 0
+                                            else False,
+                                            "has_ipfs": True if asset_data else False,
+                                        }
+                                        if asset_data:
+                                            d["ipfs"] = (
+                                                base_encode(asset_data, 58)
+                                                if asset_data
+                                                else None
+                                            )
+
+                                        d["source"] = {
+                                            "tx_hash": hash_to_hex_str(tx_hash),
+                                            "tx_pos": vout_n,
+                                            "height": -1,
+                                        }
+
+                                        reissues[asset_name] = d
+                                        tx_to_reissue[tx_hash].add(asset_name)
+                                    elif asset_type == b"q"[0]:
+                                        divisions = asset_deserializer.read_int()
+                                        reissuable = asset_deserializer.read_int()
+                                        has_meta = asset_deserializer.read_byte()
+                                        if has_meta != b"\0":
+                                            asset_data = asset_deserializer.read_bytes(34)
+                                        else:
+                                            asset_data = None
+
+                                        d = {
+                                            "sats_in_circulation": value,
+                                            "divisions": divisions,
+                                            "has_ipfs": True if asset_data else False,
+                                            "reissuable": True
+                                            if reissuable != 0
+                                            else False,
+                                        }
+                                        if asset_data:
+                                            d["ipfs"] = (
+                                                base_encode(asset_data, 58)
+                                                if asset_data
+                                                else None
+                                            )
+                                        d["source"] = {
+                                            "tx_hash": hash_to_hex_str(tx_hash),
+                                            "tx_pos": vout_n,
+                                            "height": -1,
+                                        }
+
+                                        creates[asset_name] = d
+                                        tx_to_create[tx_hash].add(asset_name)
+                                    elif asset_type == b"t"[0]:
+                                        if not asset_deserializer.is_finished():
+                                            data = asset_deserializer.read_bytes(34)
+                                            expire_bytes = None
+                                            if not asset_deserializer.is_finished():
+                                                expire_bytes = (
+                                                    asset_deserializer.read_bytes(8)
+                                                )
+                                            maybe_broadcast[hashX][tx_hash][vout_n] = (
+                                                asset_name,
+                                                data,
+                                                int.from_bytes(expire_bytes, "little")
+                                                if expire_bytes
+                                                else None,
+                                            )
+                                    txout_tuple_list.append((hashX, value, asset_name))
+                            except Exception as e:
+                                self.logger.warn(
+                                    f"failed to parse asset in mempool, defaulting to standard hashX: {e}"
+                                )
+                                hashX = to_hashX(txout.pk_script)
+                                value = txout.value
+                                txout_tuple_list.append((hashX, value, None))
+                        else:
+                            txout_tuple_list.append((hashX, value, None))
+
+                    if restricted_asset and verifier_string:
+                        verifiers[restricted_asset][tx_hash] = (
                             verifier_string_pos,
                             restricted_asset_pos,
-                            restricted_asset,
+                            verifier_string,
                         )
-                        tx_to_qualifier_associations[tx_hash].add(qualifier)
+                        tx_to_verifier[tx_hash].add(restricted_asset)
+                        qualifiers = re.findall(r"([A-Z0-9_.]+)", verifier_string)
+                        for qualifier in qualifiers:
+                            qualifier_associations[qualifier][tx_hash] = (
+                                verifier_string_pos,
+                                restricted_asset_pos,
+                                restricted_asset,
+                            )
+                            tx_to_qualifier_associations[tx_hash].add(qualifier)
 
-                assert len(txout_tuple_list) == len(tx.outputs)
+                    assert len(txout_tuple_list) == len(tx.outputs)
 
-                txout_pairs = tuple(txout_tuple_list)
-                txs[tx_hash] = MemPoolTx(txin_pairs, None, txout_pairs, 0, tx_size)
+                    txout_pairs = tuple(txout_tuple_list)
+                    txs[tx_hash] = MemPoolTx(txin_pairs, None, txout_pairs, 0, tx_size)
+                except Exception as e:
+                    # RVN-05: one malformed mempool transaction must not take
+                    # down the whole synchronization controller. Drop only this
+                    # transaction; it is naturally retried on the next mempool
+                    # refresh since it stays in `hashes` until it leaves the
+                    # daemon's mempool or parses cleanly.
+                    self.logger.warning(
+                        f'failed to parse mempool tx {hash_to_hex_str(tx_hash)}, '
+                        f'dropping it from this refresh: {e}'
+                    )
+                    continue
             return txs, maybe_broadcast
 
         # Thread this potentially slow operation so as not to block
@@ -1004,7 +1028,15 @@ class MemPool(object):
                 return db_asset is None
             elif asset is True:
                 return True
-            if isinstance(asset, Iterable):
+            # A str is also Iterable, so it must be checked before the
+            # generic Iterable case below or a single-asset filter degrades
+            # into a substring/membership check on its own characters
+            # instead of an equality check -- and crashes with TypeError
+            # when db_asset is None (a native-RVN pair) since `in` requires
+            # a string on both sides of a string `in` test.
+            elif isinstance(asset, str):
+                return db_asset == asset
+            elif isinstance(asset, Iterable):
                 return db_asset in asset
             return db_asset == asset
 
@@ -1012,12 +1044,16 @@ class MemPool(object):
         if hashX in self.hashXs:
             for hash_ in self.hashXs[hashX]:
                 tx = self.txs[hash_]
-                for h168, v, asset in tx.in_pairs:
-                    if h168 == hashX and is_asset_valid(asset):
-                        value[asset] -= v
-                for h168, v, asset in tx.out_pairs:
-                    if h168 == hashX and is_asset_valid(asset):
-                        value[asset] += v
+                # RVN-02: must not reuse `asset` as the loop variable here --
+                # is_asset_valid() closes over the outer `asset` parameter,
+                # so rebinding it via unpacking corrupts every check after
+                # the first pair.
+                for h168, v, pair_asset in tx.in_pairs:
+                    if h168 == hashX and is_asset_valid(pair_asset):
+                        value[pair_asset] -= v
+                for h168, v, pair_asset in tx.out_pairs:
+                    if h168 == hashX and is_asset_valid(pair_asset):
+                        value[pair_asset] += v
         return value
 
     async def compact_fee_histogram(self):
@@ -1059,7 +1095,15 @@ class MemPool(object):
                 return db_asset is None
             elif asset is True:
                 return True
-            if isinstance(asset, Iterable):
+            # A str is also Iterable, so it must be checked before the
+            # generic Iterable case below or a single-asset filter degrades
+            # into a substring/membership check on its own characters
+            # instead of an equality check -- and crashes with TypeError
+            # when db_asset is None (a native-RVN pair) since `in` requires
+            # a string on both sides of a string `in` test.
+            elif isinstance(asset, str):
+                return db_asset == asset
+            elif isinstance(asset, Iterable):
                 return db_asset in asset
             return db_asset == asset
 
