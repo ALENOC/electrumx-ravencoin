@@ -25,7 +25,7 @@ import pylru
 from aiorpcx import (Event, JSONRPCAutoDetect, JSONRPCConnection,
                      ReplyAndDisconnect, Request, RPCError, RPCSession,
                      handler_invocation, serve_rs, serve_ws, sleep,
-                     NewlineFramer, TaskGroup)
+                     NewlineFramer, TaskGroup, TaskTimeout)
 
 import electrumx
 
@@ -853,6 +853,22 @@ class SessionManager:
             raise result
         return result, cost
 
+    async def _notify_one(self, session, touched, height_changed, assets, q, h, b, f, v, qv):
+        try:
+            await session.notify(touched, height_changed, assets, q, h, b, f, v, qv)
+        except TaskTimeout:
+            # RVN-06: one slow session must not cancel notification delivery
+            # to every other session in this fan-out. TaskTimeout is a
+            # CancelledError subclass (not an Exception), so a bare `except
+            # Exception` below would not catch it, and letting it escape
+            # this coroutine would cancel the whole TaskGroup in
+            # _notify_sessions along with every other session's pending
+            # notify. A bare CancelledError (real shutdown) is deliberately
+            # not caught here and propagates as usual.
+            self.logger.info(f'timeout notifying session {session.session_id}')
+        except Exception:
+            self.logger.exception(f'exception notifying session {session.session_id}')
+
     async def _notify_sessions(self, height, touched, assets, q, h, b, f, v, qv):
         '''Notify sessions about height changes and touched addresses.'''
         height_changed = height != self.notified_height
@@ -865,7 +881,8 @@ class SessionManager:
 
         async with TaskGroup() as group:
             for session in self.sessions:
-                await group.spawn(session.notify, touched, height_changed, assets, q, h, b, f, v, qv)
+                await group.spawn(self._notify_one, session, touched, height_changed,
+                                  assets, q, h, b, f, v, qv)
 
     def _ip_addr_group_name(self, session):
         host = session.remote_address().host
