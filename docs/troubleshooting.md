@@ -60,20 +60,29 @@ waiting to historical indexing and then follow the tip. A missing `txindex` or
 `assetindex`, a disabled REST interface, or an unhealthy Core is a configuration
 problem to fix deliberately, not a reason to recreate databases.
 
-## ElectrumX served clients while far behind Core
+## ElectrumX and a Core reindex that moves the backend height a lot
 
-ElectrumX opens its client-facing TCP/SSL ports the first time it catches up
-to whatever height Core reported at that moment, and does not re-check after.
-If Core was itself still low (early in its own reindex) when ElectrumX first
-matched it, ElectrumX will keep serving clients from then on even while Core
-goes on to reindex much further and ElectrumX falls behind again; its own
-`blockchain.headers.subscribe` height stays honest, but it is a stale one.
-This is most likely after recovering from a Core reindex on a host that was
-also running ElectrumX throughout. Restarting the ElectrumX container resets
-this: it will not reopen client ports until it has genuinely caught up to
-Core's current tip. Restarting is normally cheap early (little indexed
-progress to redo) and expensive late; do it as soon as you notice, not after
-hours of indexing.
+If Core is reindexed on a host that also runs ElectrumX, Core's own reported
+height passes through a low value early on (while it is rebuilding its block
+index) before reaching the real chain tip. Older ElectrumX builds on this fork
+could match that temporary low height, mark themselves internally as caught
+up, and then never reconsider that status even as Core went on to advance
+millions of blocks further; `self.caught_up` in
+`electrumx/server/block_processor.py` was a one-way latch. This was discovered
+during the real mainnet reindex documented in
+[Validation status](validation-status.md) and is fixed: ElectrumX now revokes
+its own caught-up state when the backend's height moves materially ahead of
+its own indexed height (more than one prefetch batch, the codebase's existing
+unit for ordinary catch-up work), and restores it once it has genuinely
+indexed up to the new height again. Ordinary single-block tip lag does not
+trigger this; only a real, material gap does.
+
+A build with the fix recovers on its own; no manual ElectrumX rebuild or
+restart should be needed for this specific scenario anymore. If you are
+running an older build, restarting the ElectrumX container is still a valid,
+low-cost workaround (`docker compose up -d --build --no-deps electrumx`,
+leaving Core untouched); it is cheapest done as soon as you notice, since a
+fresh process has to re-catch-up in full.
 
 ## Disk space is low
 

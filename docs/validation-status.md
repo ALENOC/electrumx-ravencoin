@@ -71,6 +71,27 @@ Gathered against the fully-indexed live server over the real Electrum protocol
 | Address history (`blockchain.scripthash.get_history`) for a real asset-holder address | PASS; multi-entry real transaction history spanning heights 435,650 to 1,083,923+ |
 | Address balance/UTXO (`blockchain.scripthash.get_balance` / `listunspent`) | PASS; well-formed responses (this address's RVN balance was legitimately 0/empty) |
 
+## ElectrumX synchronization robustness
+
+| Item | Status |
+|---|---|
+| `caught_up` latch defect | FIXED; `self.caught_up` no longer stays latched true after a material backend-height jump, see [Troubleshooting](troubleshooting.md#electrumx-and-a-core-reindex-that-moves-the-backend-height-a-lot) |
+| Regression coverage | PASS; `tests/server/test_block_processor.py` (`_catch_up_state`): normal single-block lag does not revoke, a jump beyond one prefetch batch (100 blocks) revokes, a full reindex-like scenario revokes then restores; the incident-scenario assertion fails against the pre-fix latch-forever behavior |
+| `server.ravencoin_backend` field freshness audit | PASS; every field (`blocks`, `headers`, `coreSafe`, `networkMatches`, `backendSynchronized`, `kawpowHeightValidation`, `checkpoint4487775`) is recomputed from a live Core RPC call on every request (`max_age=0` on the client-facing path); none were found to be latched or sticky |
+| Live re-validation after the fix | PASS; ElectrumX rebuilt (`--no-deps`, Core untouched, verified via unchanged `StartedAt`/`RestartCount`) and run against the already-synchronized reference Core; `server.version`, `server.features`, `server.ravencoin_backend`, independent chain validation and client `SAFE_CORE_VERIFIED` all re-confirmed PASS on the fixed build |
+
+## Electrum monitor integration
+
+| Item | Status |
+|---|---|
+| ALENOC endpoint probed with the real monitor pipeline (`monitor.crawl.probe_endpoint`, `monitor.classify.classify_backend`) | PASS (LOCAL only, `127.0.0.1:50001`); reachable, real `server.version`/features/backend evidence retrieved |
+| Reachability classification | LOCAL VALIDATED ENDPOINT, not a publicly reachable Internet endpoint; not added to `monitor/config/operator-registry.json`, which already carries an `ALENOC` group with an empty endpoint list awaiting a real public hostname |
+| Backend classification of the real endpoint alone | `UNVERIFIED`, not `SAFE`; policy match alone is never enough, matching `classify_backend`'s own documented contract that independent chain comparison is required |
+| Path to `SAFE` | Demonstrated with one real observation (ALENOC) plus one explicitly-labeled synthetic second observation; `compare_chains` returns `VALID` only when independent groups agree, confirming no automatic trust is granted to the maintainer's own endpoint |
+| operatorGroup dedup | PASS; `count_independent_operators` and `independent_groups` count multiple ALENOC endpoints as one operator (`tests/test_monitor.py::test_two_alenoc_endpoints_are_one_operator`), and ALENOC plus another operator as two, not three |
+| Public Internet endpoint | PENDING; not configured this session, no router/firewall change made |
+| Independent public operator diversity | NOT SOLVED by this work; one more validated operator (once publicly reachable) does not by itself establish ecosystem-wide diversity |
+
 The release is certified, and the private local deployment has passed every
 live gate through client `SAFE_CORE_VERIFIED`. The public endpoint is not yet
 validated: TLS, external reachability, DuckDNS/CGNAT and renewal remain
