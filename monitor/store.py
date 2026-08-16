@@ -24,7 +24,7 @@ from .model import (
     Transport,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -101,6 +101,14 @@ CREATE TABLE IF NOT EXISTS classification_history (
     security TEXT NOT NULL,
     reason TEXT NOT NULL DEFAULT ''
 );
+
+-- Anti-rollback high-water mark for the signed safe-Core policy this monitor
+-- has verified and accepted. A single row (id=1); the mark only ever moves
+-- forward (see Store.record_policy_version).
+CREATE TABLE IF NOT EXISTS policy_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    minimum_policy_version INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -130,12 +138,16 @@ class Store:
                 raise RuntimeError(
                     f"database schema {row['version']} is newer than this code "
                     f"understands ({SCHEMA_VERSION}); refusing to touch it")
-            elif row["version"] < 2:
-                self.connection.execute(
-                    "ALTER TABLE observations ADD COLUMN vantage_point TEXT "
-                    "NOT NULL DEFAULT 'local'")
-                self.connection.execute(
-                    "UPDATE schema_version SET version=?", (SCHEMA_VERSION,))
+            else:
+                if row["version"] < 2:
+                    self.connection.execute(
+                        "ALTER TABLE observations ADD COLUMN vantage_point TEXT "
+                        "NOT NULL DEFAULT 'local'")
+                # policy_state (version 3) is created unconditionally above via
+                # CREATE TABLE IF NOT EXISTS; no ALTER is needed for a new table.
+                if row["version"] < SCHEMA_VERSION:
+                    self.connection.execute(
+                        "UPDATE schema_version SET version=?", (SCHEMA_VERSION,))
 
     # ---------------------------------------------------------------- endpoints
     def upsert_endpoint(self, endpoint: EndpointId, *,
@@ -292,6 +304,27 @@ class Store:
             "t.hostname AS target_host, t.port AS target_port, e.announcements "
             "FROM peer_edges e JOIN endpoints s ON s.id=e.source_id "
             "JOIN endpoints t ON t.id=e.target_id").fetchall()
+
+    # ------------------------------------------------------------- policy state
+    def load_minimum_policy_version(self) -> int:
+        """The lowest signed safe-Core policyVersion this monitor will still
+        accept.  0 until a policy has ever been verified and accepted."""
+        row = self.connection.execute(
+            "SELECT minimum_policy_version FROM policy_state WHERE id=1").fetchone()
+        return row["minimum_policy_version"] if row else 0
+
+    def record_policy_version(self, version: int) -> None:
+        """Raise the anti-rollback high-water mark after a policy verifies.
+
+        Never moves backwards: a lower version is silently ignored rather
+        than lowering the bar for the next run.
+        """
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO policy_state (id, minimum_policy_version) VALUES (1, ?) "
+                "ON CONFLICT (id) DO UPDATE SET minimum_policy_version = "
+                "MAX(minimum_policy_version, excluded.minimum_policy_version)",
+                (version,))
 
     # ---------------------------------------------------------------- retention
     def prune(self, *, keep_observation_days: int = 7,

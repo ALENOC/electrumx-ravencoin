@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.util
 import json
 import pathlib
 import sys
@@ -34,8 +35,45 @@ from .model import (
 from .store import Store
 
 PACKAGE_DIR = pathlib.Path(__file__).resolve().parent
+REPO_ROOT = PACKAGE_DIR.parent
 DEFAULT_SEEDS = PACKAGE_DIR / "config" / "seeds.json"
 DEFAULT_REGISTRY = PACKAGE_DIR / "config" / "operator-registry.json"
+DEFAULT_POLICY_TRUSTED_KEY = (
+    REPO_ROOT / "core-safety" / "production" / "core-policy-signing-public-key.hex")
+
+
+def _load_core_safety_policy_module():
+    """Import the canonical signed-policy verifier from core-safety/scripts.
+
+    That module is not an installed package (it is loaded the same
+    ad-hoc way by tests/test_core_safety_policy.py), so it is loaded by
+    file path rather than reimplementing signature verification here.
+    """
+    path = REPO_ROOT / "core-safety" / "scripts" / "policy.py"
+    spec = importlib.util.spec_from_file_location("core_safety_policy", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_core_policy = _load_core_safety_policy_module()
+
+
+def load_trusted_policy_keys(path: pathlib.Path) -> dict:
+    """Read the pinned Ed25519 public key(s) the policy must be signed with.
+
+    The file holds one raw 32-byte key, hex-encoded. Keyed by the same
+    key id the signer publishes, so a rotated key can be added by adding
+    a line without ever trusting a key the policy itself supplies.
+    """
+    trusted = {}
+    for line in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        public_bytes = bytes.fromhex(line)
+        trusted[_core_policy.key_id_for(public_bytes)] = public_bytes
+    return trusted
 
 
 def load_seeds(path: pathlib.Path) -> List[tuple]:
@@ -74,17 +112,36 @@ def load_registry(path: pathlib.Path) -> List[tuple]:
     return entries
 
 
-def load_policy(path: Optional[str]) -> dict:
-    """Load the signed safe-Core policy body, or an empty policy.
+EMPTY_POLICY = {"releases": []}
+
+
+def load_policy(path: Optional[str], *, trusted_keys: dict,
+                minimum_policy_version: int = 0) -> dict:
+    """Load and verify the signed safe-Core policy body, or an empty policy.
 
     An empty policy certifies nothing, so every backend comes out
-    UNREVIEWED_CORE.  That is the correct answer when no policy is available: it
-    is not a reason to lower the bar.
+    UNREVIEWED_CORE.  That is the correct answer both when no policy is
+    available and when one is available but does not verify: a tampered,
+    unsigned, wrongly-signed, malformed or rolled-back policy must never be
+    treated as an endorsement, because this monitor signs and publishes
+    what it derives from it.  Verification failure is never silently
+    upgraded to SAFE.
     """
     if not path:
-        return {"releases": []}
-    document = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
-    return document.get("policy", document)
+        return dict(EMPTY_POLICY)
+    try:
+        document = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"warning: could not read policy {path}: {exc}; treating as "
+              f"no policy (UNREVIEWED_CORE)", file=sys.stderr)
+        return dict(EMPTY_POLICY)
+    try:
+        return _core_policy.verify_policy(
+            document, trusted_keys, minimum_policy_version=minimum_policy_version)
+    except _core_policy.PolicyError as exc:
+        print(f"warning: policy {path} failed verification: {exc}; treating as "
+              f"no policy (UNREVIEWED_CORE)", file=sys.stderr)
+        return dict(EMPTY_POLICY)
 
 
 async def run_discovery(store: Store, *, seeds_path: pathlib.Path,
@@ -201,6 +258,9 @@ def main(argv=None) -> int:
     parser.add_argument("--registry", default=str(DEFAULT_REGISTRY))
     parser.add_argument("--policy", default=None,
                         help="signed safe-Core policy; without it nothing is certified")
+    parser.add_argument("--policy-key", default=str(DEFAULT_POLICY_TRUSTED_KEY),
+                        help="pinned Ed25519 public key(s) the policy must verify "
+                             "against, one hex-encoded 32-byte key per line")
     parser.add_argument("--allow-private", action="store_true",
                         help="development only: permit probing private addresses")
     parser.add_argument("--vantage-point", default="local",
@@ -233,11 +293,18 @@ def main(argv=None) -> int:
             limits.max_new_candidates_per_crawl = arguments.max_candidates
         if arguments.concurrency is not None:
             limits.max_concurrent_probes = arguments.concurrency
+        trusted_keys = load_trusted_policy_keys(pathlib.Path(arguments.policy_key))
+        policy = load_policy(
+            arguments.policy, trusted_keys=trusted_keys,
+            minimum_policy_version=store.load_minimum_policy_version())
+        policy_version = policy.get("policyVersion")
+        if isinstance(policy_version, int) and not isinstance(policy_version, bool):
+            store.record_policy_version(policy_version)
         summary = asyncio.run(run_discovery(
             store,
             seeds_path=pathlib.Path(arguments.seeds),
             registry_path=pathlib.Path(arguments.registry),
-            policy=load_policy(arguments.policy),
+            policy=policy,
             limits=limits, thresholds=Thresholds(),
             allow_private=arguments.allow_private,
             vantage_point=arguments.vantage_point))
