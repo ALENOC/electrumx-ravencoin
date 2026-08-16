@@ -1270,8 +1270,15 @@ class DB:
             flag = db_ret[4]
 
             ret_val = {}
-            tx_pos, = unpack_le_uint32(current_lookup_key[:4])
-            tx_num, = unpack_le_uint64(current_lookup_key[4:9] + bytes(3))
+            # RVN-04: tx_pos/tx_num are encoded in the VALUE (latest_tag_id),
+            # not the lookup key -- the key is only h160_id/qualifier_id.
+            tx_pos, = unpack_le_uint32(latest_tag_id[:4])
+            tx_num, = unpack_le_uint64(latest_tag_id[4:9] + bytes(3))
+            if tx_num >= self.state.tx_count:
+                raise self.DBError(
+                    f'is_h160_qualified: tx_num {tx_num} for h160/qualifier '
+                    f'tag is beyond the indexed tx count {self.state.tx_count}; '
+                    f'the asset index is internally inconsistent')
             tx_hash, height = self.fs_tx_hash(tx_num)
             flag = db_ret[-1]
             ret_val['flag'] = True if flag != 0 else False
