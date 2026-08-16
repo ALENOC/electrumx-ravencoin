@@ -91,6 +91,8 @@ Gathered against the fully-indexed live server over the real Electrum protocol
 | operatorGroup dedup | PASS; `count_independent_operators` and `independent_groups` count multiple ALENOC endpoints as one operator (`tests/test_monitor.py::test_two_alenoc_endpoints_are_one_operator`), and ALENOC plus another operator as two, not three |
 | Public Internet endpoint | PENDING; not configured this session, no router/firewall change made |
 | Independent public operator diversity | NOT SOLVED by this work; one more validated operator (once publicly reachable) does not by itself establish ecosystem-wide diversity |
+| SAFE-promotion gate scope (second remediation round) | Corrected: promotion is per-endpoint, requiring that specific endpoint's own evidence be positively verified against a corroborated anchor or a comparably-evidenced reference, not merely that the overall crawl verdict came back clean; see [Electrum monitor](electrum-monitor.md) and [Security model](security-model.md#fail-closed) |
+| Corrected gate re-run against the live ALENOC endpoint | PASS; real `run_discovery()` against `127.0.0.1:50001` with the real signed production policy (`core-safety/production/safe-core-policy.json`) and the real, live checkpoint header (hash matched the pinned `Ravencoin.INCIDENT_CHECKPOINT_HASH` exactly) classified `UNVERIFIED`, not `SAFE`, alone, as expected: one attested group is still not corroboration. Core and ElectrumX untouched (containers not restarted, no config changed) |
 
 The release is certified, and the private local deployment has passed every
 live gate through client `SAFE_CORE_VERIFIED`. The public endpoint is not yet
