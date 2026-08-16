@@ -183,6 +183,7 @@ async def run_discovery(store: Store, *, seeds_path: pathlib.Path,
             observations.append(ChainObservation(
                 endpoint=endpoint, height=result.height, tip_hash=result.tip_hash,
                 genesis_hash=result.genesis_hash,
+                checkpoint_hash=result.checkpoint_hash,
                 operator_group=state.operator_group))
         else:
             state.register_failure(thresholds)

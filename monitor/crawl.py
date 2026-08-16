@@ -23,7 +23,11 @@ import socket
 import ssl
 import time
 from collections import defaultdict, deque
+from struct import error as struct_error
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
+
+from electrumx.lib.coins import Ravencoin
+from electrumx.lib.hash import hash_to_hex_str
 
 from .model import (
     AssetSupport, DiscoverySource, EndpointId, Limits, ProbeResult, Transport,
@@ -41,6 +45,9 @@ PROBE_CALLS = (
     ("blockchain.headers.subscribe", []),
     ("server.ravencoin_backend", []),
     ("server.peers.subscribe", []),
+    # Independent checkpoint evidence: fetched directly from this endpoint
+    # rather than trusted from its own backend self-report.
+    ("blockchain.block.header", [Ravencoin.INCIDENT_CHECKPOINT_HEIGHT]),
 )
 
 
@@ -91,6 +98,31 @@ async def resolve_endpoint(endpoint: EndpointId, limits: Limits, *,
         raise UnsafeTarget(
             f"{endpoint.hostname} resolves only to addresses that must not be probed")
     return safe_v4, safe_v6
+
+
+def _ravencoin_header_hash(raw_hex: str, height: int) -> Optional[str]:
+    """Canonical Ravencoin block hash (real KAWPOW hashing post-fork), or
+    None if the response is not a well-formed header for that height.
+
+    This is chain evidence, not a Bitcoin-style double-SHA256 of the first
+    80 bytes: post-fork Ravencoin headers are 120 bytes and the block hash
+    depends on the mix hash and nonce that live past that point, so a
+    truncated hash can never be cross-checked against a real chain and is
+    only internally consistent between peers that make the same mistake.
+    A peer that returns a wrong-length or malformed header yields no
+    evidence at all, rather than a hash of the wrong thing.
+    """
+    try:
+        header = bytes.fromhex(raw_hex)
+    except ValueError:
+        return None
+    expected_len = Ravencoin.static_header_len(height)
+    if len(header) < expected_len:
+        return None
+    try:
+        return hash_to_hex_str(Ravencoin.header_hash(header[:expected_len]))
+    except (ValueError, IndexError, struct_error):
+        return None
 
 
 def _certificate_summary(binary_certificate: Optional[bytes],
@@ -211,9 +243,12 @@ async def probe_endpoint(endpoint: EndpointId, *, limits: Optional[Limits] = Non
         if isinstance(header.get("height"), int):
             result.height = header["height"]
         raw = header.get("hex")
-        if isinstance(raw, str):
-            result.tip_hash = hashlib.sha256(
-                hashlib.sha256(bytes.fromhex(raw[:160])).digest()).hexdigest()
+        if isinstance(raw, str) and result.height is not None:
+            result.tip_hash = _ravencoin_header_hash(raw, result.height)
+    checkpoint_raw = responses.get("blockchain.block.header")
+    if isinstance(checkpoint_raw, str):
+        result.checkpoint_hash = _ravencoin_header_hash(
+            checkpoint_raw, Ravencoin.INCIDENT_CHECKPOINT_HEIGHT)
     backend = responses.get("server.ravencoin_backend")
     if isinstance(backend, dict):
         result.backend = backend
