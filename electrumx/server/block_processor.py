@@ -357,6 +357,10 @@ class BlockProcessor:
         
         # Meta
         self.caught_up = False
+        # Whether the DB has been reopened in serving mode yet in this
+        # process.  Only ever needs to happen once per process; see
+        # on_caught_up().
+        self.reopened_for_serving = False
         self.ok = True
         self.touched = set()
         # A count >= 0 is a user-forced reorg; < 0 is a natural reorg
@@ -1646,6 +1650,29 @@ class BlockProcessor:
            
         raise ChainError(f'UTXO {hash_to_hex_str(tx_hash)} / {tx_idx:,d} not found in "h" table')
 
+    @staticmethod
+    def _catch_up_state(currently_caught_up, indexed_height, daemon_height, prefetch_limit):
+        '''Decide whether "caught up" should still hold given a freshly observed
+        daemon height.
+
+        The backend can temporarily report a low height of its own (for example
+        mid-reindex) and ElectrumX can briefly match it, then the backend goes on
+        to advance much further.  "Caught up" must not stay latched from that
+        earlier, temporary match: once the gap to the backend's current height
+        exceeds one full prefetch batch (the codebase's own existing unit for
+        "how many blocks constitute a normal single round of catch-up work",
+        see Coin.prefetch_limit), that is a material resynchronization, not
+        ordinary one-or-two-block tip lag, and the state must reflect it.
+
+        This function only ever revokes an already-true state; regaining it is
+        the caller's existing on_caught_up() responsibility once the backlog is
+        cleared.
+        '''
+        behind = daemon_height - indexed_height
+        if currently_caught_up and behind > prefetch_limit:
+            return False
+        return currently_caught_up
+
     async def on_caught_up(self):
         was_first_sync = self.state.first_sync
         self.state.first_sync = False
@@ -1667,8 +1694,18 @@ class BlockProcessor:
             self.caught_up = True
             if was_first_sync:
                 logger.info(f'{electrumx.version} synced to height {self.state.height:,d}')
-            # Reopen for serving
-            await self.db.open_for_serving()
+            elif self.reopened_for_serving:
+                logger.info(f'{electrumx.version} caught up again at height '
+                            f'{self.state.height:,d} after falling behind the backend')
+            if not self.reopened_for_serving:
+                self.reopened_for_serving = True
+                # Reopen for serving.  Only done the first time in this process:
+                # closing and reopening the DB handles while sessions may
+                # already be querying them (a later re-catch-up after a
+                # material backend jump, see _catch_up_state) is not safe to
+                # repeat, and the serving-mode file-handle tuning it exists for
+                # is a one-time startup concern, not an ongoing one.
+                await self.db.open_for_serving()
 
     # --- External API
 
@@ -1708,6 +1745,16 @@ class BlockProcessor:
                         logger.info(f'caught up to daemon height {daemon_height:,d}')
 
                 if hex_hashes:
+                    was_caught_up, self.caught_up = self.caught_up, self._catch_up_state(
+                        self.caught_up, self.state.height, daemon_height,
+                        self.coin.prefetch_limit(self.state.height + 1))
+                    if was_caught_up and not self.caught_up:
+                        logger.warning(
+                            f'backend height jumped to {daemon_height:,d}, '
+                            f'{daemon_height - self.state.height:,d} blocks ahead '
+                            f'of our indexed height {self.state.height:,d}; no '
+                            f'longer considered caught up until resynchronized'
+                        )
                     # Shielded so that cancellations from shutdown don't lose work
                     await self.advance_blocks(hex_hashes)
                 else:
