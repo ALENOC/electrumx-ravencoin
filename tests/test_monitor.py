@@ -372,6 +372,32 @@ def test_two_groups_are_counted_separately():
     assert set(groups) == {"CIPIG", "ALENOC"}
 
 
+def test_two_alenoc_endpoints_are_one_operator():
+    """Multiple ALENOC-run endpoints must not be counted as separate,
+    independent operators; that would manufacture diversity that does not
+    exist. See monitor/config/operator-registry.json."""
+    groups = independent_groups([
+        observation("electrum-a.alenoc.example", "ALENOC"),
+        observation("electrum-b.alenoc.example", "ALENOC"),
+    ])
+    assert list(groups) == ["ALENOC"]
+
+    states = [
+        EndpointState(endpoint=endpoint("electrum-a.alenoc.example"),
+                      security=Security.SAFE, operator_group="ALENOC"),
+        EndpointState(endpoint=endpoint("electrum-b.alenoc.example"),
+                      security=Security.SAFE, operator_group="ALENOC"),
+        EndpointState(endpoint=endpoint("electrum1.cipig.net"),
+                      security=Security.SAFE, operator_group="CIPIG"),
+    ]
+    counts = count_independent_operators(states)
+    # Two endpoints for ALENOC, one for CIPIG, but the number of independent
+    # operators represented is two, not three: endpoint count is not operator
+    # count.
+    assert counts == {"ALENOC": 2, "CIPIG": 1}
+    assert len(counts) == 2
+
+
 def test_endpoint_majority_does_not_override_an_independent_conflict():
     """Two endpoints from one operator do not outvote one from another."""
     observations = [
