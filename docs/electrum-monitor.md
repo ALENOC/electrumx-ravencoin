@@ -95,6 +95,6 @@ and are excluded from the independent-operator count entirely, since an
 attacker can mint any number of unattested hostnames for free. A healthy
 conflicting independent operator is still a conflict.
 
-Observations retain their vantage-point identifier. Thus “unreachable from
-probe A” is not overstated as “globally offline”; basic health remains useful
+Observations retain their vantage-point identifier. Thus "unreachable from
+probe A" is not overstated as "globally offline"; basic health remains useful
 without requiring a distributed consensus service.

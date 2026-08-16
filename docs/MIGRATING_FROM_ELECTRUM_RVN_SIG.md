@@ -19,7 +19,7 @@ licence and does not claim official Ravencoin status.
 
 ## Install and validate
 
-Create a fresh Python 3.10–3.12 virtual environment, install this source, and
+Create a fresh Python 3.10 to 3.12 virtual environment, install this source, and
 retain the existing database initially. At startup the maintained fork compares
 the indexed database tip to Core's canonical hash and, when present in the DB,
 checks the incident checkpoint. A mismatch causes startup to fail with a clear

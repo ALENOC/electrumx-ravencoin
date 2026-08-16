@@ -6,7 +6,7 @@
 
 ### Introduction
 
-The RVN electrum wallet – currently one of the few that support the hardware wallets Trezor and Ledger – relies on special servers as an intermediary to the RVN block chain. The server interacts with a full rvn node via the rpc interface to supply (with the help of a database) transaction and payment data to the remote electrum wallets, so there is no need for the wallets to keep a full copy of the block chain, making them more light-weight than full node client wallets. Outgoing transactions are signed on the electrum wallet client (in case of Trezor or Ledger inside the hardware itself) and are transmitted via the electrum server through the rvn nodes into the network, so all sensitive data like private keys are kept in the client (or even hardware), making this a very secure solution. Even though the electrum protocol is optimized for low bandwidth and load, each server can serve only a certain amount of clients and especially with many new users trying syncing a new electrum installation from the genesis block, a single electrum server can be stretched beyond its limits pretty fast. This as well as general security and backup concerns call for a more distributed electrum server infrastructure. The aim of the guide is therefore to give a step-by-step instruction about setting up a RVN electrum server running beside a full RVN node client.
+The RVN electrum wallet (currently one of the few that support the hardware wallets Trezor and Ledger) relies on special servers as an intermediary to the RVN block chain. The server interacts with a full rvn node via the rpc interface to supply (with the help of a database) transaction and payment data to the remote electrum wallets, so there is no need for the wallets to keep a full copy of the block chain, making them more light-weight than full node client wallets. Outgoing transactions are signed on the electrum wallet client (in case of Trezor or Ledger inside the hardware itself) and are transmitted via the electrum server through the rvn nodes into the network, so all sensitive data like private keys are kept in the client (or even hardware), making this a very secure solution. Even though the electrum protocol is optimized for low bandwidth and load, each server can serve only a certain amount of clients and especially with many new users trying syncing a new electrum installation from the genesis block, a single electrum server can be stretched beyond its limits pretty fast. This as well as general security and backup concerns call for a more distributed electrum server infrastructure. The aim of the guide is therefore to give a step-by-step instruction about setting up a RVN electrum server running beside a full RVN node client.
 
 ### System requirements
 
@@ -18,7 +18,7 @@ While pretty much any Linux distribution should work, this guide uses Ubuntu 20.
 
 - Setup a user account (e.g. electrumx). You may want to setup SSH key authentication with this account and remove root access (once ssh with key is proved working) in /etc/ssh/sshd\_config, so any subsequent login can only be through this account putting an extra layer of security. 
 
-- Check [The RavenCore Repo](https://github.com/RavenProject/Ravencoin/releases) for the latest release of  raven-x.x.x.x-x86\_64-linux-gnu.zip. Download (e.g. through **wget**) and unpack the archive inside the zip – this will probably require installing unzip through **sudo apt install unzip**.
+- Check [The RavenCore Repo](https://github.com/RavenProject/Ravencoin/releases) for the latest release of  raven-x.x.x.x-x86\_64-linux-gnu.zip. Download (e.g. through **wget**) and unpack the archive inside the zip: this will probably require installing unzip through **sudo apt install unzip**.
 
 - Create a directory .raven (**mkdir .raven**) in your home directory (e.g., /home/electrumx) and create a file raven.conf inside this directory with the following content (vi, vim, nano etc.): 
 
@@ -40,15 +40,15 @@ While pretty much any Linux distribution should work, this guide uses Ubuntu 20.
 
 **rest=1**
 
-- Note the txindex=1 above, which is required for the electrumx server. If you already run a node without this setting, add it and perform a restart of ravend with the option –reindex. This will take significant time.  
+- Note the txindex=1 above, which is required for the electrumx server. If you already run a node without this setting, add it and perform a restart of ravend with the option -reindex. This will take significant time.  
 
 - For better maintenance during updates, you may want to set up a link to your raven binary directory, e.g.: 
 
-**ln –s /home/electrumx/raven-x.x.x.x /home/electrumx/raven**
+**ln -s /home/electrumx/raven-x.x.x.x /home/electrumx/raven**
 
 This way you can always access the binary files through ./raven/bin/... from your home directory. 
 
-- You can now start the raven node with **./raven/bin/ravend** . After some time you can check the state of the node using **./raven/bin/raven-cli getblockchaininfo** . Keep an eye on the “blocks” – these will remain at 0 until all headers are synced (can be half an hour depending on the system and connection) and it will ultimately reach the current block-height of the rvn chain. By this time, which is normal to take several hours, about 20 GB of data will have been downloaded into the working ./.raven directory. 
+- You can now start the raven node with **./raven/bin/ravend** . After some time you can check the state of the node using **./raven/bin/raven-cli getblockchaininfo** . Keep an eye on the "blocks": these will remain at 0 until all headers are synced (can be half an hour depending on the system and connection) and it will ultimately reach the current block-height of the rvn chain. By this time, which is normal to take several hours, about 20 GB of data will have been downloaded into the working ./.raven directory. 
 
 - At this point you could install some script or service into /etc/systemd/system to run the node automatically at server startup. This ensures a 24/7 operation in case of an unexpected server restart due to system update or maintenance. You could also install watch-dog scripts to restart the server in case of a crash, however, this is beyond the scope of this document. See [This medium article](https://medium.com/@benmorel/creating-a-linux-service-with-systemd-611b5c8b91d6) for an example. It's important to know that a ravencoin node service file requires a type of "forking".
 
@@ -65,11 +65,11 @@ Full documentation and information about installation / running of the electrumx
 
 It is assumed that you have basic knowledge of editing files on Linux (vi, vim, nano etc.) and also basic knowledge of Python is helpful in case errors come up during the installation. 
 
-- Download latest version of electrumx ravencoin with **git clone https://github.com/Electrum-RVN-SIG/electrumx-ravencoin.git** or download from the link above (e.g. wget <path>) – the tar.gz version is suggested as that can easily be unpacked with tar –xzf {name}.tar.gz . 
+- Download latest version of electrumx ravencoin with **git clone https://github.com/Electrum-RVN-SIG/electrumx-ravencoin.git** or download from the link above (e.g. wget <path>): the tar.gz version is suggested as that can easily be unpacked with tar -xzf {name}.tar.gz . 
 
 - Make a symbolic link to the electrumx, e.g., **ln -s {name} electrumx** so the version can be found by the scripts in-system. 
 
-- Make sure Python 3.8.5 or higher is installed by typing **python3 –version**
+- Make sure Python 3.8.5 or higher is installed by typing **python3 --version**
 
 - Now install pip3:  
 
@@ -135,7 +135,7 @@ CACHE\_MB = {Defaults to 1200 MB in memory. You may decrease this if this number
 
 - Now double-check that the rvn node is running and up-to-date with the blocks:**./raven/bin/raven-cli getblockchaininfo** if that looks ok you can start the electrumx server: **systemctl start electrumx** 
 
-And check the progress and log of the server: **journalctl -u electrumx –f** 
+And check the progress and log of the server: **journalctl -u electrumx -f** 
 
 Stopping the server with: **systemctl stop electrumx** 
 
