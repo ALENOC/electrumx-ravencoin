@@ -93,7 +93,18 @@ The certification report records the source identity, tag object, build
 environment, profile revision and digest, every mandatory test, fixture or
 negative control, result and report digest. Only a complete PASS can be
 proposed for a signed safe-Core policy. The signing job is separate from
-candidate building and holds the policy key only in its protected environment.
+candidate building and holds the policy key only in its protected
+environment, and before signing anything it independently checks that every
+downloaded report's candidate identity was actually produced by that same
+run's discovery step, so a report or artifact cannot be substituted between
+jobs.
+
+The CI `certify` job runs the harness with no candidate binaries or probe
+target of its own, so every core-scope test currently returns `UNAVAILABLE`
+and the job cannot itself produce `CERTIFICATION_PASSED`. The current
+production certification (below) was produced by a manual local run of the
+same harness against a real candidate; the pipeline's build+probe stage that
+would let CI reach a pass on its own does not exist yet.
 
 The current certified baseline is `2miners/Ravencoin` `v4.8.0` at commit
 `b60f50e04f1fba425b28804e61be2694faaf3469`. Its 12 mandatory release tests
