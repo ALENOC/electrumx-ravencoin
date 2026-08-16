@@ -25,7 +25,8 @@ from typing import List, Optional
 
 from .classify import (
     ChainObservation, classify_assets, classify_backend, compare_chains,
-    count_independent_operators, independent_groups,
+    count_independent_operators, count_unknown_safe_endpoints, independent_groups,
+    known_group_count, operator_group_key,
 )
 from .crawl import Crawler
 from .directory import build_directory
@@ -194,23 +195,26 @@ async def run_discovery(store: Store, *, seeds_path: pathlib.Path,
     verdict = compare_chains(observations, thresholds=thresholds, reference=reference)
     if verdict.status == "CHAIN_CONFLICT":
         for state in store.all_states():
-            group = state.operator_group or f"UNKNOWN-{state.endpoint.hostname}"
+            group = operator_group_key(state.operator_group, state.endpoint.hostname)
             if group in verdict.conflicting_groups:
                 state.security = Security.CONFLICT
                 state.reason = verdict.detail
                 store.save_state(state, now=now)
     elif verdict.status == "VALID" and (
-            reference is not None or len(independent_groups(observations)) >= 2):
+            reference is not None
+            or known_group_count(independent_groups(observations)) >= 2):
         # Promotion requires both a clean comparison AND independent
         # corroboration: a trusted reference observation, or agreement across
-        # at least two independent operator groups.  CONFLICT_SUSPECTED and
-        # TEMPORARY_LAG must never promote, and neither may a lone
-        # self-consistent group: a single attacker-controlled endpoint (or
-        # any number of hostnames under one attacker) is always internally
-        # consistent with itself.  The comparison anchor being the highest
-        # self-reported height when no reference is supplied is therefore
-        # never enough on its own; it only matters once a second independent
-        # group is required to agree with it.
+        # at least two independent ATTESTED operator groups.  CONFLICT_SUSPECTED
+        # and TEMPORARY_LAG must never promote, and neither may a lone
+        # self-consistent group, known or not: a single attacker-controlled
+        # endpoint (or any number of hostnames under one attacker) is always
+        # internally consistent with itself, and unknown-operator hostnames
+        # are excluded from the count entirely (SRV-05) since an attacker can
+        # mint any number of them for free.  The comparison anchor being the
+        # highest self-reported height when no reference is supplied is
+        # therefore never enough on its own; it only matters once a second
+        # independent, attested group is required to agree with it.
         for state in store.all_states():
             if state.security is Security.UNVERIFIED \
                     and state.availability is Availability.REACHABLE:
@@ -250,6 +254,10 @@ def command_status(store: Store) -> int:
         print(f"  {group:<16} SAFE   {endpoints} endpoint(s)")
     if not groups:
         print("  none yet; endpoint count is not operator diversity")
+    unknown_safe = count_unknown_safe_endpoints(states)
+    if unknown_safe:
+        print(f"  ({unknown_safe} additional SAFE endpoint(s) with no known operator "
+              f"identity; not counted as independent diversity)")
     return 0
 
 

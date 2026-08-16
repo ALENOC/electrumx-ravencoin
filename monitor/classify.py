@@ -30,6 +30,29 @@ REQUIRED_ASSET_METHODS = (
     "blockchain.asset.get_assets_with_prefix",
 )
 
+#: Prefix marking a group as a placeholder for one endpoint with no known
+#: operator identity, not an attested independent operator.  operatorGroup
+#: itself only ever comes from this operator's own seeds/registry config
+#: files, never from a crawled peer's self-report, but an endpoint simply
+#: absent from either is not thereby a second operator: an attacker can
+#: mint any number of hostnames for free.  See known_group_count().
+UNKNOWN_GROUP_PREFIX = "UNKNOWN-"
+
+
+def operator_group_key(operator_group: Optional[str], hostname: str) -> str:
+    """The grouping key used everywhere diversity is counted."""
+    return operator_group or f"{UNKNOWN_GROUP_PREFIX}{hostname}"
+
+
+def known_group_count(groups: Mapping[str, list]) -> int:
+    """How many of these groups are attested operator identities.
+
+    Excludes ``UNKNOWN-*`` placeholders: those are one endpoint each with no
+    known owner, and an attacker can always mint more of them, so they must
+    never count toward independent-operator quorum on their own.
+    """
+    return sum(1 for group in groups if not group.startswith(UNKNOWN_GROUP_PREFIX))
+
 
 @dataclass
 class ChainObservation:
@@ -133,7 +156,7 @@ def independent_groups(observations: Iterable[ChainObservation]) -> Dict[str, li
     """
     groups: Dict[str, list] = defaultdict(list)
     for index, observation in enumerate(observations):
-        group = observation.operator_group or f"UNKNOWN-{observation.endpoint.hostname}"
+        group = operator_group_key(observation.operator_group, observation.endpoint.hostname)
         groups[group].append(observation)
     return dict(groups)
 
@@ -200,19 +223,38 @@ def compare_chains(observations: Sequence[ChainObservation],
 
 
 def count_independent_operators(states: Iterable) -> Dict[str, int]:
-    """Count operator groups, not endpoints.
+    """Count attested operator groups, not endpoints and not raw hostnames.
 
     Two endpoints from one organisation are one independent operator.  This is
     the number that matters for diversity, and reporting the endpoint count in
     its place would overstate the resilience of the ecosystem.
+
+    ``UNKNOWN-*`` placeholders (an endpoint with no known operator identity)
+    are excluded here: counting them would let an attacker inflate this
+    figure for free with any number of hostnames.  See
+    count_unknown_safe_endpoints() for that population, reported separately
+    rather than folded into "independent groups".
     """
     counts: Dict[str, set] = defaultdict(set)
     for state in states:
         if state.security is not Security.SAFE:
             continue
-        group = state.operator_group or f"UNKNOWN-{state.endpoint.hostname}"
+        group = operator_group_key(state.operator_group, state.endpoint.hostname)
+        if group.startswith(UNKNOWN_GROUP_PREFIX):
+            continue
         counts[group].add(str(state.endpoint))
     return {group: len(endpoints) for group, endpoints in sorted(counts.items())}
+
+
+def count_unknown_safe_endpoints(states: Iterable) -> int:
+    """SAFE endpoints with no attested operator identity.
+
+    Reported separately from independent-operator diversity, never folded
+    into it: see count_independent_operators().
+    """
+    return sum(
+        1 for state in states
+        if state.security is Security.SAFE and not state.operator_group)
 
 
 def suggest_operator_group(hostname: str, known: Mapping[str, str]) -> Optional[str]:
