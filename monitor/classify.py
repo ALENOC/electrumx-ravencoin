@@ -20,7 +20,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+
+from electrumx.lib.coins import Ravencoin
 
 from .model import AssetSupport, EndpointId, Security, Thresholds
 
@@ -71,6 +73,13 @@ class ChainVerdict:
     status: str
     detail: str
     conflicting_groups: tuple = ()
+    #: Groups whose own chain evidence was actually compared and agreed --
+    #: either with an explicit trusted --reference, or with a height/tip
+    #: pair independently reported by at least two ATTESTED operator
+    #: groups.  Never populated merely because a group was not flagged
+    #: conflicting: silence is not agreement.  See is_corroborated() and
+    #: compare_chains()'s module docstring.
+    verified_groups: tuple = ()
 
 
 def classify_backend(backend: Optional[Mapping], policy: Mapping,
@@ -161,6 +170,57 @@ def independent_groups(observations: Iterable[ChainObservation]) -> Dict[str, li
     return dict(groups)
 
 
+def _verified_groups(groups: Mapping[str, list], conflicting: set, *,
+                     reference: Optional[ChainObservation],
+                     thresholds: Thresholds) -> tuple:
+    """Which groups' own chain evidence was actually compared and agreed.
+
+    Corroboration is scoped to evidence that was actually compared, never
+    inferred from the absence of a detected conflict:
+
+    - an explicit trusted --reference observation, or
+    - a height/tip pair independently reported by at least two ATTESTED
+      (non-UNKNOWN-*) operator groups -- the "corroborated anchor".
+
+    Critically, this anchor is *not* the highest self-reported height used
+    for conflict detection: the highest height can be, and in the attack
+    this defends against is, the very endpoint whose evidence needs
+    verifying.  Using it as its own yardstick would let it trivially agree
+    with itself.  A group strictly ahead of the corroborated anchor is
+    never verified: a higher height was never actually compared to
+    anything, so it is not agreement, no matter how internally consistent
+    it looks in isolation.
+    """
+    if reference is not None and reference.tip_hash:
+        vanchor = reference
+    else:
+        support: Dict[Tuple[Optional[int], Optional[str]], set] = defaultdict(set)
+        for group, items in groups.items():
+            if group.startswith(UNKNOWN_GROUP_PREFIX) or group in conflicting:
+                continue
+            for item in items:
+                support[(item.height, item.tip_hash)].add(group)
+        candidates = [key for key, supporters in support.items() if len(supporters) >= 2]
+        if not candidates:
+            return ()
+        best_height, best_tip = max(candidates, key=lambda key: key[0])
+        vanchor = next(item for items in groups.values() for item in items
+                       if item.height == best_height and item.tip_hash == best_tip)
+
+    verified = set()
+    for group, items in groups.items():
+        if group in conflicting:
+            continue
+        for item in items:
+            if item.height == vanchor.height and item.tip_hash == vanchor.tip_hash:
+                verified.add(group)
+            elif item.height < vanchor.height \
+                    and vanchor.height - item.height <= thresholds.height_lag_alarm:
+                verified.add(group)
+            # item.height > vanchor.height: never verified.  See docstring.
+    return tuple(sorted(verified))
+
+
 def compare_chains(observations: Sequence[ChainObservation],
                    *, reference: Optional[ChainObservation] = None,
                    thresholds: Optional[Thresholds] = None,
@@ -170,6 +230,11 @@ def compare_chains(observations: Sequence[ChainObservation],
     Never a majority vote over endpoints: one operator can run twenty of them.
     Comparison happens between operator groups, and a hash disagreement at a
     shared height is a conflict even if only one group reports it.
+
+    SAFE-relevant callers must read ``verified_groups``, not merely
+    ``status == "VALID"``: a clean comparison only means no conflict was
+    *detected*, not that every observation was positively verified.  See
+    is_corroborated().
     """
     thresholds = thresholds or Thresholds()
     usable = [item for item in observations
@@ -182,13 +247,22 @@ def compare_chains(observations: Sequence[ChainObservation],
         anchor = reference
     else:
         # Prefer the group reporting the greatest height, but only as a starting
-        # point for comparison, never as a vote.
+        # point for conflict detection, never as proof of agreement: see
+        # _verified_groups() for the anchor actually used for corroboration.
         anchor = max(usable, key=lambda item: item.height)
 
     conflicting = set()
     lagging = []
     for group, items in groups.items():
         for item in items:
+            if item.checkpoint_hash and item.checkpoint_hash != Ravencoin.INCIDENT_CHECKPOINT_HASH:
+                # Checked against the network's real, pinned checkpoint,
+                # never only against whatever the comparison anchor
+                # happens to carry: an anchor with no checkpoint of its
+                # own (a bare --reference-height/--reference-tip-hash
+                # pair) must never disable this check.
+                conflicting.add(group)
+                continue
             if item.genesis_hash and anchor.genesis_hash \
                     and item.genesis_hash != anchor.genesis_hash:
                 conflicting.add(group)
@@ -205,21 +279,42 @@ def compare_chains(observations: Sequence[ChainObservation],
             if behind > thresholds.height_lag_alarm:
                 lagging.append((group, behind))
 
+    verified = _verified_groups(groups, conflicting, reference=reference,
+                                thresholds=thresholds)
+
     if conflicting and confirmations >= thresholds.conflict_confirmations:
         return ChainVerdict(
             "CHAIN_CONFLICT",
             "independent operator groups disagree about the chain at a shared height",
-            tuple(sorted(conflicting)))
+            tuple(sorted(conflicting)), verified)
     if conflicting:
         return ChainVerdict(
             "CONFLICT_SUSPECTED",
             "a disagreement was seen but not yet confirmed by a second observation",
-            tuple(sorted(conflicting)))
+            tuple(sorted(conflicting)), verified)
     if lagging:
         worst = max(lagging, key=lambda item: item[1])
         return ChainVerdict("TEMPORARY_LAG",
-                            f"group {worst[0]} trails the reference by {worst[1]} blocks")
-    return ChainVerdict("VALID", f"{len(groups)} operator group(s) agree")
+                            f"group {worst[0]} trails the reference by {worst[1]} blocks",
+                            (), verified)
+    return ChainVerdict("VALID", f"{len(verified)} operator group(s) independently verified",
+                        (), verified)
+
+
+def is_corroborated(verdict: ChainVerdict, *, reference_supplied: bool) -> bool:
+    """Central SAFE-promotion predicate.  The only question that matters:
+
+    SAFE requires positively verified chain evidence.  Absence of a
+    confirmed conflict is NOT evidence of safety.  Corroboration is
+    limited to the exact chain evidence compared (verdict.verified_groups).
+    A configured --reference without concrete comparable evidence, or
+    height proximity to one, does not count on its own.
+    """
+    if verdict.status != "VALID":
+        return False
+    if reference_supplied:
+        return bool(verdict.verified_groups)
+    return known_group_count(verdict.verified_groups) >= 2
 
 
 def count_independent_operators(states: Iterable) -> Dict[str, int]:
