@@ -24,7 +24,7 @@ from .model import (
     Transport,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -109,6 +109,22 @@ CREATE TABLE IF NOT EXISTS policy_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     minimum_policy_version INTEGER NOT NULL DEFAULT 0
 );
+
+-- Cross-crawl confirmation counters for suspected chain conflicts (R-03).
+-- A single crawl only ever produces CONFLICT_SUSPECTED; CHAIN_CONFLICT
+-- requires the SAME operator group to conflict again on a later,
+-- independent crawl.  Keyed on the group only (not on the exact
+-- disagreeing hash), so an attacker cannot dodge confirmation by varying
+-- what they lie about crawl to crawl; a positively verified clean
+-- comparison (never merely the absence of a fresh conflict) clears the
+-- row.  Bounded by the number of known/observed operator groups, pruned
+-- alongside old observations by Store.prune().
+CREATE TABLE IF NOT EXISTS chain_conflicts (
+    group_key TEXT PRIMARY KEY,
+    confirmations INTEGER NOT NULL DEFAULT 1,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL
+);
 """
 
 
@@ -143,8 +159,9 @@ class Store:
                     self.connection.execute(
                         "ALTER TABLE observations ADD COLUMN vantage_point TEXT "
                         "NOT NULL DEFAULT 'local'")
-                # policy_state (version 3) is created unconditionally above via
-                # CREATE TABLE IF NOT EXISTS; no ALTER is needed for a new table.
+                # policy_state (version 3) and chain_conflicts (version 4)
+                # are created unconditionally above via CREATE TABLE IF NOT
+                # EXISTS; no ALTER is needed for a new table.
                 if row["version"] < SCHEMA_VERSION:
                     self.connection.execute(
                         "UPDATE schema_version SET version=?", (SCHEMA_VERSION,))
@@ -326,13 +343,62 @@ class Store:
                 "MAX(minimum_policy_version, excluded.minimum_policy_version)",
                 (version,))
 
+    # ------------------------------------------------------------ conflict state
+    def record_conflict(self, group_key: str, *, now: Optional[int] = None) -> int:
+        """Record that ``group_key`` conflicted with the chain evidence on
+        this crawl, and return the resulting cross-crawl confirmation count.
+
+        The first observation inserts a row with confirmations=1
+        (CONFLICT_SUSPECTED); a later, independent crawl that calls this
+        again for the same group increments it (eventually reaching
+        CHAIN_CONFLICT once it meets Thresholds.conflict_confirmations).
+        Called at most once per group per run_discovery() call, so
+        re-processing the same crawl's response twice never double-counts.
+        """
+        now = int(now if now is not None else time.time())
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO chain_conflicts (group_key, confirmations, first_seen, "
+                "last_seen) VALUES (?, 1, ?, ?) ON CONFLICT (group_key) DO UPDATE SET "
+                "confirmations = confirmations + 1, last_seen = excluded.last_seen",
+                (group_key, now, now))
+            row = self.connection.execute(
+                "SELECT confirmations FROM chain_conflicts WHERE group_key=?",
+                (group_key,)).fetchone()
+        return row["confirmations"]
+
+    def clear_conflict(self, group_key: str) -> None:
+        """Drop any persisted conflict confirmations for ``group_key``.
+
+        Recovery: call only once a crawl has positively verified that
+        group's chain evidence again, never merely because it was not
+        seen conflicting this time -- absence of a fresh conflict is not
+        evidence the earlier one was resolved.
+        """
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM chain_conflicts WHERE group_key=?", (group_key,))
+
+    def conflict_confirmations(self, group_key: str) -> int:
+        """How many independent crawls have confirmed this group conflicting.
+        0 if there is no current suspicion."""
+        row = self.connection.execute(
+            "SELECT confirmations FROM chain_conflicts WHERE group_key=?",
+            (group_key,)).fetchone()
+        return row["confirmations"] if row else 0
+
     # ---------------------------------------------------------------- retention
     def prune(self, *, keep_observation_days: int = 7,
               now: Optional[int] = None) -> int:
-        """Drop raw observations older than the retention window."""
+        """Drop raw observations older than the retention window, and any
+        conflict suspicion that has not been reconfirmed in that same
+        window (bounded state: a group an attacker can no longer reach
+        does not accumulate confirmation credit forever)."""
         now = int(now if now is not None else time.time())
         cutoff = now - keep_observation_days * 86400
         with self.connection:
             cursor = self.connection.execute(
                 "DELETE FROM observations WHERE observed_at < ?", (cutoff,))
+            self.connection.execute(
+                "DELETE FROM chain_conflicts WHERE last_seen < ?", (cutoff,))
         return cursor.rowcount
