@@ -26,8 +26,19 @@ a signed discovery hint; the client revalidates every endpoint.
 
 `operatorGroup` counts organizations, not endpoints. Several CIPIG or ALENOC
 endpoints are one independent group. Unknown endpoints are not artificially
-merged. Observations retain a vantage-point identifier so unreachable-from-one-
-probe is not overstated as globally offline.
+merged, and an endpoint with no known operator identity never counts toward
+independent-operator diversity on its own, no matter how many such hostnames
+appear: `status` reports them separately instead. Observations retain a
+vantage-point identifier so unreachable-from-one-probe is not overstated as
+globally offline.
+
+A backend is promoted from certified-but-unverified to SAFE only once its
+chain evidence compares cleanly *and* is independently corroborated: either
+agreement across at least two independent (known) operator groups, or
+agreement with an explicit trusted reference (`--reference-height` /
+`--reference-tip-hash`, e.g. your own Core node). A suspected-but-unconfirmed
+disagreement or a lag never promotes, and neither does a single
+self-consistent group by itself.
 
 ## Running it
 
@@ -36,6 +47,14 @@ python -m monitor.cli status
 python -m monitor.cli discover-now --policy safe-core-policy.json
 python -m monitor.cli publish --directory-version 3
 ```
+
+`--policy` is verified, not merely read: the document must carry a valid
+Ed25519 signature from the pinned key (`--policy-key`, defaulting to the
+production key under `core-safety/production/`) and a `policyVersion` at or
+above the highest one this monitor's database has already accepted. A
+missing, tampered, wrongly-signed or rolled-back policy is treated the same
+as no policy at all: every backend classifies as `UNREVIEWED_CORE`, never
+SAFE.
 
 ## What the monitor can and cannot say
 
@@ -57,8 +76,10 @@ into a way to probe internal services.
 
 `operatorGroup` represents an independently reviewed operator, not an
 endpoint-count vote. Several endpoints run by CIPIG, ALENOC or another one
-operator remain one group; unknown endpoints are not grouped by guesswork. A
-healthy conflicting independent operator is still a conflict.
+operator remain one group; unknown endpoints are not grouped by guesswork,
+and are excluded from the independent-operator count entirely, since an
+attacker can mint any number of unattested hostnames for free. A healthy
+conflicting independent operator is still a conflict.
 
 Observations retain their vantage-point identifier. Thus “unreachable from
 probe A” is not overstated as “globally offline”; basic health remains useful
