@@ -26,7 +26,7 @@ from typing import List, Optional
 from .classify import (
     ChainObservation, classify_assets, classify_backend, compare_chains,
     count_independent_operators, count_unknown_safe_endpoints, independent_groups,
-    known_group_count, operator_group_key,
+    is_corroborated, operator_group_key,
 )
 from .crawl import Crawler
 from .directory import build_directory
@@ -192,7 +192,39 @@ async def run_discovery(store: Store, *, seeds_path: pathlib.Path,
             state.reason = result.error or "probe failed"
         store.save_state(state, now=now)
 
-    verdict = compare_chains(observations, thresholds=thresholds, reference=reference)
+    # First pass: a pure, this-crawl-only comparison, used to (a) know which
+    # groups conflicted or were verified just now, and (b) update the
+    # persisted cross-crawl conflict-confirmation counters below.  The
+    # confirmations=1 default here is deliberate: whether a conflict is
+    # *confirmed* depends on what earlier, independent crawls saw, which
+    # compare_chains itself has no memory of -- that memory lives in the
+    # store (see conflict_confirmations / R-03).
+    probe_verdict = compare_chains(observations, thresholds=thresholds, reference=reference)
+    usable_now = [item for item in observations if item.height is not None and item.tip_hash]
+    seen_groups = set(independent_groups(usable_now).keys())
+    conflicting_now = set(probe_verdict.conflicting_groups)
+    verified_now = set(probe_verdict.verified_groups)
+
+    max_confirmations = 1
+    for group in seen_groups:
+        if group in conflicting_now:
+            max_confirmations = max(
+                max_confirmations, store.record_conflict(group, now=now))
+        elif group in verified_now:
+            # Recovery requires a positively verified clean comparison, not
+            # merely the absence of a conflict this crawl: an endpoint that
+            # simply withholds checkpoint evidence for one crawl must not
+            # launder away a prior confirmed conflict by going quiet.
+            store.clear_conflict(group)
+        # Neither conflicting nor verified this crawl (e.g. lagging, or
+        # simply uncorroborated): leave any existing confirmation count
+        # untouched.
+
+    verdict = probe_verdict
+    if conflicting_now and max_confirmations > 1:
+        verdict = compare_chains(observations, thresholds=thresholds,
+                                 reference=reference, confirmations=max_confirmations)
+
     if verdict.status == "CHAIN_CONFLICT":
         for state in store.all_states():
             group = operator_group_key(state.operator_group, state.endpoint.hostname)
@@ -200,24 +232,21 @@ async def run_discovery(store: Store, *, seeds_path: pathlib.Path,
                 state.security = Security.CONFLICT
                 state.reason = verdict.detail
                 store.save_state(state, now=now)
-    elif verdict.status == "VALID" and (
-            reference is not None
-            or known_group_count(independent_groups(observations)) >= 2):
-        # Promotion requires both a clean comparison AND independent
-        # corroboration: a trusted reference observation, or agreement across
-        # at least two independent ATTESTED operator groups.  CONFLICT_SUSPECTED
-        # and TEMPORARY_LAG must never promote, and neither may a lone
-        # self-consistent group, known or not: a single attacker-controlled
-        # endpoint (or any number of hostnames under one attacker) is always
-        # internally consistent with itself, and unknown-operator hostnames
-        # are excluded from the count entirely (SRV-05) since an attacker can
-        # mint any number of them for free.  The comparison anchor being the
-        # highest self-reported height when no reference is supplied is
-        # therefore never enough on its own; it only matters once a second
-        # independent, attested group is required to agree with it.
+    elif is_corroborated(verdict, reference_supplied=reference is not None):
+        # SAFE requires positively verified chain evidence (verdict.verified_
+        # groups), never merely the absence of a detected conflict: a
+        # configured --reference with no comparable evidence, or a claim
+        # ahead of everything it was actually compared against, counts for
+        # nothing (see is_corroborated() and _verified_groups()).  Only the
+        # specific endpoints whose own evidence was verified are promoted --
+        # never every UNVERIFIED+REACHABLE endpoint store-wide, which is
+        # what let an uncorroborated rider ride a genuine corroboration to
+        # SAFE.
         for state in store.all_states():
+            group = operator_group_key(state.operator_group, state.endpoint.hostname)
             if state.security is Security.UNVERIFIED \
-                    and state.availability is Availability.REACHABLE:
+                    and state.availability is Availability.REACHABLE \
+                    and group in verdict.verified_groups:
                 state.security = Security.SAFE
                 state.reason = "certified backend and independently corroborated chain evidence"
                 store.save_state(state, now=now)
@@ -295,12 +324,24 @@ def main(argv=None) -> int:
                         help="concurrent probes; keep it low to stay polite")
     parser.add_argument("--reference-height", type=int, default=None,
                         help="tip height from a trusted reference node (e.g. your "
-                             "own Core), if you have one; enables SAFE promotion "
-                             "from agreement with it alone, without needing a "
-                             "second independent operator group")
+                             "own Core), if you have one; an endpoint that "
+                             "actually agrees with it can then be promoted from "
+                             "one attested operator group instead of two -- but "
+                             "only for what was actually compared: a height "
+                             "the reference never reached is never agreement "
+                             "on its own, no matter how the reference is set")
     parser.add_argument("--reference-tip-hash", default=None,
                         help="tip hash from that trusted reference node; required "
                              "together with --reference-height")
+    parser.add_argument("--reference-checkpoint-hash", default=None,
+                        help="optional: the reference node's hash for the "
+                             "network's incident checkpoint block, if it has one; "
+                             "strengthens the reference by letting it be compared "
+                             "on real chain-identity evidence, not just a height/"
+                             "tip pair")
+    parser.add_argument("--reference-genesis-hash", default=None,
+                        help="optional: the reference node's genesis hash, if "
+                             "you want it compared too")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("status")
     subparsers.add_parser("discover-now")
@@ -336,6 +377,8 @@ def main(argv=None) -> int:
                 endpoint=EndpointId("(operator reference)", 0, Transport.TCP),
                 height=arguments.reference_height,
                 tip_hash=arguments.reference_tip_hash,
+                checkpoint_hash=arguments.reference_checkpoint_hash,
+                genesis_hash=arguments.reference_genesis_hash,
                 operator_group="TRUSTED-REFERENCE")
         summary = asyncio.run(run_discovery(
             store,
