@@ -1,5 +1,6 @@
 import asyncio
 import os
+import threading
 
 import pytest
 
@@ -69,3 +70,29 @@ def test_no_matches_returns_empty(suid_db):
     result = asyncio.run(db.get_assets_with_prefix(b'NOPE'))
 
     assert result == []
+
+
+def test_all_utxos_resolves_asset_list_off_the_event_loop(suid_db):
+    '''RVN-01: resolving a multi-name asset filter used to run a
+    synchronous per-name LevelDB lookup directly on the event loop,
+    before ever reaching run_in_thread -- blocking every other session
+    for however long the filter took to resolve. It must run in the
+    thread pool instead, like read_utxos() below it already does.'''
+    db = object.__new__(DB)
+    db.suid_db = suid_db
+
+    calling_threads = []
+    real_get_id_for_asset = DB.get_id_for_asset
+
+    def tracking_get_id_for_asset(self, asset):
+        calling_threads.append(threading.current_thread())
+        return real_get_id_for_asset(self, asset)
+
+    db.get_id_for_asset = tracking_get_id_for_asset.__get__(db, DB)
+
+    event_loop_thread = threading.current_thread()
+    result = asyncio.run(db.all_utxos(b'\x00' * 11, ['A', 'B', 'C']))
+
+    assert result == []
+    assert calling_threads, 'get_id_for_asset was never called'
+    assert all(t is not event_loop_thread for t in calling_threads)

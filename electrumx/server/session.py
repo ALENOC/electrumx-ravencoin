@@ -1015,6 +1015,15 @@ def check_asset(name):
         raise RPCError(
             BAD_REQUEST, f'asset name greater than 32 characters'
         ) from None
+    # RVN-07: callers uniformly do name.encode('ascii') after this check. A
+    # non-ASCII name must be rejected here with a clean BAD_REQUEST, not
+    # left to surface as an unhandled UnicodeEncodeError deep in a DB call.
+    try:
+        name.encode('ascii')
+    except UnicodeEncodeError:
+        raise RPCError(
+            BAD_REQUEST, f'asset name must be ASCII'
+        ) from None
 
 def check_h160(h160):
     if not isinstance(h160, str):
@@ -1025,6 +1034,41 @@ def check_h160(h160):
         raise RPCError(
             BAD_REQUEST, f'h160 not 20 bytes'
         ) from None
+    # RVN-07: callers uniformly do bytes.fromhex(h160) after this check. A
+    # non-hex value must be rejected here with a clean BAD_REQUEST, not
+    # left to surface as an unhandled ValueError deep in a DB call.
+    try:
+        bytes.fromhex(h160)
+    except ValueError:
+        raise RPCError(
+            BAD_REQUEST, f'h160 must be valid hexadecimal'
+        ) from None
+
+# RVN-01: an asset filter list is attacker-controlled request input that
+# drives real DB/mempool work per entry. Bounding it here, before any of
+# that work is attempted, stops an oversized list from being used to force
+# expensive per-name lookups regardless of how cheap each one is.
+MAX_ASSET_FILTER_LENGTH = 1000
+
+
+def check_asset_filter(assets):
+    '''Validate a list/set asset filter and return it as a frozenset.
+
+    Rejects an oversized filter before any DB or mempool work is
+    attempted. Returning a frozenset also gives downstream O(1)
+    membership tests instead of an O(n) scan per lookup.
+    '''
+    names = list(assets)
+    if len(names) > MAX_ASSET_FILTER_LENGTH:
+        raise RPCError(
+            BAD_REQUEST,
+            f'asset filter must not exceed {MAX_ASSET_FILTER_LENGTH} entries'
+        ) from None
+    for name in names:
+        if name is None:
+            continue
+        check_asset(name)
+    return frozenset(names)
 
 class ElectrumX(SessionBase):
     '''A TCP server that handles incoming Electrum connections.'''
@@ -1370,9 +1414,12 @@ class ElectrumX(SessionBase):
         if isinstance(asset, str):
             check_asset(asset)
         elif isinstance(asset, Iterable):
-            for a in asset:
-                if a is None: continue
-                check_asset(a)
+            asset = check_asset_filter(asset)
+            # Charged on the filter size before the DB/mempool work it
+            # drives, not only on the result size afterward (RVN-01): an
+            # attacker-controlled filter with many misses would otherwise
+            # be free right up until bump_cost() ran on a small result.
+            self.bump_cost(1.0 + len(asset) / 50)
         elif not isinstance(asset, bool):
             raise RPCError(
                 BAD_REQUEST, f'asset must be a list, string, or boolean'
@@ -1482,10 +1529,11 @@ class ElectrumX(SessionBase):
             check_asset(asset)
             must_have_names = [asset]
         elif isinstance(asset, Iterable):
-            for a in asset:
-                if a is None: continue
-                check_asset(a)
+            asset = check_asset_filter(asset)
             must_have_names = asset
+            # See hashX_listunspent: charge on filter size, before the
+            # DB/mempool work it drives (RVN-01).
+            self.bump_cost(1.0 + len(asset) / 50)
         elif not isinstance(asset, bool):
             raise RPCError(
                 BAD_REQUEST, f'asset must be a list, string, or boolean'
@@ -1500,8 +1548,14 @@ class ElectrumX(SessionBase):
         if include_names:
             return {(k or 'rvn'): {'confirmed': confirmed[k], 'unconfirmed': unconfirmed[k]} for k in set(confirmed.keys()).union(unconfirmed.keys()).union(must_have_names)}
         else:
-            confirmed = 0 if len(confirmed) == 0 else confirmed[list(confirmed.keys())[0]]
-            unconfirmed = 0 if len(unconfirmed) == 0 else unconfirmed[list(unconfirmed.keys())[0]]
+            # RVN-02: pick the balance by the exact key that was actually
+            # requested (the asset name, or None for native RVN) instead of
+            # whatever key happens to be first in the dict. An arbitrary
+            # first key silently returns another asset's balance instead of
+            # the caller's if the dict ever holds more than one entry.
+            key = asset if isinstance(asset, str) else None
+            confirmed = confirmed.get(key, 0)
+            unconfirmed = unconfirmed.get(key, 0)
             return {'confirmed': confirmed, 'unconfirmed': unconfirmed}
 
     async def scripthash_get_balance(self, scripthash, asset=False):
