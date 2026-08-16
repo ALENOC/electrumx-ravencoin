@@ -45,14 +45,14 @@ gates below.
 
 | Gate | Status |
 |---|---|
-| Core reindex | IN PROGRESS |
-| Canonical checkpoint observed | PENDING |
-| `transfer_overflow` active on deployment | PENDING |
-| txindex, assetindex and REST live | PENDING; this is the end-to-end synchronized-node gate |
-| Asset RPC with historical data | PENDING |
-| ElectrumX historical index | IN PROGRESS |
-| Live `server.ravencoin_backend` | PENDING final synchronized evidence |
-| Client `SAFE_CORE_VERIFIED` against live server | PENDING |
+| Core reindex | COMPLETE; `blocks == headers == 4,495,881`, `verificationprogress 0.9999961890996617` |
+| Canonical checkpoint observed | PASS; live `getblockhash 4487775` matches `INCIDENT_CHECKPOINT_HASH` exactly, nHeight at 4487774-4487777 all correct |
+| `transfer_overflow` active on deployment | ACTIVE; `bip9_softforks.transfer_overflow.status = active`, since height 4,493,664 |
+| txindex, assetindex and REST live | PASS; REST `/rest/block/<hash>.bin` returned HTTP 200, 3135 bytes; `getrawtransaction` by bare txid returned a real historical tx (confirmations 8,100) |
+| Asset RPC with historical data | PASS; `listassets`/`getassetdata` return real mainnet asset metadata; a nonexistent asset name correctly returns empty, not an error |
+| ElectrumX historical index | IN PROGRESS; ElectrumX db height well behind Core tip, indexing from genesis |
+| Live `server.ravencoin_backend` | PASS; live call returned `coreSafe: true`, `networkMatches: true`, `backendSynchronized: true`, `kawpowHeightValidation: true`, `checkpoint4487775: true` |
+| Client `SAFE_CORE_VERIFIED` against live server | PENDING; requires ElectrumX historical index to finish first |
 | Public CA-valid TLS endpoint | PENDING operator/network validation |
 
 The release is certified. The deployment is not yet declared fully validated.
