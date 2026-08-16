@@ -1,9 +1,9 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from electrumx.server.block_processor import BlockProcessor
+from electrumx.server.block_processor import BlockProcessor, ChainError, OnDiskBlock
 
 
 PREFETCH_LIMIT = 100
@@ -130,3 +130,39 @@ def test_regression_reindex_incident_scenario():
     assert indexed_height >= daemon_height
     caught_up = True  # on_caught_up() fires again, nothing left to fetch
     assert caught_up is True
+
+
+@pytest.mark.asyncio
+async def test_confirmed_block_chain_error_is_diagnosed_distinctly_and_not_flushed(caplog):
+    '''RVN-05 (confirmed-block side): daemon-provided block data that
+    violates an internal consensus/index invariant (ChainError) must be
+    reported with a distinct, operator-visible "daemon-integrity failure"
+    diagnosis rather than the generic crash-trace message used for
+    unrelated bugs, and it must propagate rather than being swallowed.
+    self.ok stays False (set before any tx of a block is processed, only
+    True again once a block completes), so this must not attempt to
+    flush partial state.
+    '''
+    state = SimpleNamespace(height=100)
+    fake = SimpleNamespace(
+        env=SimpleNamespace(write_bad_vouts_to_file=False),
+        db=SimpleNamespace(open_for_sync=AsyncMock(
+            return_value=SimpleNamespace(copy=lambda: state))),
+        daemon=SimpleNamespace(),
+        state=state,
+        ok=False,
+        caught_up=True,
+        reorg_count=None,
+        next_block_hashes=AsyncMock(side_effect=ChainError('bad asset reference')),
+        flush=AsyncMock(),
+    )
+
+    with patch('electrumx.server.block_processor.verify_database_chain', AsyncMock()), \
+            patch.object(OnDiskBlock, 'scan_files', AsyncMock()):
+        with caplog.at_level('ERROR'):
+            with pytest.raises(ChainError):
+                await BlockProcessor.fetch_and_process_blocks(fake, AsyncMock(), AsyncMock())
+
+    assert any('daemon-integrity failure' in record.message for record in caplog.records)
+    assert any('height 100' in record.message for record in caplog.records)
+    fake.flush.assert_not_awaited()

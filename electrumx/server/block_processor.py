@@ -1772,6 +1772,24 @@ class BlockProcessor:
         except CancelledError:
             await OnDiskBlock.stop_prefetching()
             await self.run_with_lock(self.flush_if_safe())
+        except ChainError as e:
+            # RVN-05: the daemon handed us confirmed block data that
+            # violates an internal consensus/index invariant (e.g. a
+            # reference to an asset that was never created). This is not
+            # a transient fault to retry past: indexing further would
+            # silently diverge from Ravencoin Core. self.ok is already
+            # False here (set before advance_block/backup_block touch any
+            # tx in the failing block, only True again once a block
+            # completes cleanly), so flush_if_safe() will not persist the
+            # partial block; this branch exists to give the operator a
+            # distinct, unambiguous diagnosis instead of a generic crash
+            # trace indistinguishable from a bug.
+            logger.error(
+                f'daemon-integrity failure: confirmed block data at/after '
+                f'indexed height {self.state.height:,d} violates an '
+                f'internal consensus invariant and cannot be indexed '
+                f'further; refusing to continue: {e}')
+            raise
         except Exception:
             logging.exception('Critical Block Processor Error:')
             raise
