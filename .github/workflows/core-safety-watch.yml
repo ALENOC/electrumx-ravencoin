@@ -298,6 +298,48 @@ jobs:
           name: core-safety-reports
           path: core-safety/state/reports
 
+      - name: Verify report provenance against this run's discovery
+        # The signing step below trusts each report's embedded candidate
+        # identity to decide what it is signing as KNOWN_SAFE or
+        # KNOWN_UNSAFE. Within-run artifact integrity is a GitHub guarantee,
+        # but nothing previously checked that a downloaded report's
+        # candidate was actually one this same run's discover job produced,
+        # so a report naming an unrelated repository@commit (however it got
+        # into the artifact) would have been signed without complaint.
+        env:
+          CANDIDATES: ${{ needs.discover.outputs.candidates }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import glob
+          import json
+          import os
+          import sys
+
+          discovered = {
+              (entry.get("repository"), entry.get("commit"))
+              for entry in json.loads(os.environ["CANDIDATES"])
+              if entry.get("repository") and entry.get("commit")
+          }
+
+          failures = []
+          for path in sorted(glob.glob("core-safety/state/reports/report-*.json")):
+              report = json.loads(open(path, encoding="utf-8").read())
+              candidate = report.get("candidate") or {}
+              identity = (candidate.get("repository"), candidate.get("commit"))
+              if identity not in discovered:
+                  failures.append(f"{path}: candidate {identity} is not among "
+                                  f"this run's discovered candidates")
+
+          if failures:
+              print("report provenance check failed:", file=sys.stderr)
+              for failure in failures:
+                  print(f"  {failure}", file=sys.stderr)
+              sys.exit(1)
+          print(f"{len(discovered)} discovered candidate(s), all downloaded "
+                f"reports match one of them")
+          PY
+
       - name: Generate and sign the policy
         env:
           POLICY_SIGNING_KEY: ${{ secrets.POLICY_SIGNING_KEY }}
