@@ -47,6 +47,12 @@ for attempt in $(seq 1 60); do
     sleep 2
 done
 
+# The manifest below records a genesis result, so genesis is actually
+# queried and its linkage to block 1 checked here rather than assumed.
+genesis_hash=$(cli getblockhash 0)
+test -n "$genesis_hash"
+cli getblock "$genesis_hash" >/dev/null
+
 # This is the Ravencoin testnet/regtest address used by the candidate's
 # asset-serialization tests; Bitcoin's commonly copied regtest fixture is
 # rejected by Ravencoin's address validation.
@@ -55,6 +61,8 @@ block_hash=$(cli getblockhash 1)
 block_json=$(cli getblock "$block_hash" 2)
 txid=$(printf '%s' "$block_json" | python3 -c 'import json, sys; print(json.load(sys.stdin)["tx"][0]["txid"])')
 cli getrawtransaction "$txid" >/dev/null
+genesis_linked=$(printf '%s' "$block_json" | python3 -c 'import json, sys; print(json.load(sys.stdin)["previousblockhash"])')
+test "$genesis_linked" = "$genesis_hash"
 curl --fail --silent --show-error --max-time 15 \
     "http://127.0.0.1:${rpc_port}/rest/block/${block_hash}.bin" \
     --output /tmp/core-qualification-block.bin
