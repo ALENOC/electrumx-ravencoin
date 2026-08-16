@@ -175,6 +175,7 @@ class ProbeResult:
     genesis_hash: Optional[str] = None
     height: Optional[int] = None
     tip_hash: Optional[str] = None
+    checkpoint_hash: Optional[str] = None
     backend: Optional[dict] = None
     features: Optional[dict] = None
     peers: tuple = ()
