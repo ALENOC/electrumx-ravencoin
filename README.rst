@@ -101,18 +101,18 @@ Documentation menu
 
 Start with whichever describes your goal:
 
-* `Getting started`_ — beginner concepts, bundled Core and existing-Core paths.
-* `Hardware`_ — Raspberry Pi, Orange Pi, x86, storage and cooling decisions.
-* `Public node`_ — dynamic DNS, DuckDNS, CGNAT, forwarding and TLS.
-* `Operations`_ — lifecycle commands, progress checks, backups and upgrades.
-* `Security model`_ — what release and server evidence can, and cannot, prove.
-* `August 2026 incident guide`_ — technical incident background and recovery.
-* `Core certification`_ — candidate releases, profile and signed policy.
-* `Electrum monitor`_ — discovery, health, operator groups and vantage points.
-* `Architecture`_ — service boundaries and data flow.
-* `Troubleshooting`_ — symptoms, checks and safe fixes.
-* `Validation status`_ — the single source for current release/live status.
-* `Documentation index`_ — the complete user-oriented map, including protocol
+* `Getting started`_: beginner concepts, bundled Core and existing-Core paths.
+* `Hardware`_: Raspberry Pi, Orange Pi, x86, storage and cooling decisions.
+* `Public node`_: dynamic DNS, DuckDNS, CGNAT, forwarding and TLS.
+* `Operations`_: lifecycle commands, progress checks, backups and upgrades.
+* `Security model`_: what release and server evidence can, and cannot, prove.
+* `August 2026 incident guide`_: technical incident background and recovery.
+* `Core certification`_: candidate releases, profile and signed policy.
+* `Electrum monitor`_: discovery, health, operator groups and vantage points.
+* `Architecture`_: service boundaries and data flow.
+* `Troubleshooting`_: symptoms, checks and safe fixes.
+* `Validation status`_: the single source for current release/live status.
+* `Documentation index`_: the complete user-oriented map, including protocol
   and RPC references.
 
 Quick start

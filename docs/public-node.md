@@ -41,7 +41,7 @@ unencrypted public Electrum listener on 50001.
 
 ## Dynamic DNS and DuckDNS
 
-### My home IP changes — what do I do?
+### My home IP changes: what do I do?
 
 DNS is the directory that maps a hostname to an IP address. Dynamic DNS (DDNS)
 updates that mapping when your residential public IP changes. For example,

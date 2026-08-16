@@ -146,8 +146,8 @@ discovered the original vulnerability:
 
 ## References
 
-* [Ravencoin 4.8.0 release notes — 2miners/Ravencoin](https://github.com/2miners/Ravencoin/releases/tag/v4.8.0)
-* [Ravencoin source repository — RavenProject/Ravencoin](https://github.com/RavenProject/Ravencoin)
+* [Ravencoin 4.8.0 release notes (2miners/Ravencoin)](https://github.com/2miners/Ravencoin/releases/tag/v4.8.0)
+* [Ravencoin source repository (RavenProject/Ravencoin)](https://github.com/RavenProject/Ravencoin)
 * [Core certification guide](core-certification.md)
 * [Security model](security-model.md)
 * [Live validation status](validation-status.md)
