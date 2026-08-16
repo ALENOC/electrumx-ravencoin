@@ -572,7 +572,7 @@ class BlockProcessor:
                          self.new_h160_ids, self.new_h160_ids_undos, self.h160_ids_deletes,
                          self.asset_metadata, self.asset_metadata_undos, self.asset_metadata_deletes, 
                          self.asset_metadata_history, self.asset_metadata_history_undos, self.asset_metadata_history_deletes,
-                         self.asset_broadcasts, self.asset_broadcasts_deletes, self.asset_broadcasts_deletes,
+                         self.asset_broadcasts, self.asset_broadcasts_undos, self.asset_broadcasts_deletes,
                          self.tags, self.tags_undos, self.tags_deletes,
                          self.tag_history, self.tag_history_undos, self.tag_history_deletes,
                          self.freezes, self.freezes_undos, self.freezes_deletes,
@@ -1323,7 +1323,7 @@ class BlockProcessor:
             assert asset
             broadcasts_touched.add(asset.decode())
             suffix = data_parser.read_bytes(4 + 5)
-            self.asset_broadcasts_deletes.append(PREFIX_BROADCAST + asset + suffix)
+            self.asset_broadcasts_deletes.append(PREFIX_BROADCAST + asset_id + suffix)
 
         freezes_touched = set()
         data_parser = DataParser(self.db.read_freeze_undo_info(height))
