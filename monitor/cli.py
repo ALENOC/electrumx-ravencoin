@@ -25,7 +25,7 @@ from typing import List, Optional
 
 from .classify import (
     ChainObservation, classify_assets, classify_backend, compare_chains,
-    count_independent_operators,
+    count_independent_operators, independent_groups,
 )
 from .crawl import Crawler
 from .directory import build_directory
@@ -148,7 +148,8 @@ async def run_discovery(store: Store, *, seeds_path: pathlib.Path,
                         registry_path: pathlib.Path, policy: dict,
                         limits: Limits, thresholds: Thresholds,
                         allow_private: bool = False,
-                        vantage_point: str = "local") -> dict:
+                        vantage_point: str = "local",
+                        reference: Optional[ChainObservation] = None) -> dict:
     now = int(time.time())
     seeds = []
     for endpoint, group, operator in load_seeds(seeds_path):
@@ -190,7 +191,7 @@ async def run_discovery(store: Store, *, seeds_path: pathlib.Path,
             state.reason = result.error or "probe failed"
         store.save_state(state, now=now)
 
-    verdict = compare_chains(observations, thresholds=thresholds)
+    verdict = compare_chains(observations, thresholds=thresholds, reference=reference)
     if verdict.status == "CHAIN_CONFLICT":
         for state in store.all_states():
             group = state.operator_group or f"UNKNOWN-{state.endpoint.hostname}"
@@ -198,14 +199,26 @@ async def run_discovery(store: Store, *, seeds_path: pathlib.Path,
                 state.security = Security.CONFLICT
                 state.reason = verdict.detail
                 store.save_state(state, now=now)
-    else:
-        # Only a chain that compares cleanly can promote a backend claim to SAFE.
+    elif verdict.status == "VALID" and (
+            reference is not None or len(independent_groups(observations)) >= 2):
+        # Promotion requires both a clean comparison AND independent
+        # corroboration: a trusted reference observation, or agreement across
+        # at least two independent operator groups.  CONFLICT_SUSPECTED and
+        # TEMPORARY_LAG must never promote, and neither may a lone
+        # self-consistent group: a single attacker-controlled endpoint (or
+        # any number of hostnames under one attacker) is always internally
+        # consistent with itself.  The comparison anchor being the highest
+        # self-reported height when no reference is supplied is therefore
+        # never enough on its own; it only matters once a second independent
+        # group is required to agree with it.
         for state in store.all_states():
             if state.security is Security.UNVERIFIED \
                     and state.availability is Availability.REACHABLE:
                 state.security = Security.SAFE
-                state.reason = "certified backend and consistent chain evidence"
+                state.reason = "certified backend and independently corroborated chain evidence"
                 store.save_state(state, now=now)
+    # A VALID-but-uncorroborated verdict, CONFLICT_SUSPECTED, TEMPORARY_LAG or
+    # UNKNOWN all leave existing classifications as they were: no promotion.
 
     return {"probed": len(results), "edges": len(edges), "chain": verdict.status,
             "chain_detail": verdict.detail}
@@ -272,6 +285,14 @@ def main(argv=None) -> int:
                         help="new candidates accepted in this run")
     parser.add_argument("--concurrency", type=int, default=None,
                         help="concurrent probes; keep it low to stay polite")
+    parser.add_argument("--reference-height", type=int, default=None,
+                        help="tip height from a trusted reference node (e.g. your "
+                             "own Core), if you have one; enables SAFE promotion "
+                             "from agreement with it alone, without needing a "
+                             "second independent operator group")
+    parser.add_argument("--reference-tip-hash", default=None,
+                        help="tip hash from that trusted reference node; required "
+                             "together with --reference-height")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("status")
     subparsers.add_parser("discover-now")
@@ -301,6 +322,13 @@ def main(argv=None) -> int:
         policy_version = policy.get("policyVersion")
         if isinstance(policy_version, int) and not isinstance(policy_version, bool):
             store.record_policy_version(policy_version)
+        reference = None
+        if arguments.reference_height is not None and arguments.reference_tip_hash:
+            reference = ChainObservation(
+                endpoint=EndpointId("(operator reference)", 0, Transport.TCP),
+                height=arguments.reference_height,
+                tip_hash=arguments.reference_tip_hash,
+                operator_group="TRUSTED-REFERENCE")
         summary = asyncio.run(run_discovery(
             store,
             seeds_path=pathlib.Path(arguments.seeds),
@@ -308,7 +336,8 @@ def main(argv=None) -> int:
             policy=policy,
             limits=limits, thresholds=Thresholds(),
             allow_private=arguments.allow_private,
-            vantage_point=arguments.vantage_point))
+            vantage_point=arguments.vantage_point,
+            reference=reference))
         print(f"probed {summary['probed']} endpoint(s), {summary['edges']} peer edge(s), "
               f"chain {summary['chain']}: {summary['chain_detail']}")
         return 0
