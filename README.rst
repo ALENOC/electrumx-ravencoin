@@ -124,7 +124,8 @@ boards). Docker selects the matching architecture automatically; the commands
 below are the same for both.
 
 For the bundled path, use a 64-bit Linux host with Docker Engine, Compose v2,
-Git and OpenSSL:
+Git and OpenSSL. If Docker is not installed yet, see `Installing Docker when
+it is missing`_ below before running these commands:
 
 .. code-block:: sh
 
@@ -145,6 +146,63 @@ What each command does:
 The script does not print credentials or delete existing data. ``--enable-reboot``
 is optional and installs a user service for reboot recovery. Read `Getting
 started`_ before using an existing Core instead of the bundled mode.
+
+Installing Docker when it is missing
+------------------------------------
+
+On a Debian 13 (trixie) ARM64 host, install Docker Engine and Compose v2 from
+Docker's official repository:
+
+.. code-block:: sh
+
+   sudo apt update
+   sudo apt install -y ca-certificates curl
+
+   sudo install -m 0755 -d /etc/apt/keyrings
+   sudo curl -fsSL https://download.docker.com/linux/debian/gpg \
+       -o /etc/apt/keyrings/docker.asc
+   sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+   sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
+   Types: deb
+   URIs: https://download.docker.com/linux/debian
+   Suites: trixie
+   Components: stable
+   Architectures: arm64
+   Signed-By: /etc/apt/keyrings/docker.asc
+   EOF
+
+   sudo apt update
+
+   sudo apt install -y \
+       docker-ce \
+       docker-ce-cli \
+       containerd.io \
+       docker-buildx-plugin \
+       docker-compose-plugin
+
+On an amd64 host, set ``Architectures: amd64`` in the ``docker.sources`` entry.
+On another distribution or release, use the matching commands from Docker's
+official installation documentation.
+
+Then let your own user manage Docker without ``sudo``:
+
+.. code-block:: sh
+
+   sudo usermod -aG docker "$USER"
+   newgrp docker
+
+Membership in the ``docker`` group is root-equivalent on the host, so only add
+accounts you fully trust. Log out and back in, or run ``newgrp docker``, for
+the change to take effect.
+
+Verify before continuing with the quick start:
+
+.. code-block:: sh
+
+   docker version
+   docker compose version
+   docker run --rm hello-world
 
 Nothing is ready immediately after Docker starts, and that is normal
 ----------------------------------------------------------------------
