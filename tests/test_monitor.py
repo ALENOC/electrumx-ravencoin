@@ -639,3 +639,56 @@ def test_candidates_include_entries_the_directory_does_not_call_safe():
     hints = {item["hostname"]: item["hint"] for item in candidates}
     assert hints["legacy.example.org"] == "BACKEND_MISSING"
     assert hints["a.cipig.net"] == "SAFE"
+
+
+def test_store_migrates_schema_v3_database_to_v4(tmp_path):
+    """A database created before chain_conflicts existed (schema v3, the
+    SRV-02 policy_state release) must upgrade cleanly and gain the new
+    table, without disturbing what it already had."""
+    path = str(tmp_path / "monitor.sqlite3")
+    store = Store(path)
+    store.record_policy_version(5)
+    store.close()
+
+    import sqlite3
+    connection = sqlite3.connect(path)
+    connection.execute("DROP TABLE chain_conflicts")
+    connection.execute("UPDATE schema_version SET version = 3")
+    connection.commit()
+    connection.close()
+
+    reopened = Store(path)
+    try:
+        assert reopened.load_minimum_policy_version() == 5
+        assert reopened.conflict_confirmations("ANY-GROUP") == 0
+        assert reopened.record_conflict("ANY-GROUP", now=100) == 1
+    finally:
+        reopened.close()
+
+
+def test_store_conflict_confirmations_increment_and_clear(tmp_path):
+    store = Store(str(tmp_path / "monitor.sqlite3"))
+    try:
+        assert store.conflict_confirmations("GROUP-A") == 0
+        assert store.record_conflict("GROUP-A", now=100) == 1
+        assert store.record_conflict("GROUP-A", now=200) == 2
+        assert store.record_conflict("GROUP-A", now=300) == 3
+        assert store.conflict_confirmations("GROUP-A") == 3
+        store.clear_conflict("GROUP-A")
+        assert store.conflict_confirmations("GROUP-A") == 0
+        # Clearing a group with no row is a harmless no-op.
+        store.clear_conflict("GROUP-B")
+    finally:
+        store.close()
+
+
+def test_store_prunes_stale_conflict_confirmations(tmp_path):
+    store = Store(str(tmp_path / "monitor.sqlite3"))
+    try:
+        store.record_conflict("STALE", now=0)
+        store.record_conflict("FRESH", now=9_000_000)
+        store.prune(keep_observation_days=7, now=9_000_000)
+        assert store.conflict_confirmations("STALE") == 0
+        assert store.conflict_confirmations("FRESH") == 1
+    finally:
+        store.close()
