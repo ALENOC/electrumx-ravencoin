@@ -39,7 +39,7 @@ def fake_session(status):
             ravencoin_backend_info_max_age=5,
             allow_unsafe_ravencoin_core=False,
             ravencoin_backend_identity=BackendIdentity.from_config(
-                repository="2miners/Ravencoin",
+                repository="RavenProject/Ravencoin",
                 tag="v4.8.0",
                 commit="b60f50e04f1fba425b28804e61be2694faaf3469",
                 artifact_sha256=(
@@ -82,7 +82,7 @@ async def test_backend_rpc_returns_sanitized_fresh_evidence():
     identity = result['backend']['identity']
     assert identity == {
         'evidence': 'BUILD_IDENTITY_VERIFIED',
-        'sourceRepository': '2miners/Ravencoin',
+        'sourceRepository': 'RavenProject/Ravencoin',
         'sourceTag': 'v4.8.0',
         'sourceCommit': 'b60f50e04f1fba425b28804e61be2694faaf3469',
         'artifactSha256':
