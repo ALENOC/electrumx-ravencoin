@@ -80,6 +80,38 @@ def manifest_digest(document: dict) -> str:
     return hashlib.sha256(canonical_bytes(document)).hexdigest()
 
 
+CONSENSUS_IMPACT_NONE = "NONE"
+CONSENSUS_IMPACT_COMPATIBILITY = "COMPATIBILITY"
+CONSENSUS_IMPACT_CONSENSUS_CHANGE = "CONSENSUS_CHANGE"
+VALID_CONSENSUS_IMPACT_CLASSES = (
+    CONSENSUS_IMPACT_NONE,
+    CONSENSUS_IMPACT_COMPATIBILITY,
+    CONSENSUS_IMPACT_CONSENSUS_CHANGE,
+)
+
+
+def classify_consensus_impact(classification: str) -> tuple:
+    """Derive the wire-level (consensusImpact, autoUpdateEligible) booleans.
+
+    The manifest only carries a boolean because that is what the update
+    decision/apply gates already check (update_decision.py,
+    update_apply.py). A boolean has no way to represent "not yet
+    classified" as distinct from "classified as safe", so classification
+    must happen here, upstream of the boolean, and must fail closed:
+    anything other than the three known values is refused rather than
+    silently treated as NONE.
+    """
+    if classification == CONSENSUS_IMPACT_NONE:
+        return False, True
+    if classification == CONSENSUS_IMPACT_COMPATIBILITY:
+        return False, False
+    if classification == CONSENSUS_IMPACT_CONSENSUS_CHANGE:
+        return True, False
+    raise ManifestError(
+        f"unclassifiable consensus impact {classification!r}; refusing to "
+        f"guess. Must be one of {VALID_CONSENSUS_IMPACT_CLASSES!r}")
+
+
 def build_manifest(*, electrumx_version: str, channel: str, artifact_digest: str,
                     architecture: str, core_version: str, core_repository: str,
                     core_tag: str, core_commit: str, certification_report_digest: str,

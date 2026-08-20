@@ -63,6 +63,39 @@ def _signed_manifest(key_pair, *, core_commit="c" * 40, architecture="linux/amd6
         return um.sign_manifest(body, private_key, key_id=key_id), key_id, public_bytes
 
 
+class ConsensusImpactClassificationTests(unittest.TestCase):
+
+    def test_none_is_auto_update_eligible(self):
+        consensus_impact, auto_eligible = um.classify_consensus_impact(
+            um.CONSENSUS_IMPACT_NONE)
+        self.assertFalse(consensus_impact)
+        self.assertTrue(auto_eligible)
+
+    def test_compatibility_is_not_auto_update_eligible(self):
+        consensus_impact, auto_eligible = um.classify_consensus_impact(
+            um.CONSENSUS_IMPACT_COMPATIBILITY)
+        self.assertFalse(consensus_impact)
+        self.assertFalse(auto_eligible)
+
+    def test_consensus_change_forces_manual_approval(self):
+        consensus_impact, auto_eligible = um.classify_consensus_impact(
+            um.CONSENSUS_IMPACT_CONSENSUS_CHANGE)
+        self.assertTrue(consensus_impact)
+        self.assertFalse(auto_eligible)
+
+    def test_unclassifiable_value_fails_closed(self):
+        with self.assertRaises(um.ManifestError):
+            um.classify_consensus_impact("UNKNOWN")
+
+    def test_missing_classification_fails_closed(self):
+        with self.assertRaises(um.ManifestError):
+            um.classify_consensus_impact(None)
+
+    def test_empty_string_fails_closed(self):
+        with self.assertRaises(um.ManifestError):
+            um.classify_consensus_impact("")
+
+
 class EligibilityTests(unittest.TestCase):
 
     def test_newer_stable_eligible(self):

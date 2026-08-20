@@ -426,18 +426,36 @@ class MonitorDeploymentTests(unittest.TestCase):
 
     def test_env_file_writer_sets_restrictive_permissions(self):
         import io
-        written = {}
 
-        def fake_open(path, mode, encoding=None):
-            written["path"] = path
-            return io.StringIO()
+        opens = []
 
-        chmods = []
+        def fake_os_open(path, flags, mode):
+            opens.append((path, flags, mode))
+            return 99
+
+        captured = {}
+
+        class CapturingBuffer(io.StringIO):
+            def close(self_inner):
+                captured["content"] = self_inner.getvalue()
+                super().close()
+
+        def fake_fdopen(fd, mode, encoding=None):
+            self.assertEqual(fd, 99)
+            return CapturingBuffer()
+
         installer.write_monitor_env_file(
             "fake.env", monitor_password="secret",
-            open_func=lambda p, m, encoding=None: io.StringIO(),
-            chmod=lambda p, mode: chmods.append((p, mode)))
-        self.assertEqual(chmods, [("fake.env", 0o600)])
+            os_open=fake_os_open, fdopen=fake_fdopen)
+
+        self.assertEqual(len(opens), 1)
+        path, flags, mode = opens[0]
+        self.assertEqual(path, "fake.env")
+        self.assertTrue(flags & os.O_CREAT)
+        self.assertTrue(flags & os.O_WRONLY)
+        self.assertTrue(flags & os.O_TRUNC)
+        self.assertEqual(mode, 0o600)
+        self.assertIn("MONITOR_PASSWORD=secret", captured["content"])
 
 
 class ComposeOrchestrationTests(unittest.TestCase):
