@@ -2,20 +2,20 @@
 #
 # The MIT License (MIT).  See LICENCE for details.
 
-"""Orchestrates ``electrumx-update apply``: the only code path that is
-allowed to change what is running.
+"""Orchestrates ``electrumx-update apply``: the only code path allowed to
+change what is running.
 
-check/status/show never call anything in this module. This module is only
-ever entered from an explicit operator command, and it refuses immediately
-if the pending candidate is not both ELIGIBLE and VERIFIED, or if it carries
-consensusImpact without --approve-consensus-change.
+``check`` / ``status`` / ``show`` never call anything in this module. This
+module is entered only from an explicit operator command and refuses unless the
+pending candidate is both ELIGIBLE and VERIFIED. A consensus-changing manifest
+also requires ``--approve-consensus-change``.
 
-The five steps below (pre-pull is assumed already done by ``check``; stop,
-switch, start, health-check, confirm-or-rollback) are each an injected hook
-so this module can be exercised in tests without docker, without a real
-Core/ElectrumX process, and without touching real blockchain or database
-files. Production wiring supplies hooks that shell out to docker/systemd;
-tests supply fakes.
+Production hooks stage/build before stopping the old node, atomically switch a
+same-filesystem release directory, start the new stack, run real health gates,
+and either finalize or restore the exact previous release. A failure is never
+silently promoted. If the signed manifest says ``rollbackSafe=false``, the
+updater deliberately leaves the failed candidate and the preserved old release
+for operator recovery instead of crossing an irreversible migration blindly.
 """
 
 from __future__ import annotations
@@ -24,10 +24,12 @@ import dataclasses
 from typing import Callable, Optional
 
 from update_decision import (
-    ApplyVerdict, Decision, EligibilityVerdict, HealthGateResult, HealthVerdict,
+    ApplyVerdict, EligibilityVerdict, HealthGateResult, HealthVerdict,
     VerificationVerdict, evaluate_apply, evaluate_health,
 )
-from update_state import UpdateState, record_promotion, record_rollback, record_stuck
+from update_state import (
+    UpdateState, record_promotion, record_rollback, record_stuck,
+)
 
 
 @dataclasses.dataclass
@@ -37,6 +39,7 @@ class ApplyHooks:
     start_services: Callable[[], None]
     run_health_checks: Callable[[dict], HealthGateResult]
     rollback_to: Callable[[Optional[dict]], None]
+    finalize_success: Optional[Callable[[], None]] = None
 
 
 @dataclasses.dataclass
@@ -45,21 +48,46 @@ class ApplyResult:
     detail: str = ""
 
 
+def _rollback_after_failure(state: UpdateState, hooks: ApplyHooks, *,
+                            previous: Optional[dict], reason: str) -> ApplyResult:
+    try:
+        hooks.rollback_to(previous)
+    except Exception as rollback_exc:  # noqa: BLE001 - operational boundary
+        detail = (
+            f"{reason}; automatic rollback also failed: "
+            f"{type(rollback_exc).__name__}: {rollback_exc}; operator intervention required")
+        record_stuck(state, reason=detail)
+        return ApplyResult(HealthVerdict.STUCK_NO_BLIND_ROLLBACK, detail)
+
+    detail = f"{reason}; exact previous release restored"
+    record_rollback(state, reason=detail, restored_release=previous)
+    return ApplyResult(HealthVerdict.ROLLBACK_TO_LAST_KNOWN_GOOD, detail)
+
+
 def apply_pending_candidate(state: UpdateState, hooks: ApplyHooks, *,
                             approve_consensus_change: bool) -> ApplyResult:
-    """Runs steps 14-19 of the update algorithm. Steps 1-13 (discovery,
-    eligibility, verification, pre-pull) already happened during ``check``
-    and are represented here only by what ``check`` recorded in
-    ``state.pending_candidate``.
+    """Run the explicit apply transaction after discovery/trust revalidation.
+
+    The caller is responsible for re-fetching and re-verifying the signed
+    manifest and artifact immediately before entering this function. The
+    persisted verdict is still checked here as defence in depth.
     """
     candidate = state.pending_candidate
     eligibility = candidate.get("_eligibilityVerdict") if candidate else None
     verification = candidate.get("_verificationVerdict") if candidate else None
 
+    try:
+        eligibility_enum = EligibilityVerdict(eligibility) if eligibility else None
+        verification_enum = VerificationVerdict(verification) if verification else None
+    except ValueError:
+        return ApplyResult(
+            ApplyVerdict.REFUSED_NO_VERIFIED_CANDIDATE,
+            "pending candidate contains an unknown persisted verdict")
+
     gate = evaluate_apply(
         pending_candidate=candidate,
-        pending_verdict=EligibilityVerdict(eligibility) if eligibility else None,
-        pending_verification=VerificationVerdict(verification) if verification else None,
+        pending_verdict=eligibility_enum,
+        pending_verification=verification_enum,
         approve_consensus_change=approve_consensus_change,
     )
     if gate.verdict != ApplyVerdict.ALLOWED:
@@ -67,24 +95,52 @@ def apply_pending_candidate(state: UpdateState, hooks: ApplyHooks, *,
 
     manifest = candidate["manifest"]
     previous = state.current_release
+    rollback_safe = manifest.get("rollbackSafe", False)
 
-    hooks.stop_services()
-    hooks.switch_atomically(manifest)
-    hooks.start_services()
-    health = hooks.run_health_checks(manifest)
+    try:
+        # Production ``stop_services`` performs/statically validates staging and
+        # the new image build before stopping the old node. This preserves the
+        # small, testable hook API while minimizing downtime.
+        hooks.stop_services()
+        hooks.switch_atomically(manifest)
+        hooks.start_services()
+        health = hooks.run_health_checks(manifest)
+    except Exception as exc:  # noqa: BLE001 - subprocess/docker/filesystem boundary
+        reason = f"update runtime failed: {type(exc).__name__}: {exc}"
+        if rollback_safe:
+            return _rollback_after_failure(
+                state, hooks, previous=previous, reason=reason)
+        record_stuck(
+            state, reason=reason +
+            "; rollbackSafe=false, automatic rollback intentionally suppressed")
+        return ApplyResult(
+            HealthVerdict.STUCK_NO_BLIND_ROLLBACK,
+            state.failure_reason or reason)
 
-    health_decision = evaluate_health(health, rollback_safe=manifest.get("rollbackSafe", False))
+    health_decision = evaluate_health(health, rollback_safe=rollback_safe)
 
     if health_decision.verdict == HealthVerdict.PROMOTE_TO_CURRENT:
+        # Directory backup/journal cleanup is part of the transaction. If that
+        # cleanup itself fails, do not record the candidate as promoted because
+        # recovery state is still unresolved.
+        if hooks.finalize_success is not None:
+            try:
+                hooks.finalize_success()
+            except Exception as exc:  # noqa: BLE001
+                detail = (
+                    "new release passed health gates but transaction finalization failed: "
+                    f"{type(exc).__name__}: {exc}; operator intervention required")
+                record_stuck(state, reason=detail)
+                return ApplyResult(HealthVerdict.STUCK_NO_BLIND_ROLLBACK, detail)
         record_promotion(state, applied_release=manifest)
         return ApplyResult(health_decision.verdict, health_decision.reason)
 
     if health_decision.verdict == HealthVerdict.ROLLBACK_TO_LAST_KNOWN_GOOD:
-        hooks.rollback_to(previous)
-        record_rollback(state, reason=health_decision.reason)
-        return ApplyResult(health_decision.verdict, health_decision.reason)
+        return _rollback_after_failure(
+            state, hooks, previous=previous,
+            reason=health_decision.reason or "post-update health gates failed")
 
-    # STUCK_NO_BLIND_ROLLBACK: leave the switched, unhealthy state exactly as
-    # it is and record that an operator must intervene. Never guess.
+    # STUCK_NO_BLIND_ROLLBACK: leave the switched unhealthy state and exact
+    # backup/journal in place so an operator can choose a migration-safe action.
     record_stuck(state, reason=health_decision.reason)
     return ApplyResult(health_decision.verdict, health_decision.reason)
