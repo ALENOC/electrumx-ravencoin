@@ -6,12 +6,14 @@ on:
       - work/chainstrap-ravenproject
     paths:
       - tools/apply_crash_consistency_hardening.py
+      - tools/patch_crash_consistency_import.py
       - .github/workflows/apply-crash-consistency-hardening.yml
   pull_request:
     branches:
       - master
     paths:
       - tools/apply_crash_consistency_hardening.py
+      - tools/patch_crash_consistency_import.py
       - .github/workflows/apply-crash-consistency-hardening.yml
 
 permissions:
@@ -44,6 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/apply_crash_consistency_hardening.py
+          python3 tools/patch_crash_consistency_import.py
           python3 -m py_compile \
             electrumx/lib/util.py \
             electrumx/server/db.py \
@@ -93,7 +96,7 @@ jobs:
           # Keep this workflow unchanged in the feature commit.  It is removed
           # separately through GitHub MCP after the validated code lands.
           git checkout "$TARGET_SHA" -- .github/workflows/apply-crash-consistency-hardening.yml
-          git rm tools/apply_crash_consistency_hardening.py
+          git rm tools/apply_crash_consistency_hardening.py tools/patch_crash_consistency_import.py
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898233+github-actions[bot]@users.noreply.github.com'
