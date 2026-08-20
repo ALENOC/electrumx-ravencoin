@@ -85,7 +85,6 @@ jobs:
           docker compose -f compose.yaml -f compose.storage.yaml -f compose.chainstrap.yaml -f compose.monitor.yaml config --quiet
 
       - name: Publish final migration commit and remove one-shot machinery
-        if: github.event_name == 'push'
         run: |
           set -euo pipefail
           git fetch origin work/chainstrap-ravenproject
