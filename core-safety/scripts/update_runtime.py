@@ -1,0 +1,690 @@
+# Copyright (c) 2026, the ElectrumX-RVN community maintainers
+# The MIT License (MIT). See LICENCE for details.
+
+"""Production I/O for the explicitly approved ElectrumX updater.
+
+Nothing in this module performs discovery or grants trust. The caller supplies
+an already signature-verified manifest and an artifact whose SHA-256 was
+verified again immediately before use. This module then stages the release,
+builds it while the current node is still running, stops the old stack, swaps
+the installation directory with same-filesystem renames, starts the new stack,
+and evaluates the concrete runtime health gates.
+
+The blockchain, ElectrumX DB and prepared Core RPC secrets live in named Docker
+volumes and are never copied into a release bundle. Operator configuration and
+host-side secrets are copied only from a small allowlist of known mutable paths.
+ChainStrap is deliberately *not* re-run during a software update.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import shutil
+import stat
+import subprocess
+import tarfile
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path, PurePosixPath
+from typing import Callable, Optional, Sequence
+
+from update_decision import HealthGateResult
+
+REPOSITORY = "ALENOC/electrumx-ravencoin"
+CORE_REPOSITORY = "RavenProject/Ravencoin"
+INSTALL_MARKER = ".electrumx-ravencoin-installed.json"
+BASE_COMPOSE = "compose.yaml"
+MONITOR_OVERLAY = "compose.monitor.yaml"
+MONITOR_CONTROLLER_OVERLAY = "compose.monitor-controller.yaml"
+CHAINSTRAP_OVERLAY = "compose.chainstrap.yaml"
+BUNDLE_METADATA = "release-install-metadata.json"
+MONITOR_PATH = "vendor/ravencoin-node-monitor"
+
+CHECKPOINT_HEIGHT = 4_487_775
+CHECKPOINT_HASH = "000000000002d64509e06e76ddbbe418c725291687ec62b41ecfc40386a091fd"
+
+MAX_ARTIFACT_BYTES = 1024 * 1024 * 1024
+MAX_BUNDLE_FILES = 8192
+MAX_BUNDLE_FILE_BYTES = 256 * 1024 * 1024
+MAX_BUNDLE_EXTRACTED_BYTES = 768 * 1024 * 1024
+SHA256_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
+COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+
+REQUIRED_BUNDLE_PATHS = frozenset({
+    BASE_COMPOSE,
+    CHAINSTRAP_OVERLAY,
+    MONITOR_OVERLAY,
+    "setup.sh",
+    ".env.example",
+    "docker/core/bootstrap-reindex.sh",
+    BUNDLE_METADATA,
+    f"{MONITOR_PATH}/Dockerfile",
+    f"{MONITOR_PATH}/.env.example",
+})
+
+# Only operator-owned mutable state may cross a release-directory boundary.
+# No source file, Compose file, executable or signing material is copied from
+# the old release into the new one.
+PERSISTENT_PATHS = (
+    ".env",
+    ".secrets",
+    "certs",
+    "contrib/electrumx.env",
+    f"{MONITOR_PATH}/.env",
+)
+
+
+class UpdateRuntimeError(RuntimeError):
+    pass
+
+
+def _safe_member_name(name: str) -> PurePosixPath:
+    if not name or "\\" in name:
+        raise UpdateRuntimeError(f"unsafe bundle path {name!r}")
+    path = PurePosixPath(name)
+    if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
+        raise UpdateRuntimeError(f"unsafe bundle path {name!r}")
+    return path
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def validate_release_asset_url(url: str, *, expected_filename: Optional[str] = None) -> str:
+    """Accept only one concrete tagged release asset in our own repository.
+
+    The URL is not a trust anchor; the signed digest is. Restricting the URL
+    still prevents the updater from becoming a generic authenticated downloader
+    if its local state file is tampered with.
+    """
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError as exc:
+        raise UpdateRuntimeError("release asset URL is malformed") from exc
+    if parsed.scheme != "https" or parsed.hostname != "github.com" or \
+            parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+        raise UpdateRuntimeError("release asset URL is outside the approved HTTPS GitHub namespace")
+    prefix = f"/{REPOSITORY}/releases/download/"
+    if not parsed.path.startswith(prefix):
+        raise UpdateRuntimeError("release asset URL is outside the approved repository")
+    remainder = parsed.path[len(prefix):]
+    parts = remainder.split("/")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise UpdateRuntimeError("release asset URL must name one concrete tag and file")
+    tag, filename = parts
+    if tag in ("latest", "latest/download") or any(value in (".", "..") for value in parts):
+        raise UpdateRuntimeError("mutable or traversal release URL refused")
+    if "/" in tag or "\\" in tag or "/" in filename or "\\" in filename:
+        raise UpdateRuntimeError("release asset URL contains an invalid path component")
+    if expected_filename is not None and filename != expected_filename:
+        raise UpdateRuntimeError(
+            f"release asset filename {filename!r} does not equal {expected_filename!r}")
+    return tag
+
+
+def fetch_small_release_asset(url: str, *, max_bytes: int = 2 * 1024 * 1024,
+                              timeout: int = 30) -> bytes:
+    validate_release_asset_url(url)
+    request = urllib.request.Request(url, headers={"User-Agent": "electrumx-update"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            declared = response.headers.get("Content-Length")
+            if declared is not None:
+                try:
+                    if int(declared) > max_bytes:
+                        raise UpdateRuntimeError("release metadata exceeds size limit")
+                except ValueError as exc:
+                    raise UpdateRuntimeError("invalid Content-Length") from exc
+            data = response.read(max_bytes + 1)
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise UpdateRuntimeError(f"release metadata download failed: {exc}") from exc
+    if len(data) > max_bytes:
+        raise UpdateRuntimeError("release metadata exceeds size limit")
+    return data
+
+
+def download_verified_artifact(url: str, *, expected_digest: str,
+                               directory: Path, timeout: int = 180) -> Path:
+    validate_release_asset_url(url, expected_filename="electrumx-ravencoin-bundle.tar.gz")
+    match = SHA256_RE.fullmatch(expected_digest or "")
+    if match is None:
+        raise UpdateRuntimeError("signed artifact digest is malformed")
+    directory.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(prefix=".electrumx-update-artifact-", dir=directory)
+    path = Path(temporary_name)
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        with os.fdopen(fd, "wb") as output:
+            request = urllib.request.Request(url, headers={"User-Agent": "electrumx-update"})
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    declared = response.headers.get("Content-Length")
+                    if declared is not None:
+                        try:
+                            if int(declared) > MAX_ARTIFACT_BYTES:
+                                raise UpdateRuntimeError("release artifact exceeds size limit")
+                        except ValueError as exc:
+                            raise UpdateRuntimeError("invalid Content-Length") from exc
+                    while True:
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > MAX_ARTIFACT_BYTES:
+                            raise UpdateRuntimeError("release artifact exceeds size limit")
+                        digest.update(chunk)
+                        output.write(chunk)
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                raise UpdateRuntimeError(f"release artifact download failed: {exc}") from exc
+            output.flush()
+            os.fsync(output.fileno())
+        if digest.hexdigest() != match.group(1):
+            raise UpdateRuntimeError("release artifact SHA-256 mismatch")
+        os.chmod(path, 0o600)
+        return path
+    except BaseException:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _read_tar_text(archive: tarfile.TarFile, name: str) -> str:
+    member = archive.getmember(name)
+    handle = archive.extractfile(member)
+    if handle is None:
+        raise UpdateRuntimeError(f"cannot read {name!r} from release bundle")
+    try:
+        return handle.read().decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise UpdateRuntimeError(f"bundle file {name!r} is not UTF-8") from exc
+
+
+def validate_bundle_file(path: Path, manifest: dict) -> dict:
+    expected = manifest.get("artifactDigest")
+    match = SHA256_RE.fullmatch(expected or "")
+    if match is None or _sha256_file(path) != match.group(1):
+        raise UpdateRuntimeError("release bundle digest no longer matches signed manifest")
+    if path.stat().st_size > MAX_ARTIFACT_BYTES:
+        raise UpdateRuntimeError("release bundle exceeds size limit")
+    try:
+        archive = tarfile.open(path, mode="r:gz")
+    except tarfile.TarError as exc:
+        raise UpdateRuntimeError("release artifact is not a valid gzip tar archive") from exc
+
+    with archive:
+        members = archive.getmembers()
+        if len(members) > MAX_BUNDLE_FILES:
+            raise UpdateRuntimeError("release bundle contains too many entries")
+        names = set()
+        total = 0
+        for member in members:
+            normalized = _safe_member_name(member.name).as_posix()
+            if normalized in names:
+                raise UpdateRuntimeError(f"duplicate bundle path {normalized!r}")
+            names.add(normalized)
+            if not (member.isfile() or member.isdir()):
+                raise UpdateRuntimeError(
+                    f"bundle contains forbidden link/device/special entry {normalized!r}")
+            if member.isfile():
+                if member.size < 0 or member.size > MAX_BUNDLE_FILE_BYTES:
+                    raise UpdateRuntimeError(f"bundle file {normalized!r} has unsafe size")
+                total += member.size
+                if total > MAX_BUNDLE_EXTRACTED_BYTES:
+                    raise UpdateRuntimeError("release bundle expands beyond the size limit")
+
+        missing = REQUIRED_BUNDLE_PATHS - names
+        if missing:
+            raise UpdateRuntimeError(
+                "release bundle is incomplete: " + ", ".join(sorted(missing)))
+
+        try:
+            metadata = json.loads(_read_tar_text(archive, BUNDLE_METADATA))
+        except json.JSONDecodeError as exc:
+            raise UpdateRuntimeError("release install metadata is invalid JSON") from exc
+        if not isinstance(metadata, dict) or metadata.get("schemaVersion") != 1:
+            raise UpdateRuntimeError("release install metadata has unsupported schema")
+        if metadata.get("electrumxVersion") != manifest.get("electrumxVersion"):
+            raise UpdateRuntimeError("bundle ElectrumX version disagrees with signed manifest")
+        if metadata.get("sourceRepository") != REPOSITORY:
+            raise UpdateRuntimeError("bundle source repository is unexpected")
+        if not COMMIT_RE.fullmatch(str(metadata.get("sourceCommit", ""))):
+            raise UpdateRuntimeError("bundle source commit is malformed")
+        monitor = metadata.get("nodeMonitor") or {}
+        if monitor.get("repository") != "ALENOC/ravencoin-node-monitor" or \
+                not COMMIT_RE.fullmatch(str(monitor.get("commit", ""))) or \
+                monitor.get("bundledPath") != MONITOR_PATH:
+            raise UpdateRuntimeError("bundle Node Monitor pin is malformed")
+
+        compose = _read_tar_text(archive, BASE_COMPOSE)
+        if f"RAVENCOIN_SOURCE_COMMIT: {manifest.get('coreCommit')}" not in compose:
+            raise UpdateRuntimeError("bundle Core commit disagrees with signed manifest")
+        if "RAVENCOIN_SOURCE_REPOSITORY: RavenProject/Ravencoin" not in compose:
+            raise UpdateRuntimeError("bundle Core source is not RavenProject/Ravencoin")
+        if f"RAVENCOIN_VERSION: {manifest.get('coreVersion')}" not in compose:
+            raise UpdateRuntimeError("bundle Core version disagrees with signed manifest")
+
+        chainstrap = _read_tar_text(archive, CHAINSTRAP_OVERLAY)
+        reindex = _read_tar_text(archive, "docker/core/bootstrap-reindex.sh")
+        if "network_mode: none" not in chainstrap:
+            raise UpdateRuntimeError("ChainStrap validation lost Docker network isolation")
+        if reindex.count("-connect=0") < 2:
+            raise UpdateRuntimeError("ChainStrap import/probe lost explicit peer suppression")
+        for required in ("getbestblockhash", "getblockhash", "listassets",
+                         "getassetdata", "listaddressesbyasset"):
+            if required not in reindex:
+                raise UpdateRuntimeError(
+                    f"ChainStrap post-reindex gate lost required check {required!r}")
+
+        monitor_compose = _read_tar_text(archive, MONITOR_OVERLAY)
+        for required in ("no-new-privileges:true", "cap_drop:", "- ALL",
+                         '"127.0.0.1:8899:8899/tcp"'):
+            if required not in monitor_compose:
+                raise UpdateRuntimeError(
+                    f"Node Monitor isolation lost required invariant {required!r}")
+        return metadata
+
+
+def extract_bundle_file(path: Path, destination: Path) -> None:
+    with tarfile.open(path, mode="r:gz") as archive:
+        for member in archive.getmembers():
+            relative = _safe_member_name(member.name)
+            target = destination.joinpath(*relative.parts)
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            source = archive.extractfile(member)
+            if source is None:
+                raise UpdateRuntimeError(f"cannot extract {member.name!r}")
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            fd = os.open(target, flags, 0o600)
+            try:
+                with os.fdopen(fd, "wb") as output:
+                    shutil.copyfileobj(source, output, length=1024 * 1024)
+            except BaseException:
+                try:
+                    target.unlink()
+                except FileNotFoundError:
+                    pass
+                raise
+            mode = 0o755 if member.mode & stat.S_IXUSR else 0o644
+            os.chmod(target, mode)
+
+
+def _copy_mutable_path(source: Path, destination: Path) -> None:
+    if source.is_symlink():
+        raise UpdateRuntimeError(f"refusing symlink in persistent operator state: {source}")
+    if source.is_dir():
+        destination.mkdir(parents=True, exist_ok=True)
+        os.chmod(destination, 0o700)
+        for child in source.iterdir():
+            _copy_mutable_path(child, destination / child.name)
+        return
+    if not source.is_file():
+        raise UpdateRuntimeError(f"persistent operator state is not a regular file: {source}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        destination.unlink()
+    shutil.copyfile(source, destination)
+    os.chmod(destination, source.stat().st_mode & 0o777)
+
+
+def copy_persistent_state(old_root: Path, new_root: Path) -> None:
+    for relative in PERSISTENT_PATHS:
+        source = old_root / relative
+        if source.exists() or source.is_symlink():
+            _copy_mutable_path(source, new_root / relative)
+
+
+def read_install_marker(root: Path) -> dict:
+    path = root / INSTALL_MARKER
+    try:
+        marker = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise UpdateRuntimeError(
+            f"cannot read verified installer marker {path}; refusing production update") from exc
+    if not isinstance(marker, dict) or marker.get("schemaVersion") != 1:
+        raise UpdateRuntimeError("unsupported installer marker schema")
+    if marker.get("bootstrapChoice") not in ("chainstrap", "p2p"):
+        raise UpdateRuntimeError("installer marker has unknown bootstrap choice")
+    if not isinstance(marker.get("nodeMonitorEnabled"), bool):
+        raise UpdateRuntimeError("installer marker has invalid Node Monitor setting")
+    if marker.get("monitorControllerEnabled") not in (None, False, True):
+        raise UpdateRuntimeError("installer marker has invalid monitor-controller setting")
+    return marker
+
+
+def update_compose_files(marker: dict, root: Path) -> list[str]:
+    # A normal software update never invokes ChainStrap services again. Named
+    # Core/ElectrumX data volumes are preserved and base Compose starts directly.
+    files = [BASE_COMPOSE]
+    if marker.get("nodeMonitorEnabled"):
+        files.append(MONITOR_OVERLAY)
+    if marker.get("monitorControllerEnabled"):
+        overlay = root / MONITOR_CONTROLLER_OVERLAY
+        if not overlay.is_file():
+            raise UpdateRuntimeError(
+                "monitor controller was enabled but its Compose overlay is missing")
+        files.append(MONITOR_CONTROLLER_OVERLAY)
+    return files
+
+
+def _run(argv: Sequence[str], *, cwd: Path, timeout: int = 1800,
+         check: bool = False) -> subprocess.CompletedProcess:
+    completed = subprocess.run(
+        list(argv), cwd=cwd, check=False, capture_output=True, text=True,
+        timeout=timeout)
+    if check and completed.returncode != 0:
+        tail = (completed.stdout + "\n" + completed.stderr)[-2000:]
+        raise UpdateRuntimeError(
+            f"command failed ({completed.returncode}): {' '.join(argv)}\n{tail}")
+    return completed
+
+
+def _compose_prefix(root: Path, files: Sequence[str]) -> list[str]:
+    args = ["docker", "compose"]
+    for filename in files:
+        args += ["-f", filename]
+    return args
+
+
+def _write_private_json(path: Path, payload: dict) -> None:
+    temporary = path.with_name(path.name + f".new.{os.getpid()}")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+class TransactionalComposeSwitch:
+    """One same-filesystem release-directory transaction."""
+
+    def __init__(self, *, install_root: Path, artifact_path: Path, manifest: dict,
+                 health_timeout: int = 1800):
+        self.root = install_root.resolve()
+        self.parent = self.root.parent
+        self.artifact_path = artifact_path.resolve()
+        self.manifest = manifest
+        self.health_timeout = health_timeout
+        self.marker = read_install_marker(self.root)
+        self.old_files = update_compose_files(self.marker, self.root)
+        self.staging: Optional[Path] = None
+        self.backup: Optional[Path] = None
+        self.failed: Optional[Path] = None
+        self.switched = False
+        self.journal = self.parent / f".{self.root.name}.update-transaction.json"
+        if self.journal.exists():
+            raise UpdateRuntimeError(
+                f"unfinished updater transaction exists at {self.journal}; recover it before updating")
+
+    def _journal(self, phase: str) -> None:
+        _write_private_json(self.journal, {
+            "schemaVersion": 1,
+            "phase": phase,
+            "installRoot": str(self.root),
+            "staging": str(self.staging) if self.staging else None,
+            "backup": str(self.backup) if self.backup else None,
+            "failed": str(self.failed) if self.failed else None,
+            "candidateVersion": self.manifest.get("electrumxVersion"),
+            "artifactDigest": self.manifest.get("artifactDigest"),
+        })
+
+    def prepare(self) -> None:
+        if self.staging is not None:
+            return
+        validate_bundle_file(self.artifact_path, self.manifest)
+        staging = Path(tempfile.mkdtemp(
+            prefix=f".{self.root.name}.release-staging-", dir=self.parent))
+        self.staging = staging
+        self._journal("STAGING")
+        try:
+            extract_bundle_file(self.artifact_path, staging)
+            copy_persistent_state(self.root, staging)
+            _run(["sh", "./setup.sh", "--bundled-core"], cwd=staging, check=True)
+            marker = dict(self.marker)
+            files = update_compose_files(marker, staging)
+            prefix = _compose_prefix(staging, files)
+            _run(prefix + ["config", "--quiet"], cwd=staging, check=True)
+            # Build the new release while the old containers remain alive.
+            # Versioned image tags make the old images available for rollback.
+            _run(prefix + ["build"], cwd=staging, timeout=7200, check=True)
+            self._journal("STAGED_AND_BUILT")
+        except BaseException:
+            self.cleanup_unactivated()
+            raise
+
+    def stop_services(self) -> None:
+        self.prepare()
+        prefix = _compose_prefix(self.root, self.old_files)
+        _run(prefix + ["stop"], cwd=self.root, timeout=1800, check=True)
+        self._journal("OLD_STACK_STOPPED")
+
+    def switch_atomically(self, manifest: dict) -> None:
+        if manifest != self.manifest:
+            raise UpdateRuntimeError("apply manifest changed after staging")
+        if self.staging is None:
+            raise UpdateRuntimeError("release was not staged")
+        backup = self.parent / (
+            f".{self.root.name}.last-known-good-"
+            f"{str(self.marker.get('electrumxVersion', 'unknown')).replace('/', '_')}-"
+            f"{int(time.time())}")
+        if backup.exists():
+            raise UpdateRuntimeError(f"backup destination already exists: {backup}")
+        self.backup = backup
+        self._journal("SWITCH_BEGIN")
+        os.replace(self.root, backup)
+        try:
+            os.replace(self.staging, self.root)
+        except BaseException:
+            os.replace(backup, self.root)
+            self.backup = None
+            self._journal("SWITCH_RESTORED_OLD_ROOT")
+            raise
+        self.staging = None
+        self.switched = True
+        self._journal("NEW_ROOT_ACTIVE")
+
+    def start_services(self) -> None:
+        files = update_compose_files(self.marker, self.root)
+        prefix = _compose_prefix(self.root, files)
+        _run(prefix + ["up", "-d", "--no-build"], cwd=self.root,
+             timeout=1800, check=True)
+        self._journal("NEW_STACK_STARTED")
+
+    def _container_id(self, service: str) -> Optional[str]:
+        files = update_compose_files(self.marker, self.root)
+        completed = _run(
+            _compose_prefix(self.root, files) + ["ps", "-q", service],
+            cwd=self.root, timeout=60)
+        value = completed.stdout.strip()
+        return value if completed.returncode == 0 and value else None
+
+    @staticmethod
+    def _inspect(container_id: str, template: str) -> Optional[str]:
+        completed = subprocess.run(
+            ["docker", "inspect", "-f", template, container_id],
+            check=False, capture_output=True, text=True, timeout=60)
+        if completed.returncode != 0:
+            return None
+        return completed.stdout.strip()
+
+    def _compose_exec(self, service: str, *args: str, timeout: int = 120) -> subprocess.CompletedProcess:
+        files = update_compose_files(self.marker, self.root)
+        return _run(_compose_prefix(self.root, files) + ["exec", "-T", service, *args],
+                    cwd=self.root, timeout=timeout)
+
+    def _core_rpc(self, *args: str) -> subprocess.CompletedProcess:
+        return self._compose_exec(
+            "ravencoin-core", "raven-cli", "-datadir=/var/lib/ravencoin",
+            "-conf=/var/lib/ravencoin-config/raven.conf", *args)
+
+    def _dynamic_health(self) -> tuple[Optional[dict], Optional[dict]]:
+        chain = None
+        electrumx = None
+        core = self._core_rpc("getblockchaininfo")
+        if core.returncode == 0:
+            try:
+                chain = json.loads(core.stdout)
+            except json.JSONDecodeError:
+                chain = None
+        info = self._compose_exec("electrumx", "electrumx_rpc", "getinfo")
+        if info.returncode == 0:
+            try:
+                electrumx = json.loads(info.stdout)
+            except json.JSONDecodeError:
+                electrumx = None
+        return chain, electrumx
+
+    def run_health_checks(self, manifest: dict) -> HealthGateResult:
+        if manifest != self.manifest:
+            raise UpdateRuntimeError("health-check manifest changed after switch")
+
+        core_id = self._container_id("ravencoin-core")
+        electrumx_id = self._container_id("electrumx")
+        core_source = core_revision = core_version_label = None
+        restart_count = None
+        if core_id:
+            core_source = self._inspect(
+                core_id, '{{ index .Config.Labels "org.opencontainers.image.source" }}')
+            core_revision = self._inspect(
+                core_id, '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
+            core_version_label = self._inspect(
+                core_id, '{{ index .Config.Labels "org.opencontainers.image.version" }}')
+            restart_count = self._inspect(core_id, "{{ .RestartCount }}")
+
+        expected_core_version = str(manifest.get("coreVersion"))
+        core_binary = self._compose_exec("ravencoin-core", "ravend", "--version") \
+            if core_id else None
+        expected_core_version_ok = bool(
+            core_version_label == expected_core_version and core_binary is not None and
+            core_binary.returncode == 0 and expected_core_version in core_binary.stdout)
+        core_source_identity_ok = core_source == f"https://github.com/{CORE_REPOSITORY}"
+        expected_core_commit_ok = core_revision == manifest.get("coreCommit")
+        core_not_crash_looping = restart_count == "0"
+
+        deadline = time.monotonic() + self.health_timeout
+        chain = electrumx_info = None
+        while time.monotonic() < deadline:
+            chain, electrumx_info = self._dynamic_health()
+            if chain is not None and electrumx_info is not None:
+                core_height = chain.get("blocks")
+                db_height = electrumx_info.get("db height")
+                daemon_height = electrumx_info.get("daemon height")
+                if isinstance(core_height, int) and db_height == core_height and \
+                        daemon_height == core_height:
+                    break
+            time.sleep(15)
+
+        core_rpc_healthy = chain is not None
+        correct_mainnet = bool(chain and chain.get("chain") == "main")
+        checkpoint_verified = False
+        if chain and isinstance(chain.get("blocks"), int) and \
+                chain["blocks"] >= CHECKPOINT_HEIGHT:
+            checkpoint = self._core_rpc("getblockhash", str(CHECKPOINT_HEIGHT))
+            checkpoint_verified = (
+                checkpoint.returncode == 0 and checkpoint.stdout.strip() == CHECKPOINT_HASH)
+
+        electrumx_service_responds = electrumx_info is not None
+        electrumx_db_opens = bool(
+            electrumx_info and isinstance(electrumx_info.get("db height"), int) and
+            electrumx_info["db height"] >= 0)
+        electrumx_db_tip_matches_core = bool(
+            chain and electrumx_info and
+            electrumx_info.get("db height") == chain.get("blocks"))
+        expected_electrumx_version_ok = bool(
+            electrumx_info and isinstance(electrumx_info.get("version"), str) and
+            electrumx_info["version"].endswith(str(manifest.get("electrumxVersion"))))
+        no_startup_safety_policy_rejection = bool(
+            chain and electrumx_info and
+            electrumx_info.get("daemon height") == chain.get("blocks"))
+
+        if self.marker.get("nodeMonitorEnabled"):
+            monitor_id = self._container_id("monitor")
+            monitor_running = bool(
+                monitor_id and self._inspect(monitor_id, "{{ .State.Running }}") == "true")
+            # An operator who selected the monitor gets an all-or-nothing update:
+            # do not promote a release that silently dropped the optional service.
+            electrumx_service_responds = electrumx_service_responds and monitor_running
+
+        result = HealthGateResult(
+            expected_electrumx_version_ok=expected_electrumx_version_ok,
+            expected_core_version_ok=expected_core_version_ok,
+            core_source_identity_ok=core_source_identity_ok,
+            expected_core_commit_ok=expected_core_commit_ok,
+            core_rpc_healthy=core_rpc_healthy,
+            correct_mainnet=correct_mainnet,
+            checkpoint_verified=checkpoint_verified,
+            core_not_crash_looping=core_not_crash_looping,
+            electrumx_db_opens=electrumx_db_opens,
+            electrumx_db_tip_matches_core=electrumx_db_tip_matches_core,
+            electrumx_service_responds=electrumx_service_responds,
+            no_startup_safety_policy_rejection=no_startup_safety_policy_rejection,
+        )
+        self._journal("HEALTH_PASSED" if result.all_pass() else "HEALTH_FAILED")
+        return result
+
+    def rollback_to(self, previous: Optional[dict]) -> None:
+        # previous is intentionally not used as a source of files. The exact old
+        # release directory captured before the switch is the rollback payload.
+        del previous
+        if not self.switched or self.backup is None:
+            if self.root.exists():
+                prefix = _compose_prefix(self.root, self.old_files)
+                _run(prefix + ["up", "-d", "--no-build"], cwd=self.root,
+                     timeout=1800, check=True)
+            if self.journal.exists():
+                self.journal.unlink()
+            return
+
+        new_files = update_compose_files(self.marker, self.root)
+        _run(_compose_prefix(self.root, new_files) + ["stop"], cwd=self.root,
+             timeout=1800, check=False)
+        failed = self.parent / f".{self.root.name}.failed-update-{int(time.time())}"
+        if failed.exists():
+            raise UpdateRuntimeError(f"failed-update destination already exists: {failed}")
+        os.replace(self.root, failed)
+        self.failed = failed
+        os.replace(self.backup, self.root)
+        self.backup = None
+        self.switched = False
+        self._journal("ROLLED_BACK")
+        prefix = _compose_prefix(self.root, self.old_files)
+        _run(prefix + ["up", "-d", "--no-build"], cwd=self.root,
+             timeout=1800, check=True)
+        self.journal.unlink(missing_ok=True)
+
+    def finalize_success(self) -> None:
+        if not self.switched:
+            raise UpdateRuntimeError("cannot finalize an update that never switched")
+        if self.backup and self.backup.exists():
+            shutil.rmtree(self.backup)
+        self.backup = None
+        self.journal.unlink(missing_ok=True)
+
+    def cleanup_unactivated(self) -> None:
+        if self.staging and self.staging.exists():
+            shutil.rmtree(self.staging, ignore_errors=True)
+        self.staging = None
+        if not self.switched:
+            self.journal.unlink(missing_ok=True)
