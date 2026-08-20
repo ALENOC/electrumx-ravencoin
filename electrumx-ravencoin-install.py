@@ -148,6 +148,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         help="do not install the Ravencoin Node Monitor")
     parser.add_argument("--with-monitor-controller", action="store_true",
                         help="explicitly install the root-owned bandwidth/connection controller")
+    parser.add_argument("--local-release-validation-dir", default=None, metavar="DIR",
+                        help="NON-PRODUCTION: verify against a local, ephemeral-key-signed "
+                             "release bundle built by "
+                             "core-safety/scripts/build_local_release_validation_bundle.py "
+                             "instead of the real GitHub release. Never use this for a real "
+                             "install; it never touches the production trust root.")
     return parser
 
 
@@ -443,6 +449,16 @@ def _safe_member_name(name: str) -> PurePosixPath:
     return path
 
 
+def _strip_yaml_comments(text: str) -> str:
+    """Drop full-line and trailing '#' comments so invariant checks below
+    only match actual directives, never explanatory prose in a comment."""
+    lines = []
+    for line in text.splitlines():
+        stripped = line.split("#", 1)[0] if "#" in line else line
+        lines.append(stripped)
+    return "\n".join(lines)
+
+
 def _archive_text(archive: tarfile.TarFile, name: str) -> str:
     handle = archive.extractfile(archive.getmember(name))
     if handle is None:
@@ -540,7 +556,9 @@ def validate_bundle(data: bytes, body: dict,
             if invariant not in monitor:
                 raise InstallError(f"Node Monitor isolation lost {invariant!r}")
         controller = _archive_text(archive, MONITOR_CONTROLLER_OVERLAY)
-        if "/var/run/docker.sock" in controller or "CAP_NET_ADMIN" in controller:
+        controller_directives = _strip_yaml_comments(controller)
+        if "/var/run/docker.sock" in controller_directives or \
+                "CAP_NET_ADMIN" in controller_directives:
             raise InstallError("monitor-controller overlay grants forbidden privileges")
         if "/run/ravencoin-bandwidth:/run/ravencoin-bandwidth:ro" not in controller:
             raise InstallError("monitor-controller overlay lacks read-only narrow socket mount")
@@ -575,6 +593,56 @@ def fetch_and_verify_bundle(body: dict, fetch: Callable[[str], bytes] = None,
             else fetch_bytes(BUNDLE_URL, max_bytes=MAX_BUNDLE_BYTES, timeout=180))
     metadata = validate_bundle(data, body, public_key_hex=public_key_hex)
     return data, metadata
+
+
+# ---------------------------------------------------------------------------
+# NON-PRODUCTION local release validation
+#
+# This block exists only to let a developer run this same installer, through
+# the same signature/manifest/digest/bundle verification code paths used for
+# a real release, against a locally built and ephemeral-key-signed bundle
+# before any production release exists. It never reads or writes
+# RELEASE_PUBLIC_KEY_HEX, never writes into the repository, and is only
+# reachable through the explicit --local-release-validation-dir flag. See
+# core-safety/scripts/build_local_release_validation_bundle.py, which builds
+# the directory this reads and prints the exact command line to use it.
+# ---------------------------------------------------------------------------
+
+LOCAL_VALIDATION_MANIFEST_FILE = "manifest.json"
+LOCAL_VALIDATION_BUNDLE_FILE = "bundle.tar.gz"
+LOCAL_VALIDATION_PUBLIC_KEY_FILE = "public-key.hex"
+
+
+def load_local_release_validation(directory: Path) -> tuple[
+        str, Callable[[str], bytes], Callable[[str], bytes]]:
+    directory = directory.expanduser().resolve()
+    manifest_path = directory / LOCAL_VALIDATION_MANIFEST_FILE
+    bundle_path = directory / LOCAL_VALIDATION_BUNDLE_FILE
+    key_path = directory / LOCAL_VALIDATION_PUBLIC_KEY_FILE
+    for path in (manifest_path, bundle_path, key_path):
+        if not path.is_file():
+            raise InstallError(
+                f"local release validation directory is missing {path.name}: {path}")
+    public_key_hex = key_path.read_text(encoding="utf-8").strip()
+    if not HEX_KEY_RE.fullmatch(public_key_hex):
+        raise InstallError("local release validation public key is malformed")
+
+    def manifest_fetch(_url: str) -> bytes:
+        return manifest_path.read_bytes()
+
+    def bundle_fetch(_url: str) -> bytes:
+        return bundle_path.read_bytes()
+
+    return public_key_hex, manifest_fetch, bundle_fetch
+
+
+def print_local_validation_banner(directory: Path) -> None:
+    print("=" * 72, file=sys.stderr)
+    print("NON-PRODUCTION LOCAL RELEASE VALIDATION MODE", file=sys.stderr)
+    print(f"Trust root: ephemeral key from {directory}", file=sys.stderr)
+    print("This is NOT the production release trust root and must never be", file=sys.stderr)
+    print("used for a real install.", file=sys.stderr)
+    print("=" * 72, file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -918,10 +986,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         check_python_version()
         architecture = detect_architecture()
-        body = fetch_and_verify_release_manifest()
+
+        if args.local_release_validation_dir:
+            validation_dir = Path(args.local_release_validation_dir)
+            print_local_validation_banner(validation_dir)
+            public_key_hex, manifest_fetch, bundle_fetch = \
+                load_local_release_validation(validation_dir)
+        else:
+            public_key_hex = RELEASE_PUBLIC_KEY_HEX
+            manifest_fetch = None
+            bundle_fetch = None
+
+        body = fetch_and_verify_release_manifest(
+            public_key_hex=public_key_hex, fetch=manifest_fetch)
         verify_architecture(body, architecture)
         verify_running_installer(body)
-        bundle, metadata = fetch_and_verify_bundle(body)
+        bundle, metadata = fetch_and_verify_bundle(
+            body, fetch=bundle_fetch, public_key_hex=public_key_hex)
 
         print(
             f"verified ElectrumX {body['electrumxVersion']} release bundle; "
