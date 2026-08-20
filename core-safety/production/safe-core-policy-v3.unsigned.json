@@ -1,0 +1,37 @@
+{
+  "expiresAt": "2026-11-18T10:49:11+00:00",
+  "generatedAt": "2026-08-20T10:49:11+00:00",
+  "policyVersion": 3,
+  "releases": [
+    {
+      "commit": "b60f50e04f1fba425b28804e61be2694faaf3469",
+      "publishedAt": "2026-08-11T08:16:45Z",
+      "reportDigest": "7a7e04b7c38a651896a5126a99fd9e8a8858c771c0cce5366b13e993f8205e7f",
+      "repository": "2miners/Ravencoin",
+      "revocationReason": "2miners is not a trust source; superseded by the RavenProject-only Core trust root",
+      "revokedAt": "2026-08-20T00:00:00+00:00",
+      "status": "REVOKED",
+      "tag": "v4.8.0",
+      "version": "4.8.0"
+    },
+    {
+      "certification": {
+        "finishedAt": 1787217509,
+        "harnessVersion": "1.0.0",
+        "profile": "rvn-consensus-2026-08-v1",
+        "profileRevision": 2,
+        "profileSha256": "8606d330e917414d75bfd0225804faa1ca3a3593f6886e0ac5347fc7444ebd40",
+        "result": "PASS"
+      },
+      "commit": "22549129888d02e0e08fcdb9f96f3c699167e774",
+      "publishedAt": "2026-08-19T00:16:44Z",
+      "reportDigest": "949ec5eb66fc5fef709a75073bb5aba8964b1212e4b407369aace0cde3a34045",
+      "repository": "RavenProject/Ravencoin",
+      "status": "KNOWN_SAFE",
+      "tag": "v4.8.0",
+      "version": "4.8.0"
+    }
+  ],
+  "safetyProfile": "rvn-consensus-2026-08-v1",
+  "schemaVersion": 1
+}
