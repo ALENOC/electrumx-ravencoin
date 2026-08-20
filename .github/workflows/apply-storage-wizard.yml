@@ -6,12 +6,14 @@ on:
       - work/chainstrap-ravenproject
     paths:
       - tools/apply_storage_wizard.py
+      - tools/patch_storage_legacy_tests.py
       - .github/workflows/apply-storage-wizard.yml
   pull_request:
     branches:
       - master
     paths:
       - tools/apply_storage_wizard.py
+      - tools/patch_storage_legacy_tests.py
       - .github/workflows/apply-storage-wizard.yml
 
 permissions:
@@ -44,6 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/apply_storage_wizard.py
+          python3 tools/patch_storage_legacy_tests.py
           python3 -m py_compile electrumx-ravencoin-install.py
           git diff --check
 
@@ -85,7 +88,10 @@ jobs:
             echo 'branch moved during validation; refusing publication' >&2
             exit 1
           }
-          git rm tools/apply_storage_wizard.py .github/workflows/apply-storage-wizard.yml
+          git rm \
+            tools/apply_storage_wizard.py \
+            tools/patch_storage_legacy_tests.py \
+            .github/workflows/apply-storage-wizard.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add --all
