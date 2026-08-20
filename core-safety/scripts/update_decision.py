@@ -45,6 +45,8 @@ class VerificationVerdict(enum.Enum):
     REFUSED_CORE_IDENTITY_MISMATCH = "REFUSED_CORE_IDENTITY_MISMATCH"
     REFUSED_MISSING_CERTIFICATION_DIGEST = "REFUSED_MISSING_CERTIFICATION_DIGEST"
     REFUSED_CERTIFICATION_DIGEST_MISMATCH = "REFUSED_CERTIFICATION_DIGEST_MISMATCH"
+    REFUSED_CORE_POLICY_VERSION_MISMATCH = "REFUSED_CORE_POLICY_VERSION_MISMATCH"
+    REFUSED_UPDATER_TOO_OLD = "REFUSED_UPDATER_TOO_OLD"
     REFUSED_UNKNOWN_DB_COMPATIBILITY = "REFUSED_UNKNOWN_DB_COMPATIBILITY"
     REFUSED_GITHUB_UNREACHABLE = "REFUSED_GITHUB_UNREACHABLE"
 
@@ -67,6 +69,9 @@ class HostFacts:
     installed_updater_version: str
     current_electrumx_version: str
     current_core_commit: Optional[str] = None
+    # Current production ElectrumX DB schema. Existing pre-updater installs of
+    # this project are schema 1; new installers persist the schema explicitly.
+    current_db_schema: int = 1
 
 
 @dataclass(frozen=True)
@@ -150,11 +155,49 @@ def evaluate_eligibility(*, auto_update_mode: str, channel: str,
     return Decision(EligibilityVerdict.ELIGIBLE)
 
 
+def _updater_version_compatible(host: HostFacts, manifest: dict) -> bool:
+    required = manifest.get("requiredUpdaterVersion")
+    if not isinstance(required, str) or not required:
+        return False
+    try:
+        return Version(host.installed_updater_version) >= Version(required)
+    except InvalidVersion:
+        return False
+
+
+def _db_compatibility_known(host: HostFacts, manifest: dict) -> bool:
+    db_compat = manifest.get("dbCompatibility")
+    if not isinstance(db_compat, dict):
+        return False
+    candidate_schema = db_compat.get("schemaVersion")
+    if not isinstance(candidate_schema, int) or isinstance(candidate_schema, bool) or \
+            candidate_schema < 1:
+        return False
+    current_schema = host.current_db_schema
+    if not isinstance(current_schema, int) or isinstance(current_schema, bool) or \
+            current_schema < 1:
+        return False
+    if candidate_schema == current_schema:
+        return True
+
+    migration = db_compat.get("migration")
+    if not isinstance(migration, dict):
+        return False
+    from_schema = migration.get("fromSchema")
+    to_schema = migration.get("toSchema")
+    if from_schema != current_schema or to_schema != candidate_schema:
+        return False
+    if not isinstance(migration.get("reversible"), bool):
+        return False
+    return True
+
+
 def evaluate_verification(*, manifest: Optional[dict], signature_valid: bool,
                           downloaded_artifact_digest: Optional[str],
                           host: HostFacts, safe_core_certified_commits: frozenset,
                           github_reachable: bool = True,
-                          safe_core_certification_digests: Optional[dict] = None) -> Decision:
+                          safe_core_certification_digests: Optional[dict] = None,
+                          verified_core_policy_version: Optional[int] = None) -> Decision:
     """Steps 6-12: verify everything about a candidate before it may ever be
     pre-pulled or presented to an operator as a real candidate.
 
@@ -163,6 +206,11 @@ def evaluate_verification(*, manifest: Optional[dict], signature_valid: bool,
     When ``safe_core_certification_digests`` is supplied, the signed ElectrumX
     manifest must also name the exact certification report digest recorded by
     that policy; a matching commit alone is not enough.
+
+    ``safeCorePolicyVersion`` in the release manifest is the policy version
+    that existed when the release was prepared. A node may have a newer policy,
+    but it may never accept a release that requires a policy newer than the one
+    it has actually verified.
     """
     if not github_reachable:
         return Decision(VerificationVerdict.REFUSED_GITHUB_UNREACHABLE)
@@ -175,6 +223,24 @@ def evaluate_verification(*, manifest: Optional[dict], signature_valid: bool,
         return Decision(VerificationVerdict.REFUSED_ARTIFACT_DIGEST_MISMATCH)
     if manifest.get("architecture") != host.architecture:
         return Decision(VerificationVerdict.REFUSED_ARCHITECTURE_MISMATCH)
+
+    if not _updater_version_compatible(host, manifest):
+        return Decision(
+            VerificationVerdict.REFUSED_UPDATER_TOO_OLD,
+            "installed updater does not satisfy requiredUpdaterVersion")
+
+    manifest_policy_version = manifest.get("safeCorePolicyVersion")
+    if not isinstance(manifest_policy_version, int) or \
+            isinstance(manifest_policy_version, bool) or manifest_policy_version < 1:
+        return Decision(VerificationVerdict.REFUSED_CORE_POLICY_VERSION_MISMATCH,
+                        "manifest safeCorePolicyVersion is malformed")
+    if verified_core_policy_version is not None:
+        if not isinstance(verified_core_policy_version, int) or \
+                isinstance(verified_core_policy_version, bool) or \
+                verified_core_policy_version < manifest_policy_version:
+            return Decision(
+                VerificationVerdict.REFUSED_CORE_POLICY_VERSION_MISMATCH,
+                "release requires a newer safe-Core policy than this node has verified")
 
     commit = manifest.get("coreCommit")
     if not commit or commit not in safe_core_certified_commits:
@@ -192,9 +258,10 @@ def evaluate_verification(*, manifest: Optional[dict], signature_valid: bool,
                 "the verified safe-Core policy",
             )
 
-    db_compat = manifest.get("dbCompatibility")
-    if not isinstance(db_compat, dict) or "schemaVersion" not in db_compat:
-        return Decision(VerificationVerdict.REFUSED_UNKNOWN_DB_COMPATIBILITY)
+    if not _db_compatibility_known(host, manifest):
+        return Decision(
+            VerificationVerdict.REFUSED_UNKNOWN_DB_COMPATIBILITY,
+            "candidate DB schema/migration is not compatible with the installed schema")
 
     return Decision(VerificationVerdict.VERIFIED)
 
@@ -212,7 +279,8 @@ def evaluate_apply(*, pending_candidate: Optional[dict],
             pending_verification != VerificationVerdict.VERIFIED:
         return Decision(ApplyVerdict.REFUSED_NO_VERIFIED_CANDIDATE)
 
-    if pending_candidate.get("consensusImpact") and not approve_consensus_change:
+    manifest = pending_candidate.get("manifest") or {}
+    if manifest.get("consensusImpact") and not approve_consensus_change:
         return Decision(ApplyVerdict.REFUSED_CONSENSUS_CHANGE_NOT_APPROVED)
 
     return Decision(ApplyVerdict.ALLOWED)
