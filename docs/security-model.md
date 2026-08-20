@@ -13,7 +13,7 @@ is not accepted merely because the number is higher.
 The beginner-friendly trust path is:
 
 ```text
-candidate release
+official RavenProject release
   ↓
 behavioural tests
   ↓
@@ -34,9 +34,17 @@ running that binary; the live server and chain checks still matter.
 
 The historical 4.8.0 threshold is not a trust rule. A release is identified by
 repository plus exact commit, then must pass behavioural certification and appear in a signed
-safe-Core policy. Version and tag are metadata. The initial certified identity
-is `2miners/Ravencoin` `v4.8.0` at
-`b60f50e04f1fba425b28804e61be2694faaf3469`.
+safe-Core policy. Version and tag are metadata.
+
+The only eligible Core source repository is `RavenProject/Ravencoin`, using the
+official release channel:
+
+`https://github.com/RavenProject/Ravencoin/releases`
+
+A Core identity from any other repository, including historical third-party
+mirrors, is not trusted even if it has the same version or commit contents.
+Older signed policy artifacts remain verifiable as historical evidence, but the
+current repository trust root prevents those identities from resolving as safe.
 
 The policy is signed with a dedicated Ed25519 key and protected by expiry,
 revocation and a persistent anti-rollback high-water mark. A valid newer policy
