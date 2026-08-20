@@ -1,4 +1,4 @@
-name: Sign 2miners Core trust revocation
+name: Sign RavenProject-only Core trust migration
 
 on:
   push:
@@ -8,8 +8,16 @@ on:
 permissions:
   contents: write
 
+env:
+  MIGRATION_REVOCATION: >-
+    {"repository":"2miners/Ravencoin","commit":"b60f50e04f1fba425b28804e61be2694faaf3469",
+    "reason":"2miners is not a trust source; superseded by the RavenProject-only Core trust root",
+    "revokedAt":"2026-08-20T00:00:00+00:00"}
+  CERTIFICATION_REPORT: core-safety/production/certifications/ravenproject-ravencoin-v4.8.0-22549129-profile-r1.json
+  REVIEWED_CANDIDATE: core-safety/production/safe-core-policy-v3.unsigned.json
+
 jobs:
-  revoke:
+  migrate:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     environment: core-safety-signing
@@ -30,7 +38,24 @@ jobs:
           set -euo pipefail
           python -m pip install --require-hashes -r core-safety/requirements.txt
 
-      - name: Generate signed policy v3 revoking 2miners
+      # This step never touches POLICY_SIGNING_KEY. It independently
+      # regenerates the atomic v2 -> v3 migration (2miners REVOKED,
+      # RavenProject/Ravencoin KNOWN_SAFE) from the signed v2 baseline and
+      # the real certification report, and fails the job if the result does
+      # not match core-safety/production/safe-core-policy-v3.unsigned.json,
+      # the reviewed candidate, field for field. Signing only happens after
+      # this gate passes.
+      - name: Verify the atomic migration before signing
+        run: |
+          set -euo pipefail
+          python core-safety/scripts/verify_migration_v3.py \
+            --previous-policy core-safety/production/safe-core-policy.json \
+            --public-key core-safety/production/core-policy-signing-public-key.hex \
+            --report "$CERTIFICATION_REPORT" \
+            --revoke "$MIGRATION_REVOCATION" \
+            --candidate "$REVIEWED_CANDIDATE"
+
+      - name: Generate and sign policy v3
         env:
           POLICY_SIGNING_KEY: ${{ secrets.POLICY_SIGNING_KEY }}
         run: |
@@ -38,7 +63,8 @@ jobs:
           test -n "$POLICY_SIGNING_KEY"
           python core-safety/scripts/generate_policy.py \
             --previous-policy core-safety/production/safe-core-policy.json \
-            --revoke '{"repository":"2miners/Ravencoin","commit":"b60f50e04f1fba425b28804e61be2694faaf3469","reason":"Core trust is restricted to official RavenProject/Ravencoin releases only","revokedAt":"2026-08-20T07:17:00Z"}' \
+            --report "$CERTIFICATION_REPORT" \
+            --revoke "$MIGRATION_REVOCATION" \
             --profile core-safety/profiles/rvn-consensus-2026-08-v1.json \
             --output core-safety/production/safe-core-policy-v3.json
 
@@ -52,11 +78,26 @@ jobs:
           path = pathlib.Path('core-safety/production/safe-core-policy-v3.json')
           document = json.loads(path.read_text(encoding='utf-8'))
           body = document['policy']
-          assert body['policyVersion'] == 3
-          matches = [entry for entry in body['releases']
-                     if entry['repository'] == '2miners/Ravencoin']
-          assert len(matches) == 1
-          assert matches[0]['status'] == 'REVOKED'
+          assert body['policyVersion'] == 3, body['policyVersion']
+
+          releases_by_repository = {entry['repository']: entry for entry in body['releases']}
+          assert set(releases_by_repository) == {'2miners/Ravencoin', 'RavenProject/Ravencoin'}, \
+              sorted(releases_by_repository)
+
+          two_miners = releases_by_repository['2miners/Ravencoin']
+          assert two_miners['status'] == 'REVOKED', two_miners['status']
+          assert two_miners['commit'] == 'b60f50e04f1fba425b28804e61be2694faaf3469'
+
+          ravenproject = releases_by_repository['RavenProject/Ravencoin']
+          assert ravenproject['status'] == 'KNOWN_SAFE', ravenproject['status']
+          assert ravenproject['commit'] == '22549129888d02e0e08fcdb9f96f3c699167e774'
+          assert ravenproject['certification']['result'] == 'PASS'
+
+          known_safe = [entry for entry in body['releases'] if entry['status'] == 'KNOWN_SAFE']
+          assert len(known_safe) == 1 and known_safe[0]['repository'] == 'RavenProject/Ravencoin', \
+              'a revocation-only migration or an unexpected KNOWN_SAFE entry is not a complete ' \
+              'RavenProject-only trust migration'
+
           signature = document['signature']['value'] + '\n'
           pathlib.Path('core-safety/production/safe-core-policy-v3.sig').write_text(
               signature, encoding='utf-8')
@@ -84,16 +125,27 @@ jobs:
           ).read_text(encoding='utf-8'))
           body = policy.verify_policy(document, {key_id: public},
                                       minimum_policy_version=3)
+
           assert policy.lookup_release(
               body,
               '2miners/Ravencoin',
               'b60f50e04f1fba425b28804e61be2694faaf3469',
           ) is None
-          assert next(entry for entry in body['releases']
-                      if entry['repository'] == '2miners/Ravencoin')['status'] == 'REVOKED'
+
+          ravenproject = policy.lookup_release(
+              body,
+              'RavenProject/Ravencoin',
+              '22549129888d02e0e08fcdb9f96f3c699167e774',
+          )
+          assert ravenproject is not None
+          assert ravenproject['status'] == 'KNOWN_SAFE'
+
+          two_miners = next(entry for entry in body['releases']
+                            if entry['repository'] == '2miners/Ravencoin')
+          assert two_miners['status'] == 'REVOKED'
           PY
 
-      - name: Publish signed revocation to migration branch
+      - name: Publish signed migration to migration branch
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
@@ -105,5 +157,5 @@ jobs:
             core-safety/production/safe-core-policy-v3.json \
             core-safety/production/safe-core-policy-v3.sig
           git diff --cached --check
-          git commit -m 'security: revoke 2miners Core trust'
+          git commit -m 'security: migrate Core trust from 2miners to RavenProject official releases'
           git push origin HEAD:security/ravenproject-only-core-source
