@@ -48,8 +48,9 @@ OTHER_COMMIT = "1" * 40
 
 
 def make_candidate(**overrides):
-    values = dict(repository="2miners/Ravencoin", tag="v4.8.0", commit=CERTIFIED_COMMIT,
-                  version="4.8.0", tag_object=CERTIFIED_TAG_OBJECT, tag_verified=False,
+    values = dict(repository="RavenProject/Ravencoin", tag="v4.8.0",
+                  commit=CERTIFIED_COMMIT, version="4.8.0",
+                  tag_object=CERTIFIED_TAG_OBJECT, tag_verified=False,
                   commit_verified=True, published_at="2026-08-11T08:16:45Z")
     values.update(overrides)
     return Candidate(**values)
@@ -59,15 +60,15 @@ def make_candidate(**overrides):
 def test_identity_is_repository_and_commit_not_version():
     first = make_candidate()
     same_version_other_commit = make_candidate(commit=OTHER_COMMIT)
-    same_version_other_repository = make_candidate(repository="RavenProject/Ravencoin")
     assert first.identity != same_version_other_commit.identity
-    assert first.identity != same_version_other_repository.identity
     assert first.version == same_version_other_commit.version == "4.8.0"
+    assert first.identity.startswith("RavenProject/Ravencoin@")
 
 
 def test_repository_outside_allowlist_is_refused():
-    with pytest.raises(CandidateError, match="allowlist"):
-        make_candidate(repository="attacker/Ravencoin")
+    for repository in ("attacker/Ravencoin", "2miners/Ravencoin"):
+        with pytest.raises(CandidateError, match="allowlist"):
+            make_candidate(repository=repository)
 
 
 @pytest.mark.parametrize("field, value", [
@@ -237,7 +238,7 @@ def release_payload(tag="v4.8.0", **overrides):
         "draft": False,
         "prerelease": False,
         "published_at": "2026-08-11T08:16:45Z",
-        "html_url": f"https://github.com/2miners/Ravencoin/releases/tag/{tag}",
+        "html_url": f"https://github.com/RavenProject/Ravencoin/releases/tag/{tag}",
         "assets": [{"name": "ravencoin-4.8.0-x86_64-linux-gnu.tar.gz"},
                    {"name": "SHA256SUMS"}],
     }
@@ -245,7 +246,7 @@ def release_payload(tag="v4.8.0", **overrides):
     return payload
 
 
-def annotated_tag_pages(repository="2miners/Ravencoin", tag="v4.8.0",
+def annotated_tag_pages(repository="RavenProject/Ravencoin", tag="v4.8.0",
                         commit=CERTIFIED_COMMIT, verified=False):
     return {
         f"/repos/{repository}/releases?per_page=10": [release_payload(tag)],
@@ -259,7 +260,7 @@ def annotated_tag_pages(repository="2miners/Ravencoin", tag="v4.8.0",
 
 def test_discovery_resolves_annotated_tag_to_commit():
     fetch = fake_github(annotated_tag_pages())
-    found = discover.discover_repository("2miners/Ravencoin", fetch)
+    found = discover.discover_repository("RavenProject/Ravencoin", fetch)
     assert len(found) == 1
     entry = found[0]
     assert entry["commit"] == CERTIFIED_COMMIT
@@ -269,78 +270,66 @@ def test_discovery_resolves_annotated_tag_to_commit():
 
 
 def test_discovery_refuses_repository_outside_allowlist():
-    with pytest.raises(discover.DiscoveryError, match="allowlist"):
-        discover.discover_repository("attacker/Ravencoin", fake_github({}))
-
-
-def test_same_version_from_both_repositories_are_two_candidates():
-    pages = {}
-    pages.update(annotated_tag_pages("2miners/Ravencoin", commit=CERTIFIED_COMMIT))
-    pages.update({
-        "/repos/RavenProject/Ravencoin/releases?per_page=10": [release_payload("v4.8.0")],
-        "/repos/RavenProject/Ravencoin/git/ref/tags/v4.8.0":
-            {"object": {"type": "commit", "sha": OTHER_COMMIT}},
-    })
-    found = discover.discover_all(fake_github(pages))
-    identities = {f"{entry['repository']}@{entry['commit']}" for entry in found}
-    assert len(identities) == 2
+    for repository in ("attacker/Ravencoin", "2miners/Ravencoin"):
+        with pytest.raises(discover.DiscoveryError, match="allowlist"):
+            discover.discover_repository(repository, fake_github({}))
 
 
 def test_tag_pointing_at_unexpected_object_is_provenance_failure():
     pages = {
-        "/repos/2miners/Ravencoin/releases?per_page=10": [release_payload()],
-        "/repos/2miners/Ravencoin/git/ref/tags/v4.8.0":
+        "/repos/RavenProject/Ravencoin/releases?per_page=10": [release_payload()],
+        "/repos/RavenProject/Ravencoin/git/ref/tags/v4.8.0":
             {"object": {"type": "tree", "sha": CERTIFIED_TAG_OBJECT}},
     }
-    found = discover.discover_repository("2miners/Ravencoin", fake_github(pages))
+    found = discover.discover_repository("RavenProject/Ravencoin", fake_github(pages))
     assert found[0]["state"] == CandidateState.PROVENANCE_FAILED.value
 
 
 def test_release_target_disagreeing_with_tag_is_review_required():
     pages = annotated_tag_pages()
-    pages["/repos/2miners/Ravencoin/releases?per_page=10"] = [
+    pages["/repos/RavenProject/Ravencoin/releases?per_page=10"] = [
         release_payload(target_commitish=OTHER_COMMIT)]
-    found = discover.discover_repository("2miners/Ravencoin", fake_github(pages))
+    found = discover.discover_repository("RavenProject/Ravencoin", fake_github(pages))
     assert found[0]["state"] == CandidateState.REVIEW_REQUIRED.value
 
 
 def test_non_version_tag_is_review_required_not_guessed():
-    pages = {"/repos/2miners/Ravencoin/releases?per_page=10":
+    pages = {"/repos/RavenProject/Ravencoin/releases?per_page=10":
              [release_payload("nightly-build")]}
-    found = discover.discover_repository("2miners/Ravencoin", fake_github(pages))
+    found = discover.discover_repository("RavenProject/Ravencoin", fake_github(pages))
     assert found[0]["state"] == CandidateState.REVIEW_REQUIRED.value
 
 
 def test_draft_releases_are_ignored():
-    pages = {"/repos/2miners/Ravencoin/releases?per_page=10":
+    pages = {"/repos/RavenProject/Ravencoin/releases?per_page=10":
              [release_payload(draft=True)]}
-    assert discover.discover_repository("2miners/Ravencoin", fake_github(pages)) == []
+    assert discover.discover_repository("RavenProject/Ravencoin", fake_github(pages)) == []
 
 
 def test_no_new_release_produces_nothing():
-    pages = {"/repos/2miners/Ravencoin/releases?per_page=10": []}
-    assert discover.discover_repository("2miners/Ravencoin", fake_github(pages)) == []
+    pages = {"/repos/RavenProject/Ravencoin/releases?per_page=10": []}
+    assert discover.discover_repository("RavenProject/Ravencoin", fake_github(pages)) == []
 
 
 def test_rate_limit_becomes_review_required_not_silence():
     error = discover.DiscoveryError("GitHub rate limited or refused the request (403)")
-    pages = {"/repos/2miners/Ravencoin/releases?per_page=10": error,
-             "/repos/RavenProject/Ravencoin/releases?per_page=10": error}
+    pages = {"/repos/RavenProject/Ravencoin/releases?per_page=10": error}
     found = discover.discover_all(fake_github(pages))
-    assert len(found) == 2
-    assert all(entry["state"] == CandidateState.REVIEW_REQUIRED.value for entry in found)
+    assert len(found) == 1
+    assert found[0]["state"] == CandidateState.REVIEW_REQUIRED.value
 
 
 def test_malformed_api_response_is_an_error():
-    pages = {"/repos/2miners/Ravencoin/releases?per_page=10": {"unexpected": "object"}}
+    pages = {"/repos/RavenProject/Ravencoin/releases?per_page=10":
+             {"unexpected": "object"}}
     with pytest.raises(discover.DiscoveryError, match="not a list"):
-        discover.discover_repository("2miners/Ravencoin", fake_github(pages))
+        discover.discover_repository("RavenProject/Ravencoin", fake_github(pages))
 
 
 def test_already_processed_candidate_is_not_reprocessed():
     fetch = fake_github(annotated_tag_pages())
-    found = discover.discover_repository("2miners/Ravencoin", fetch)
-    processed = {f"2miners/Ravencoin@{CERTIFIED_COMMIT}": {"tag": "v4.8.0"}}
+    found = discover.discover_repository("RavenProject/Ravencoin", fetch)
+    processed = {f"RavenProject/Ravencoin@{CERTIFIED_COMMIT}": {"tag": "v4.8.0"}}
     assert discover.new_candidates(found, processed) == []
 
 
@@ -359,8 +348,8 @@ def test_already_processed_unresolvable_tag_is_not_reprocessed():
 def test_retagged_commit_is_flagged_for_review():
     pages = annotated_tag_pages(tag="v4.8.0")
     fetch = fake_github(pages)
-    found = discover.discover_repository("2miners/Ravencoin", fetch)
-    processed = {f"2miners/Ravencoin@{CERTIFIED_COMMIT}": {"tag": "v4.8.0-old"}}
+    found = discover.discover_repository("RavenProject/Ravencoin", fetch)
+    processed = {f"RavenProject/Ravencoin@{CERTIFIED_COMMIT}": {"tag": "v4.8.0-old"}}
     fresh = discover.new_candidates(found, processed)
     assert len(fresh) == 1
     assert fresh[0]["state"] == CandidateState.REVIEW_REQUIRED.value
@@ -368,9 +357,9 @@ def test_retagged_commit_is_flagged_for_review():
 
 def test_state_file_round_trip(tmp_path):
     path = tmp_path / "state" / "processed.json"
-    discover.save_state(path, {"2miners/Ravencoin@" + CERTIFIED_COMMIT: {"tag": "v4.8.0"}})
-    assert discover.load_state(path)["2miners/Ravencoin@" + CERTIFIED_COMMIT]["tag"] \
-        == "v4.8.0"
+    key = "RavenProject/Ravencoin@" + CERTIFIED_COMMIT
+    discover.save_state(path, {key: {"tag": "v4.8.0"}})
+    assert discover.load_state(path)[key]["tag"] == "v4.8.0"
 
 
 def test_corrupt_state_file_falls_back_to_empty(tmp_path):
