@@ -6,12 +6,14 @@ on:
       - work/chainstrap-ravenproject
     paths:
       - tools/apply_monitor_network_resilience.py
+      - tools/fix_monitor_resilience_regressions.py
       - .github/workflows/apply-crash-consistency-hardening.yml
   pull_request:
     branches:
       - master
     paths:
       - tools/apply_monitor_network_resilience.py
+      - tools/fix_monitor_resilience_regressions.py
       - .github/workflows/apply-crash-consistency-hardening.yml
 
 permissions:
@@ -45,6 +47,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/apply_monitor_network_resilience.py
+          python3 tools/fix_monitor_resilience_regressions.py
           # Normalize the one-shot documentation append to exactly one EOF LF.
           python3 - <<'PY'
           from pathlib import Path
@@ -55,6 +58,20 @@ jobs:
             electrumx-ravencoin-install.py \
             core-safety/scripts/configure_monitor_admin_network.py
           git diff --check
+
+      - name: Materialize clean final candidate tree
+        run: |
+          set -euo pipefail
+          # The full-tree bundle tests intentionally reject a dirty checkout,
+          # so test the exact tree that will be published, not an uncommitted patch.
+          git checkout "$TARGET_SHA" -- .github/workflows/apply-crash-consistency-hardening.yml
+          git rm tools/apply_monitor_network_resilience.py tools/fix_monitor_resilience_regressions.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898233+github-actions[bot]@users.noreply.github.com'
+          git add --all
+          git diff --cached --check
+          git commit -m 'fix(installer): collision-safe monitor network and host-port recovery'
+          test -z "$(git status --porcelain --untracked-files=no)"
 
       - name: Install test dependencies
         run: |
@@ -106,16 +123,4 @@ jobs:
             echo 'branch moved during validation; refusing publication' >&2
             exit 1
           }
-
-          # Workflow removal is done separately through GitHub MCP after the
-          # validated feature commit lands; GitHub Actions tokens cannot safely
-          # self-edit workflow files.
-          git checkout "$TARGET_SHA" -- .github/workflows/apply-crash-consistency-hardening.yml
-          git rm tools/apply_monitor_network_resilience.py
-
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898233+github-actions[bot]@users.noreply.github.com'
-          git add --all
-          git diff --cached --check
-          git commit -m 'fix(installer): collision-safe monitor network and host-port recovery'
           git push origin HEAD:work/chainstrap-ravenproject
