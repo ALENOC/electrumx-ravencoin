@@ -602,7 +602,7 @@ On an ARM64 host, Docker detects the target architecture and
 * installs the build toolchain, including ``build-essential``, autotools,
   Boost, Berkeley DB (``libdb++-dev``), libevent and OpenSSL development
   libraries;
-* downloads the Ravencoin source archive from the pinned ``2miners/Ravencoin``
+* downloads the Ravencoin source archive from the pinned ``RavenProject/Ravencoin``
   commit ``b60f50e04f1fba425b28804e61be2694faaf3469`` and verifies its
   SHA-256 against the pinned value in ``compose.yaml``;
 * runs ``./autogen.sh`` and ``./configure --disable-wallet --without-gui
@@ -612,7 +612,7 @@ On an ARM64 host, Docker detects the target architecture and
   ``make check`` as part of the image build;
 * installs only ``ravend`` and ``raven-cli`` into the final runtime image.
 
-On amd64 the same Dockerfile instead downloads the pinned 2miners Ravencoin
+On amd64 the same Dockerfile instead downloads the pinned RavenProject Ravencoin
 4.8.0 release archive, verifies the archive and binary SHA-256 hashes, and
 skips compilation entirely. The ARM64 source build is therefore substantially
 slower than the amd64 prebuilt-binary path. Build time depends on CPU
