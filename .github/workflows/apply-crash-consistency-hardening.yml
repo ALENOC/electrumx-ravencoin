@@ -7,19 +7,26 @@ on:
     paths:
       - tools/apply_crash_consistency_hardening.py
       - .github/workflows/apply-crash-consistency-hardening.yml
+  pull_request:
+    branches:
+      - master
+    paths:
+      - tools/apply_crash_consistency_hardening.py
+      - .github/workflows/apply-crash-consistency-hardening.yml
 
 permissions:
   contents: write
 
 concurrency:
-  group: apply-crash-consistency-hardening
+  group: apply-crash-consistency-hardening-${{ github.event_name }}
   cancel-in-progress: false
 
 jobs:
   harden:
+    if: github.event_name == 'push' || github.event.pull_request.head.ref == 'work/chainstrap-ravenproject'
     runs-on: ubuntu-24.04
     env:
-      TARGET_SHA: ${{ github.sha }}
+      TARGET_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Check out exact branch head
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -74,6 +81,7 @@ jobs:
           docker compose -f compose.yaml -f compose.chainstrap.yaml -f compose.monitor.yaml config --quiet
 
       - name: Publish validated feature changes
+        if: github.event_name == 'push'
         run: |
           set -euo pipefail
           git fetch origin work/chainstrap-ravenproject
