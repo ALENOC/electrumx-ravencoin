@@ -120,6 +120,13 @@ def bundle_files(*, core_policy_document=None,
             f"RAVENCOIN_SOURCE_COMMIT: {CORE_COMMIT}\n"
             "RAVENCOIN_SOURCE_REPOSITORY: RavenProject/Ravencoin\n"
         ).encode(),
+        "compose.storage.yaml": (
+            b"volumes:\n"
+            b"  ravencoin-data:\n    driver: local\n"
+            b"  ravencoin-config:\n    driver: local\n"
+            b"  electrumx-data:\n    driver: local\n"
+            b"  monitor-data:\n    driver: local\n"
+        ),
         "compose.chainstrap.yaml": b"network_mode: none\n",
         "compose.monitor.yaml": (
             b"services:\n  monitor:\n"
@@ -352,13 +359,15 @@ def test_fresh_defaults_are_chainstrap_and_monitor():
 
 def test_p2p_opt_out_drops_only_chainstrap_overlay():
     assert installer.compose_files("chainstrap", False) == [
-        "compose.yaml", "compose.chainstrap.yaml"]
-    assert installer.compose_files("p2p", False) == ["compose.yaml"]
+        "compose.yaml", "compose.storage.yaml", "compose.chainstrap.yaml"]
+    assert installer.compose_files("p2p", False) == [
+        "compose.yaml", "compose.storage.yaml"]
 
 
 def test_monitor_choice_adds_hardened_overlay():
     assert installer.compose_files("chainstrap", True) == [
-        "compose.yaml", "compose.chainstrap.yaml", "compose.monitor.yaml"]
+        "compose.yaml", "compose.storage.yaml",
+        "compose.chainstrap.yaml", "compose.monitor.yaml"]
 
 
 def test_monitor_password_file_is_created_0600(tmp_path):
@@ -380,7 +389,8 @@ def test_existing_destination_is_never_overwritten(tmp_path):
     with pytest.raises(installer.InstallError, match="refusing to overwrite"):
         installer.install_fresh(
             target, b"not-used", body={}, metadata={},
-            bootstrap="chainstrap", monitor=False, controller=False)
+            bootstrap="chainstrap", monitor=False, controller=False,
+            storage_root=tmp_path / "storage")
 
 
 def test_fresh_install_refuses_preexisting_project_runtime(monkeypatch):
@@ -408,6 +418,9 @@ def test_failed_chainstrap_run_is_torn_down_with_volumes(monkeypatch, tmp_path):
 
     monkeypatch.setattr(installer, "require_clean_docker_project_runtime", lambda: None)
     monkeypatch.setattr(installer, "extract_bundle", lambda _data, _dest: None)
+    # This test isolates activation/rollback. Storage-path parsing and
+    # layout have dedicated tests in tests/test_installer_storage.py.
+    monkeypatch.setattr(installer, "write_storage_env", lambda _root, _storage: None)
 
     def fake_run_checked(argv, *, cwd=None, quiet=False):
         if "up" in argv:
@@ -428,9 +441,11 @@ def test_failed_chainstrap_run_is_torn_down_with_volumes(monkeypatch, tmp_path):
     with pytest.raises(installer.InstallError, match="automatic P2P fallback is intentionally disabled"):
         installer.install_fresh(
             target, b"unused", body={}, metadata={},
-            bootstrap="chainstrap", monitor=False, controller=False)
+            bootstrap="chainstrap", monitor=False, controller=False,
+            storage_root=tmp_path / "storage")
 
     assert not target.exists()
+    assert not (tmp_path / "storage").exists()
     assert any(
         "down" in command and "--volumes" in command and "--remove-orphans" in command
         for command in recorded_subprocess

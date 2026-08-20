@@ -27,6 +27,7 @@ services:
       ELECTRUMX_SSL_PORT: "50002"
     volumes:
       - rpc-secrets:/run/raven-secrets:ro
+      - monitor-data:/data
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -39,3 +40,6 @@ services:
   electrumx:
     ports:
       - "127.0.0.1:8899:8899/tcp"
+
+volumes:
+  monitor-data:
