@@ -40,6 +40,8 @@ def _manifest(commit="c" * 40, cert_digest="sha256:cert"):
         "coreCommit": commit,
         "certificationReportDigest": cert_digest,
         "dbCompatibility": {"schemaVersion": 1},
+        "requiredUpdaterVersion": "1.0.0",
+        "safeCorePolicyVersion": 1,
     }
 
 
@@ -69,8 +71,8 @@ def test_matching_certification_digest_can_verify():
     assert decision.verdict is VerificationVerdict.VERIFIED
 
 
-def test_production_apply_is_blocked_until_real_health_wiring_exists():
-    assert cli.PRODUCTION_APPLY_READY is False
+def test_production_apply_is_wired_to_reverified_transactional_switch():
+    assert cli.PRODUCTION_APPLY_READY is True
 
 
 def test_legacy_state_migrates_with_zero_policy_floor(tmp_path):
