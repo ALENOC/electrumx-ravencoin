@@ -1,8 +1,12 @@
 # Copyright (c) 2026, the ElectrumX-RVN community maintainers
 # The MIT License (MIT). See LICENCE for details.
 
+import json
+import os
 import pathlib
 import sys
+
+import pytest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -12,6 +16,10 @@ sys.path.insert(0, str(SCRIPTS))
 import electrumx_update_cli as cli  # noqa: E402
 from update_decision import (  # noqa: E402
     HostFacts, VerificationVerdict, evaluate_verification,
+)
+from update_state import (  # noqa: E402
+    UpdateState, effective_core_policy_floor, load_state,
+    record_verified_core_policy, save_state,
 )
 
 
@@ -62,3 +70,94 @@ def test_matching_certification_digest_can_verify():
 
 def test_production_apply_is_blocked_until_real_health_wiring_exists():
     assert cli.PRODUCTION_APPLY_READY is False
+
+
+def test_legacy_state_migrates_with_zero_policy_floor(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({
+        "schemaVersion": 1,
+        "currentRelease": {"electrumxVersion": "1.13.0"},
+    }), encoding="utf-8")
+    state = load_state(str(path))
+    assert state.minimum_core_policy_version == 0
+    save_state(str(path), state)
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["schemaVersion"] == 2
+    assert persisted["minimumCorePolicyVersion"] == 0
+
+
+def test_schema_v2_missing_policy_floor_fails_closed(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"schemaVersion": 2}), encoding="utf-8")
+    with pytest.raises(ValueError, match="minimumCorePolicyVersion"):
+        load_state(str(path))
+
+
+@pytest.mark.parametrize("value", [-1, True, "3", None])
+def test_schema_v2_invalid_policy_floor_fails_closed(tmp_path, value):
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({
+        "schemaVersion": 2,
+        "minimumCorePolicyVersion": value,
+    }), encoding="utf-8")
+    with pytest.raises(ValueError, match="minimumCorePolicyVersion"):
+        load_state(str(path))
+
+
+def test_future_state_schema_fails_closed(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({
+        "schemaVersion": 999,
+        "minimumCorePolicyVersion": 3,
+    }), encoding="utf-8")
+    with pytest.raises(ValueError, match="unsupported update state schemaVersion"):
+        load_state(str(path))
+
+
+def test_persisted_policy_floor_cannot_be_lowered_by_configuration():
+    state = UpdateState(minimum_core_policy_version=5)
+    assert effective_core_policy_floor(state, 0) == 5
+    assert effective_core_policy_floor(state, 3) == 5
+    assert effective_core_policy_floor(state, 7) == 7
+
+
+def test_record_verified_policy_advances_monotonically():
+    state = UpdateState(minimum_core_policy_version=2)
+    record_verified_core_policy(state, 3)
+    assert state.minimum_core_policy_version == 3
+    record_verified_core_policy(state, 3)
+    assert state.minimum_core_policy_version == 3
+    with pytest.raises(ValueError, match="below persisted anti-rollback floor"):
+        record_verified_core_policy(state, 2)
+    assert state.minimum_core_policy_version == 3
+
+
+def test_invalid_configured_policy_floor_fails_closed():
+    state = UpdateState(minimum_core_policy_version=2)
+    for value in (-1, True, "3", None):
+        with pytest.raises(ValueError, match="configured Core policy floor"):
+            effective_core_policy_floor(state, value)
+
+
+def test_saved_state_is_private(tmp_path):
+    path = tmp_path / "state.json"
+    save_state(str(path), UpdateState(minimum_core_policy_version=3))
+    if os.name == "posix":
+        assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_environment_policy_floor_can_only_raise_persisted_floor(monkeypatch):
+    state = UpdateState(minimum_core_policy_version=4)
+    monkeypatch.setenv("ELECTRUMX_MIN_CORE_POLICY_VERSION", "2")
+    assert effective_core_policy_floor(state, cli._configured_policy_floor()) == 4
+    monkeypatch.setenv("ELECTRUMX_MIN_CORE_POLICY_VERSION", "6")
+    assert effective_core_policy_floor(state, cli._configured_policy_floor()) == 6
+
+
+def test_invalid_environment_policy_floor_is_rejected(monkeypatch):
+    monkeypatch.setenv("ELECTRUMX_MIN_CORE_POLICY_VERSION", "not-an-integer")
+    with pytest.raises(ValueError, match="must be an integer"):
+        cli._configured_policy_floor()
+    monkeypatch.setenv("ELECTRUMX_MIN_CORE_POLICY_VERSION", "-1")
+    with pytest.raises(ValueError, match="cannot be negative"):
+        cli._configured_policy_floor()
