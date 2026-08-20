@@ -223,11 +223,11 @@ def test_backend_below_checkpoint_does_not_claim_verification():
         checkpoint_hash=None, observed_at=100,
     )
     published = status.public_dict("ElectrumX-RVN 1.13.0.dev1")
-    assert status.checkpoint_known          # cannot violate what it has not reached
+    assert status.checkpoint_known
     assert not status.checkpoint_verified
     assert published["compatibility"]["checkpoint4487775"] is False
     assert published["compatibility"]["backendSynchronized"] is False
-    enforce_backend_policy(status)          # startup is still allowed while syncing
+    enforce_backend_policy(status)
 
 
 def test_backend_at_checkpoint_publishes_verified_checkpoint():
@@ -270,10 +270,16 @@ def test_identity_defaults_to_version_only():
 
 
 def test_identity_without_commit_cannot_be_attested():
-    identity = BackendIdentity.from_config(repository="2miners/Ravencoin",
+    identity = BackendIdentity.from_config(repository="RavenProject/Ravencoin",
                                            evidence="BUILD_IDENTITY_ATTESTED")
     assert identity.evidence == IdentityEvidence.VERSION_ONLY
     assert "sourceRepository" not in identity.public_dict()
+
+
+def test_2miners_source_is_refused():
+    with pytest.raises(ValueError, match="not one of"):
+        BackendIdentity.from_config(
+            repository="2miners/Ravencoin", commit=CERTIFIED_COMMIT)
 
 
 def test_operator_configured_identity_is_only_attested():
@@ -285,14 +291,14 @@ def test_operator_configured_identity_is_only_attested():
 
 def test_build_verified_requires_the_pinned_artifact_digest():
     with pytest.raises(ValueError, match="requires the pinned artifact digest"):
-        BackendIdentity.from_config(repository="2miners/Ravencoin", tag="v4.8.0",
+        BackendIdentity.from_config(repository="RavenProject/Ravencoin", tag="v4.8.0",
                                     commit=CERTIFIED_COMMIT,
                                     evidence="BUILD_IDENTITY_VERIFIED")
 
 
 def test_build_verified_identity_is_published_in_full():
     identity = BackendIdentity.from_config(
-        repository="2miners/Ravencoin", tag="v4.8.0", commit=CERTIFIED_COMMIT,
+        repository="RavenProject/Ravencoin", tag="v4.8.0", commit=CERTIFIED_COMMIT,
         artifact_sha256=CERTIFIED_ARTIFACT, evidence="BUILD_IDENTITY_VERIFIED")
     published = identity.public_dict()
     assert published["evidence"] == "BUILD_IDENTITY_VERIFIED"
@@ -301,10 +307,10 @@ def test_build_verified_identity_is_published_in_full():
 
 @pytest.mark.parametrize("kwargs, message", [
     ({"repository": "attacker/Ravencoin", "commit": CERTIFIED_COMMIT}, "not one of"),
-    ({"repository": "2miners/Ravencoin", "commit": "short"}, "commit is malformed"),
-    ({"repository": "2miners/Ravencoin", "commit": CERTIFIED_COMMIT,
+    ({"repository": "RavenProject/Ravencoin", "commit": "short"}, "commit is malformed"),
+    ({"repository": "RavenProject/Ravencoin", "commit": CERTIFIED_COMMIT,
       "artifact_sha256": "nothex"}, "artifact digest is malformed"),
-    ({"repository": "2miners/Ravencoin", "commit": CERTIFIED_COMMIT,
+    ({"repository": "RavenProject/Ravencoin", "commit": CERTIFIED_COMMIT,
       "evidence": "TOTALLY_PROVEN"}, "unknown identity evidence"),
 ])
 def test_malformed_identity_configuration_is_refused(kwargs, message):
@@ -317,7 +323,7 @@ def test_published_evidence_and_profile_travel_together():
         network_info(), blockchain_info(), "mainnet",
         INCIDENT_CHECKPOINT_HASH, observed_at=100)
     identity = BackendIdentity.from_config(
-        repository="2miners/Ravencoin", tag="v4.8.0", commit=CERTIFIED_COMMIT,
+        repository="RavenProject/Ravencoin", tag="v4.8.0", commit=CERTIFIED_COMMIT,
         artifact_sha256=CERTIFIED_ARTIFACT, evidence="BUILD_IDENTITY_VERIFIED")
     published = status.public_dict("ElectrumX-RVN 1.13.0.dev1", identity)
     assert published["compatibility"]["safetyProfile"] == SAFETY_PROFILE
