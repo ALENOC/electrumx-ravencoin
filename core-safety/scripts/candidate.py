@@ -6,8 +6,8 @@
 
 A candidate is identified by repository plus commit.  A version number is
 metadata: it is displayed and it classifies known-unsafe generations, but it
-never grants trust.  Two repositories publishing the same version are two
-different candidates and each must be certified separately.
+never grants trust. Repository plus commit remains the immutable candidate
+identity; version and tag are metadata only.
 """
 
 from __future__ import annotations
@@ -19,11 +19,9 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Optional
 
-#: Repositories a candidate may be *discovered* from.  Presence here grants the
-#: right to be tested, never the right to be trusted.  Both entries are treated
-#: identically by every later stage.
+#: Only official RavenProject releases may enter certification. Presence here
+#: grants the right to be tested, never trust by repository name or version alone.
 ALLOWED_SOURCE_REPOSITORIES = (
-    "2miners/Ravencoin",
     "RavenProject/Ravencoin",
 )
 
