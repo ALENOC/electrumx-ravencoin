@@ -94,8 +94,28 @@ SUPPORTED_ARCHITECTURES = ("amd64", "arm64")
 MIN_PYTHON = (3, 9)
 
 NODE_MONITOR_REPOSITORY = "https://github.com/ALENOC/ravencoin-node-monitor"
+NODE_MONITOR_DIR = "ravencoin-node-monitor"
+NODE_MONITOR_ENV_FILE = f"{NODE_MONITOR_DIR}/.env"
+NODE_MONITOR_COMPOSE_OVERLAY = "compose.monitor.yaml"
 MONITOR_DASHBOARD_BIND = "127.0.0.1"
 MONITOR_DASHBOARD_PORT = 8899
+
+# The monitor's own compose.yml has no published image (comment: "image:
+# ghcr.io/OWNER/..." is deliberately commented out), so it must be built
+# from a real checkout of its source, never invented or embedded here.
+# Its ElectrumX admin RPC integration only works if the monitor container
+# shares the electrumx container's network namespace (see that project's
+# docker-compose.electrumx.example.yml); the target container name below
+# is deterministic because this repository pins the Compose project name
+# to "electrumx-ravencoin" (compose.yaml's top-level ``name:``) and the
+# electrumx service declares no ``container_name`` override, so Compose's
+# own naming rule (<project>-<service>-1) is stable across hosts.
+ELECTRUMX_CONTAINER_NAME = "electrumx-ravencoin-electrumx-1"
+CORE_RPC_INTERNAL_HOST = "ravencoin-core"
+CORE_RPC_INTERNAL_PORT = 8766
+ELECTRUMX_ADMIN_RPC_HOST = "127.0.0.1"
+ELECTRUMX_ADMIN_RPC_PORT = 8000
+RPC_SECRETS_MOUNT = "/run/raven-secrets"
 
 CHAINSTRAP_READY_MARKERS = ("chainstrap.blocks.json", "chainstrap.progress.json")
 CORE_DATADIR_MARKERS = ("blocks", "chainstate", "debug.log")
@@ -175,6 +195,10 @@ def check_python_version(version_info: Optional[tuple] = None) -> None:
 
 def detect_docker(which: Callable[[str], Optional[str]] = shutil.which) -> Optional[str]:
     return which("docker")
+
+
+def detect_git(which: Callable[[str], Optional[str]] = shutil.which) -> Optional[str]:
+    return which("git")
 
 
 def detect_compose(
@@ -483,7 +507,20 @@ def resolve_monitor_controller_choice(
 
 
 # --------------------------------------------------------------------------
-# Node Monitor wiring (declarative only; never exposes Core RPC publicly)
+# Node Monitor wiring against its REAL upstream contract (inspected from
+# github.com/ALENOC/ravencoin-node-monitor: .env.example, Dockerfile,
+# docker-compose.yml, docker-compose.electrumx.example.yml,
+# docker-compose.bandwidth.yml, BANDWIDTH_CONTROL.md, SECURITY.md).
+#
+# That project ships no published image, so it must be built from a real
+# clone. Its ElectrumX admin RPC is loopback-only inside the electrumx
+# container, so the documented integration path is joining the monitor to
+# electrumx's own network namespace via ``network_mode: "container:..."``,
+# exactly as its docker-compose.electrumx.example.yml shows. Core RPC
+# credentials are never put in plaintext env: the monitor supports
+# CORE_RPC_USER_FILE / CORE_RPC_PASSWORD_FILE, so this reuses the same
+# rpc-secrets named volume ravencoin-core and electrumx already read from
+# in compose.yaml, instead of ever generating a second copy of that secret.
 # --------------------------------------------------------------------------
 
 def generate_monitor_credentials(
@@ -492,46 +529,160 @@ def generate_monitor_credentials(
     return base64.urlsafe_b64encode(token_bytes(32)).decode("ascii").rstrip("=")
 
 
-def build_monitor_environment(*, core_network_alias: str, core_rpc_port: int,
-                              electrumx_network_alias: str,
-                              electrumx_rpc_port: int) -> dict:
-    """Service-name based connectivity only; the operator never has to look
-    up a container IP, and Core RPC is never bound to a public interface to
-    make this work -- the monitor joins the same private Compose network.
+def clone_node_monitor(
+    dir_path: str = NODE_MONITOR_DIR,
+    git_argv: Optional[list] = None,
+    *,
+    run: Callable[..., "subprocess.CompletedProcess"] = subprocess.run,
+    exists: Callable[[str], bool] = os.path.exists,
+) -> bool:
+    """Clone the monitor source if it is not already present. Returns True
+    if a clone happened, False if an existing checkout was left untouched
+    (this installer never re-clones or resets an operator's checkout).
+    """
+    if exists(dir_path):
+        return False
+    argv = list(git_argv) if git_argv is not None else ["git"]
+    cmd = argv + ["clone", "--depth", "1", NODE_MONITOR_REPOSITORY, dir_path]
+    result = run(cmd, check=False)
+    if result.returncode != 0:
+        raise InstallError(
+            f"failed to clone {NODE_MONITOR_REPOSITORY} into {dir_path} "
+            f"(exit code {result.returncode})")
+    return True
+
+
+def build_monitor_environment() -> dict:
+    """The subset of the monitor's real .env.example keys this installer
+    can determine on the operator's behalf from the bundled stack's own
+    compose.yaml topology. Every other key (NODE_NAME, MONITOR_PASSWORD,
+    dashboard bind/port, history, thresholds, ...) keeps the monitor's own
+    documented defaults and is never guessed here.
     """
     return {
-        "CORE_RPC_HOST": core_network_alias,
-        "CORE_RPC_PORT": str(core_rpc_port),
-        "ELECTRUMX_ENABLED": "true",
-        "ELECTRUMX_RPC_HOST": electrumx_network_alias,
-        "ELECTRUMX_RPC_PORT": str(electrumx_rpc_port),
-        "MONITOR_DASHBOARD_BIND": MONITOR_DASHBOARD_BIND,
-        "MONITOR_DASHBOARD_PORT": str(MONITOR_DASHBOARD_PORT),
+        "CORE_RPC_HOST": CORE_RPC_INTERNAL_HOST,
+        "CORE_RPC_PORT": str(CORE_RPC_INTERNAL_PORT),
+        "CORE_RPC_USER_FILE": f"{RPC_SECRETS_MOUNT}/raven_rpc_user",
+        "CORE_RPC_PASSWORD_FILE": f"{RPC_SECRETS_MOUNT}/raven_rpc_password",
+        "ELECTRUMX_RPC_HOST": ELECTRUMX_ADMIN_RPC_HOST,
+        "ELECTRUMX_RPC_PORT": str(ELECTRUMX_ADMIN_RPC_PORT),
     }
 
 
-MONITOR_SECURITY_OPT = ["no-new-privileges:true"]
-MONITOR_CAP_DROP = ["ALL"]
-
-
-def build_monitor_service_definition(*, environment: dict,
-                                     controller_enabled: bool) -> dict:
-    """The ordinary monitor container is always unprivileged: no Docker
-    socket, no CAP_NET_ADMIN, cap_drop ALL, no-new-privileges, read-only
-    rootfs where supported, dashboard bound to loopback only. The privileged
-    host controller (if enabled) is a wholly separate service/security
-    domain and is never folded into this definition.
+def write_monitor_env_file(
+    path: str, *, monitor_password: str,
+    open_func: Callable = open,
+    chmod: Callable[[str, int], None] = os.chmod,
+) -> None:
+    """Write the monitor's own .env (its Dockerfile's ``env_file:``
+    consumer), covering only the non-wiring settings this installer has an
+    opinion on: a random dashboard password (bandwidth/connection-limit
+    writes are refused by the monitor without one) and the documented
+    RAM-only history default. RPC wiring lives in compose.monitor.yaml's
+    ``environment:`` block instead, so it is never duplicated here.
     """
-    service = {
-        "environment": dict(environment),
-        "security_opt": list(MONITOR_SECURITY_OPT),
-        "cap_drop": list(MONITOR_CAP_DROP),
-        "read_only": True,
-        "ports": [f"{MONITOR_DASHBOARD_BIND}:{MONITOR_DASHBOARD_PORT}:{MONITOR_DASHBOARD_PORT}"],
-    }
+    content = (
+        "# Generated by electrumx-ravencoin-install.py. Safe to hand-edit;\n"
+        "# this installer never overwrites an existing file at this path.\n"
+        "NODE_NAME=ElectrumX-Ravencoin bundled node\n"
+        "MONITOR_USER=monitor\n"
+        f"MONITOR_PASSWORD={monitor_password}\n"
+        "HISTORY_ENABLED=true\n"
+        "HISTORY_STORAGE=memory\n"
+    )
+    with open_func(path, "w", encoding="utf-8") as handle:
+        handle.write(content)
+    chmod(path, 0o600)
+
+
+def render_monitor_compose_overlay(*, controller_enabled: bool) -> str:
+    """A compose.yaml-style overlay (see compose_files_for_bootstrap_choice)
+    that adds the monitor service and appends its dashboard port publish to
+    the existing electrumx service. Compose merges list fields like
+    ``ports`` across -f layers by appending rather than replacing, which is
+    what makes the second stanza below safe against compose.yaml's own
+    electrumx ports list.
+    """
+    env = build_monitor_environment()
+    lines = [
+        "services:",
+        "  monitor:",
+        f"    build: ./{NODE_MONITOR_DIR}",
+        "    container_name: ravencoin-node-monitor",
+        "    restart: unless-stopped",
+        "    depends_on:",
+        "      electrumx:",
+        "        condition: service_healthy",
+        f'    network_mode: "container:{ELECTRUMX_CONTAINER_NAME}"',
+        "    env_file:",
+        f"      - {NODE_MONITOR_ENV_FILE}",
+        "    environment:",
+    ]
+    for key, value in env.items():
+        lines.append(f'      {key}: "{value}"')
     if controller_enabled:
-        service["_controller_service_separate"] = True
-    return service
+        lines += [
+            '      BANDWIDTH_CONTROL_ENABLED: "true"',
+            '      BANDWIDTH_CONTROL_SOCKET: /run/ravencoin-bandwidth/control.sock',
+        ]
+    lines += [
+        "    volumes:",
+        "      - rpc-secrets:/run/raven-secrets:ro",
+    ]
+    if controller_enabled:
+        lines.append(
+            "      - /run/ravencoin-bandwidth:/run/ravencoin-bandwidth:ro")
+    lines += [
+        "    read_only: true",
+        "    security_opt:",
+        "      - no-new-privileges:true",
+        "    cap_drop:",
+        "      - ALL",
+        "    tmpfs:",
+        "      - /tmp",
+        "    ports: []",
+        "",
+        "  electrumx:",
+        "    ports:",
+        f'      - "{MONITOR_DASHBOARD_BIND}:{MONITOR_DASHBOARD_PORT}:{MONITOR_DASHBOARD_PORT}"',
+        "",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def write_monitor_compose_overlay(
+    path: str, *, controller_enabled: bool,
+    open_func: Callable = open,
+) -> None:
+    """This overlay is installer-owned, not operator-edited, and is safe to
+    regenerate on every run (unlike the monitor's own .env)."""
+    with open_func(path, "w", encoding="utf-8") as handle:
+        handle.write(render_monitor_compose_overlay(
+            controller_enabled=controller_enabled))
+
+
+BANDWIDTH_CONTROLLER_SETUP_GUIDANCE = """\
+Advanced host controls selected. This installs a ROOT-OWNED systemd service
+on THIS HOST (not inside any container) that can apply Linux `tc` bandwidth
+shaping and recreate the Core/ElectrumX containers to change connection
+limits. This installer never runs these commands for you; review them and
+run them yourself:
+
+    cd {monitor_dir}
+    sudo cp contrib/ravencoin-bandwidth-controller.service.example \\
+        /etc/systemd/system/ravencoin-bandwidth-controller.service
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now ravencoin-bandwidth-controller.service
+
+The example unit targets these container names, which already match this
+deployment:
+
+    electrumx-ravencoin-ravencoin-core-1
+    electrumx-ravencoin-electrumx-1
+
+See {monitor_dir}/BANDWIDTH_CONTROL.md and {monitor_dir}/CONNECTION_CONTROL.md
+for the full security model before enabling it.
+"""
 
 
 # --------------------------------------------------------------------------
@@ -659,6 +810,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                  f"{'enabled' if controller_enabled else 'disabled'}")
 
         compose_files = compose_files_for_bootstrap_choice(bootstrap_choice)
+
+        if monitor_enabled:
+            git_path = detect_git()
+            if git_path is None:
+                raise InstallError(
+                    "git was not found on this host; install git first "
+                    "or re-run with --without-monitor")
+            cloned = clone_node_monitor(NODE_MONITOR_DIR)
+            if cloned:
+                print(f"cloned {NODE_MONITOR_REPOSITORY} into {NODE_MONITOR_DIR}")
+            if not os.path.exists(NODE_MONITOR_ENV_FILE):
+                monitor_password = generate_monitor_credentials()
+                write_monitor_env_file(
+                    NODE_MONITOR_ENV_FILE, monitor_password=monitor_password)
+                print(f"generated {NODE_MONITOR_ENV_FILE} with a random "
+                     "dashboard password")
+            write_monitor_compose_overlay(
+                NODE_MONITOR_COMPOSE_OVERLAY, controller_enabled=controller_enabled)
+            compose_files = compose_files + [NODE_MONITOR_COMPOSE_OVERLAY]
+
         run_compose_up(compose_argv, compose_files)
         write_install_marker(
             DEFAULT_INSTALL_MARKER, bootstrap_choice=bootstrap_choice,
@@ -666,14 +837,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         if monitor_enabled:
             print(
-                f"Node Monitor selected: deploy it from "
-                f"{NODE_MONITOR_REPOSITORY}, joined to this project's "
-                f"private Compose network. Its dashboard binds to "
+                f"Node Monitor deployed from {NODE_MONITOR_REPOSITORY}, "
+                f"sharing network namespace with {ELECTRUMX_CONTAINER_NAME}. "
+                f"Its dashboard binds to "
                 f"{MONITOR_DASHBOARD_BIND}:{MONITOR_DASHBOARD_PORT} only; "
-                f"it is never exposed publicly by default, and the "
-                f"privileged host controller stays "
-                f"{'enabled' if controller_enabled else 'disabled'} as "
-                f"decided above.")
+                f"it is never exposed publicly by default. Credentials are "
+                f"in {NODE_MONITOR_ENV_FILE}.")
+            if controller_enabled:
+                print(BANDWIDTH_CONTROLLER_SETUP_GUIDANCE.format(
+                    monitor_dir=NODE_MONITOR_DIR))
 
         return 0
     except InstallError as exc:

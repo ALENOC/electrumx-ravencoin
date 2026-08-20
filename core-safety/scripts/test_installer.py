@@ -345,47 +345,99 @@ class MonitorChoiceTests(unittest.TestCase):
 
 class MonitorSecurityTests(unittest.TestCase):
 
-    def test_dashboard_binds_localhost_only(self):
-        env = installer.build_monitor_environment(
-            core_network_alias="ravencoin-core", core_rpc_port=8766,
-            electrumx_network_alias="electrumx", electrumx_rpc_port=8000)
-        self.assertEqual(env["MONITOR_DASHBOARD_BIND"], "127.0.0.1")
+    def test_core_rpc_not_hardcoded_as_plaintext_password(self):
+        env = installer.build_monitor_environment()
+        self.assertEqual(env["CORE_RPC_HOST"], installer.CORE_RPC_INTERNAL_HOST)
+        self.assertEqual(env["CORE_RPC_USER_FILE"],
+                          f"{installer.RPC_SECRETS_MOUNT}/raven_rpc_user")
+        self.assertEqual(env["CORE_RPC_PASSWORD_FILE"],
+                          f"{installer.RPC_SECRETS_MOUNT}/raven_rpc_password")
+        self.assertNotIn("CORE_RPC_PASSWORD", env)
 
-    def test_core_rpc_not_exposed_publicly(self):
-        env = installer.build_monitor_environment(
-            core_network_alias="ravencoin-core", core_rpc_port=8766,
-            electrumx_network_alias="electrumx", electrumx_rpc_port=8000)
-        self.assertEqual(env["CORE_RPC_HOST"], "ravencoin-core")
-        service = installer.build_monitor_service_definition(
-            environment=env, controller_enabled=False)
-        self.assertNotIn("8766", " ".join(service.get("ports", [])))
+    def test_dashboard_publish_binds_localhost_only(self):
+        overlay = installer.render_monitor_compose_overlay(controller_enabled=False)
+        self.assertIn(
+            f'"{installer.MONITOR_DASHBOARD_BIND}:{installer.MONITOR_DASHBOARD_PORT}'
+            f':{installer.MONITOR_DASHBOARD_PORT}"', overlay)
 
     def test_no_docker_socket_no_cap_net_admin(self):
-        env = installer.build_monitor_environment(
-            core_network_alias="c", core_rpc_port=1, electrumx_network_alias="e",
-            electrumx_rpc_port=2)
-        service = installer.build_monitor_service_definition(
-            environment=env, controller_enabled=False)
-        self.assertNotIn("volumes", service)  # no docker.sock bind mount
-        self.assertEqual(service["cap_drop"], ["ALL"])
-        self.assertIn("no-new-privileges:true", service["security_opt"])
+        overlay = installer.render_monitor_compose_overlay(controller_enabled=False)
+        self.assertNotIn("docker.sock", overlay)
+        self.assertIn("cap_drop:\n      - ALL", overlay)
+        self.assertIn("no-new-privileges:true", overlay)
+        self.assertIn("read_only: true", overlay)
 
-    def test_controller_is_a_separate_service_not_folded_in(self):
-        env = installer.build_monitor_environment(
-            core_network_alias="c", core_rpc_port=1, electrumx_network_alias="e",
-            electrumx_rpc_port=2)
-        without = installer.build_monitor_service_definition(
-            environment=env, controller_enabled=False)
-        with_controller = installer.build_monitor_service_definition(
-            environment=env, controller_enabled=True)
-        self.assertEqual(without["cap_drop"], with_controller["cap_drop"])
-        self.assertEqual(without["security_opt"], with_controller["security_opt"])
+    def test_controller_is_a_separate_opt_in_not_folded_into_base_security(self):
+        without = installer.render_monitor_compose_overlay(controller_enabled=False)
+        with_controller = installer.render_monitor_compose_overlay(controller_enabled=True)
+        self.assertNotIn("BANDWIDTH_CONTROL_ENABLED", without)
+        self.assertIn('BANDWIDTH_CONTROL_ENABLED: "true"', with_controller)
+        # security posture is identical either way
+        for marker in ("cap_drop:\n      - ALL", "no-new-privileges:true",
+                       "read_only: true"):
+            self.assertIn(marker, without)
+            self.assertIn(marker, with_controller)
+
+    def test_electrumx_admin_rpc_shared_via_network_namespace_not_bridge(self):
+        overlay = installer.render_monitor_compose_overlay(controller_enabled=False)
+        self.assertIn(
+            f'network_mode: "container:{installer.ELECTRUMX_CONTAINER_NAME}"',
+            overlay)
 
     def test_credentials_are_random_and_not_predictable(self):
         first = installer.generate_monitor_credentials()
         second = installer.generate_monitor_credentials()
         self.assertNotEqual(first, second)
         self.assertGreaterEqual(len(first), 32)
+
+
+class MonitorDeploymentTests(unittest.TestCase):
+
+    def test_clone_skips_when_directory_already_exists(self):
+        cloned = installer.clone_node_monitor(
+            "some-dir", exists=lambda p: True,
+            run=lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not run")))
+        self.assertFalse(cloned)
+
+    def test_clone_invokes_git_clone_depth_1(self):
+        calls = []
+
+        class FakeResult:
+            returncode = 0
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return FakeResult()
+
+        cloned = installer.clone_node_monitor(
+            "monitor-dir", exists=lambda p: False, run=fake_run)
+        self.assertTrue(cloned)
+        self.assertEqual(calls[0][:3], ["git", "clone", "--depth"])
+        self.assertIn("monitor-dir", calls[0])
+
+    def test_clone_raises_on_git_failure(self):
+        class FakeResult:
+            returncode = 128
+
+        with self.assertRaises(installer.InstallError):
+            installer.clone_node_monitor(
+                "monitor-dir", exists=lambda p: False,
+                run=lambda *a, **k: FakeResult())
+
+    def test_env_file_writer_sets_restrictive_permissions(self):
+        import io
+        written = {}
+
+        def fake_open(path, mode, encoding=None):
+            written["path"] = path
+            return io.StringIO()
+
+        chmods = []
+        installer.write_monitor_env_file(
+            "fake.env", monitor_password="secret",
+            open_func=lambda p, m, encoding=None: io.StringIO(),
+            chmod=lambda p, mode: chmods.append((p, mode)))
+        self.assertEqual(chmods, [("fake.env", 0o600)])
 
 
 class ComposeOrchestrationTests(unittest.TestCase):
