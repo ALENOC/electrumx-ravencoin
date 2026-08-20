@@ -26,6 +26,16 @@ replace_once(
         flush=AsyncMock(),
 ''',
 )
+replace_once(
+    "tests/server/test_block_processor.py",
+'''        db=SimpleNamespace(open_for_sync=AsyncMock(
+            return_value=SimpleNamespace(copy=lambda: state))),
+''',
+'''        db=SimpleNamespace(
+            state=SimpleNamespace(copy=lambda: state),
+            open_for_sync=AsyncMock(return_value=SimpleNamespace(copy=lambda: state))),
+''',
+)
 
 # Make the backend-ordering test explicitly cover the new recovery position:
 # DB open -> bounded repair -> independent daemon/DB chain verification -> scan.
