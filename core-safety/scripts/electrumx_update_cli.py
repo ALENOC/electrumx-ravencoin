@@ -40,7 +40,10 @@ from update_decision import (
     evaluate_eligibility, evaluate_verification,
 )
 from update_manifest import ManifestError, load_trusted_key, verify_manifest
-from update_state import UpdateState, load_state, record_check_result, save_state
+from update_state import (
+    UpdateState, effective_core_policy_floor, load_state, record_check_result,
+    record_verified_core_policy, save_state,
+)
 
 DEFAULT_STATE_PATH = os.environ.get(
     "ELECTRUMX_UPDATE_STATE_PATH", "/var/lib/electrumx-ravencoin/update-state.json")
@@ -405,9 +408,24 @@ def _load_current_host_facts(state: UpdateState) -> HostFacts:
     )
 
 
+def _configured_policy_floor() -> int:
+    raw = os.environ.get("ELECTRUMX_MIN_CORE_POLICY_VERSION", "0")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("ELECTRUMX_MIN_CORE_POLICY_VERSION must be an integer") from exc
+    if value < 0:
+        raise ValueError("ELECTRUMX_MIN_CORE_POLICY_VERSION cannot be negative")
+    return value
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    state = load_state(DEFAULT_STATE_PATH)
+    try:
+        state = load_state(DEFAULT_STATE_PATH)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"cannot load updater state from {DEFAULT_STATE_PATH}: {exc}", file=sys.stderr)
+        return 1
 
     if args.command == "status":
         print(format_status(state))
@@ -422,10 +440,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # load_trusted_key already returns {keyId: raw_public_key}; do not
             # derive a key id from the returned dict a second time.
             trusted_keys = load_trusted_key(DEFAULT_TRUSTED_KEY_PATH)
-            minimum_policy = int(os.environ.get(
-                "ELECTRUMX_MIN_CORE_POLICY_VERSION", "0"))
+            minimum_policy = effective_core_policy_floor(
+                state, _configured_policy_floor())
             certified_commits, certification_digests, policy_version = \
                 load_safe_core_certifications(minimum_policy_version=minimum_policy)
+            # Advance the persisted floor only after the policy's signature,
+            # schema, expiry and monotonic version checks have all succeeded.
+            record_verified_core_policy(state, policy_version)
         except (OSError, ValueError, ManifestError, core_policy.PolicyError,
                 json.JSONDecodeError) as exc:
             print(f"cannot load updater trust state: {exc}", file=sys.stderr)
@@ -442,11 +463,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             safe_core_certification_digests=certification_digests,
             auto_update_mode=os.environ.get("ELECTRUMX_UPDATE_CHANNEL", "stable"),
         )
-        # Persist the verified policy version alongside diagnostics so operators
-        # can set ELECTRUMX_MIN_CORE_POLICY_VERSION to the last accepted value.
-        state_dict = getattr(state, "metadata", None)
-        if isinstance(state_dict, dict):
-            state_dict["verifiedCorePolicyVersion"] = policy_version
         save_state(DEFAULT_STATE_PATH, state)
         print(format_status(state))
         return 0
