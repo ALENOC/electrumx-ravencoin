@@ -1,26 +1,13 @@
 # Copyright (c) 2026, the ElectrumX-RVN community maintainers
 #
-# The MIT License (MIT).  See LICENCE for details.
+# The MIT License (MIT). See LICENCE for details.
 
 """Build, sign and verify the signed ElectrumX update manifest.
 
-Trust model this module encodes: a running node never observes
-RavenProject/Ravencoin releases directly. It observes only signed
-ALENOC/electrumx-ravencoin releases, and each release carries this manifest
-as the single source of truth for what Ravencoin Core identity it bundles and
-what our own certification found for that identity.
-
-  RavenProject new Core -> our certification PASS -> new ElectrumX release
-  -> signed ElectrumX update manifest -> node self-update
-
-A node must never update Ravencoin Core by watching RavenProject directly.
-
-The manifest is signed with a dedicated Ed25519 key that exists for this
-purpose alone, distinct from the safe-Core policy signing key
-(core-safety/scripts/policy.py). Reusing one key for both purposes would let
-a compromise of either trust root forge documents for the other; a shared
-SIGNATURE_DOMAIN prefix would have the same effect even with distinct keys,
-which is why the domain string below is also distinct from the policy one.
+A running node observes only signed ALENOC/electrumx-ravencoin releases. Core
+trust remains a separate signed safe-Core policy rooted solely in official
+RavenProject/Ravencoin identities. The release/update signing key is distinct
+from the Core-policy signing key and uses a distinct signature domain.
 """
 
 from __future__ import annotations
@@ -29,18 +16,27 @@ import base64
 import datetime
 import hashlib
 import json
+import re
 from typing import Optional
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey, Ed25519PublicKey,
 )
+from packaging.version import InvalidVersion, Version
 
 SCHEMA_VERSION = 1
 SIGNATURE_ALGORITHM = "ed25519"
 SIGNATURE_DOMAIN = b"ALENOC-RVN-ELECTRUMX-UPDATE-MANIFEST-v1\x00"
 VALID_CHANNELS = ("stable", "security")
 TRUSTED_CORE_REPOSITORIES = ("RavenProject/Ravencoin",)
+SUPPORTED_ARCHITECTURES = ("linux/amd64", "linux/arm64")
+
+SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+RAW_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+TAG_RE = re.compile(r"^[A-Za-z0-9._/-]{1,100}$")
+FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$")
 
 REQUIRED_FIELDS = (
     "electrumxVersion",
@@ -70,7 +66,6 @@ class ManifestError(ValueError):
 
 
 def canonical_bytes(document: dict) -> bytes:
-    """Serialize deterministically so a signature is over one exact byte string."""
     return SIGNATURE_DOMAIN + json.dumps(
         document, sort_keys=True, separators=(",", ":"),
         ensure_ascii=True).encode("utf-8")
@@ -91,15 +86,12 @@ VALID_CONSENSUS_IMPACT_CLASSES = (
 
 
 def classify_consensus_impact(classification: str) -> tuple:
-    """Derive the wire-level (consensusImpact, autoUpdateEligible) booleans.
+    """Map the three release-review states onto the signed booleans.
 
-    The manifest only carries a boolean because that is what the update
-    decision/apply gates already check (update_decision.py,
-    update_apply.py). A boolean has no way to represent "not yet
-    classified" as distinct from "classified as safe", so classification
-    must happen here, upstream of the boolean, and must fail closed:
-    anything other than the three known values is refused rather than
-    silently treated as NONE.
+    (False, True)  = NONE
+    (False, False) = COMPATIBILITY
+    (True, False)  = CONSENSUS_CHANGE
+    There is intentionally no (True, True) state.
     """
     if classification == CONSENSUS_IMPACT_NONE:
         return False, True
@@ -108,12 +100,50 @@ def classify_consensus_impact(classification: str) -> tuple:
     if classification == CONSENSUS_IMPACT_CONSENSUS_CHANGE:
         return True, False
     raise ManifestError(
-        f"unclassifiable consensus impact {classification!r}; refusing to "
-        f"guess. Must be one of {VALID_CONSENSUS_IMPACT_CLASSES!r}")
+        f"unclassifiable consensus impact {classification!r}; refusing to guess. "
+        f"Must be one of {VALID_CONSENSUS_IMPACT_CLASSES!r}")
+
+
+def consensus_classification(body: dict) -> str:
+    impact = body.get("consensusImpact")
+    eligible = body.get("autoUpdateEligible")
+    if impact is False and eligible is True:
+        return CONSENSUS_IMPACT_NONE
+    if impact is False and eligible is False:
+        return CONSENSUS_IMPACT_COMPATIBILITY
+    if impact is True and eligible is False:
+        return CONSENSUS_IMPACT_CONSENSUS_CHANGE
+    raise ManifestError("signed consensus-impact booleans do not encode a valid class")
+
+
+def _valid_version(value, field: str) -> None:
+    if not isinstance(value, str) or not value:
+        raise ManifestError(f"{field} must be a non-empty version string")
+    try:
+        Version(value)
+    except InvalidVersion as exc:
+        raise ManifestError(f"{field} is not a valid version") from exc
+
+
+def _architecture_values(value) -> tuple[str, ...]:
+    if isinstance(value, str):
+        values = tuple(item.strip() for item in value.split(",") if item.strip())
+    elif isinstance(value, list):
+        values = tuple(value)
+    else:
+        raise ManifestError("architecture must be a string or list")
+    if not values or any(not isinstance(item, str) for item in values):
+        raise ManifestError("architecture list is empty or malformed")
+    if len(set(values)) != len(values):
+        raise ManifestError("architecture contains duplicate targets")
+    unknown = sorted(set(values) - set(SUPPORTED_ARCHITECTURES))
+    if unknown:
+        raise ManifestError(f"unsupported architecture target(s): {unknown}")
+    return values
 
 
 def build_manifest(*, electrumx_version: str, channel: str, artifact_digest: str,
-                    architecture: str, core_version: str, core_repository: str,
+                    architecture, core_version: str, core_repository: str,
                     core_tag: str, core_commit: str, certification_report_digest: str,
                     safe_core_policy_version: int, required_updater_version: str,
                     config_compatibility: dict, db_compatibility: dict,
@@ -121,43 +151,8 @@ def build_manifest(*, electrumx_version: str, channel: str, artifact_digest: str
                     auto_update_eligible: bool, installer_filename: str,
                     installer_digest: str,
                     release_timestamp: Optional[str] = None) -> dict:
-    """Assemble an unsigned update manifest body.
-
-    ``config_compatibility`` and ``db_compatibility`` are free-form structured
-    metadata; callers describe exactly what changed. ``dbCompatibility`` at
-    minimum should carry a ``schemaVersion`` and, if a migration is required,
-    a ``migration`` description. ``rollbackSafe`` must be false whenever
-    ``dbCompatibility`` describes an irreversible migration: the updater must
-    never attempt a blind rollback across one.
-    """
-    if channel not in VALID_CHANNELS:
-        raise ManifestError(f"invalid channel {channel!r}")
-    if core_repository not in TRUSTED_CORE_REPOSITORIES:
-        raise ManifestError(
-            f"repository {core_repository!r} is not an approved Core trust source")
-    if not isinstance(rollback_safe, bool):
-        raise ManifestError("rollbackSafe must be a boolean")
-    if not isinstance(consensus_impact, bool):
-        raise ManifestError("consensusImpact must be a boolean")
-    if not isinstance(auto_update_eligible, bool):
-        raise ManifestError("autoUpdateEligible must be a boolean")
-    if consensus_impact and auto_update_eligible:
-        raise ManifestError(
-            "autoUpdateEligible cannot be true when consensusImpact is true")
-    if not installer_filename:
-        raise ManifestError("installerFilename is required")
-    if not installer_digest:
-        raise ManifestError("installerDigest is required")
-    if not isinstance(db_compatibility, dict) or "schemaVersion" not in db_compatibility:
-        raise ManifestError("dbCompatibility must include a schemaVersion")
-    if db_compatibility.get("migration", {}).get("reversible") is False and rollback_safe:
-        raise ManifestError(
-            "rollbackSafe cannot be true when dbCompatibility declares an "
-            "irreversible migration")
-
     now = datetime.datetime.now(datetime.timezone.utc)
     timestamp = release_timestamp or now.replace(microsecond=0).isoformat()
-
     body = {
         "schemaVersion": SCHEMA_VERSION,
         "electrumxVersion": electrumx_version,
@@ -185,39 +180,99 @@ def build_manifest(*, electrumx_version: str, channel: str, artifact_digest: str
 
 
 def validate_body(body: dict) -> None:
-    """Schema validation, independent of the signature."""
+    """Strict schema validation independent of the signature."""
+    if not isinstance(body, dict):
+        raise ManifestError("manifest body must be an object")
     if body.get("schemaVersion") != SCHEMA_VERSION:
         raise ManifestError(f"unsupported manifest schemaVersion {body.get('schemaVersion')!r}")
-    for field in REQUIRED_FIELDS:
-        if field not in body:
-            raise ManifestError(f"manifest is missing required field {field!r}")
+    missing = [field for field in REQUIRED_FIELDS if field not in body]
+    if missing:
+        raise ManifestError(f"manifest is missing required field(s): {missing}")
+    unknown = set(body) - ({"schemaVersion"} | set(REQUIRED_FIELDS))
+    if unknown:
+        raise ManifestError(f"manifest contains unknown field(s): {sorted(unknown)}")
+
+    _valid_version(body["electrumxVersion"], "electrumxVersion")
+    _valid_version(body["coreVersion"], "coreVersion")
+    _valid_version(body["requiredUpdaterVersion"], "requiredUpdaterVersion")
+
     if body["channel"] not in VALID_CHANNELS:
         raise ManifestError(f"invalid channel {body['channel']!r}")
+    if not isinstance(body["releaseTimestamp"], str):
+        raise ManifestError("releaseTimestamp must be a string")
+    try:
+        parsed_time = datetime.datetime.fromisoformat(body["releaseTimestamp"])
+    except ValueError as exc:
+        raise ManifestError("releaseTimestamp is not a valid ISO-8601 timestamp") from exc
+    if parsed_time.tzinfo is None:
+        raise ManifestError("releaseTimestamp must include a timezone")
+
+    if not SHA256_RE.fullmatch(str(body["artifactDigest"])):
+        raise ManifestError("artifactDigest must be sha256:<64 lowercase hex>")
+    if not SHA256_RE.fullmatch(str(body["installerDigest"])):
+        raise ManifestError("installerDigest must be sha256:<64 lowercase hex>")
+    if not RAW_SHA256_RE.fullmatch(str(body["certificationReportDigest"])):
+        raise ManifestError("certificationReportDigest must be 64 lowercase hex")
+
+    _architecture_values(body["architecture"])
     if body["coreRepository"] not in TRUSTED_CORE_REPOSITORIES:
         raise ManifestError(
             f"repository {body['coreRepository']!r} is not an approved Core trust source")
+    if not TAG_RE.fullmatch(str(body["coreTag"])):
+        raise ManifestError("coreTag is malformed")
+    if not COMMIT_RE.fullmatch(str(body["coreCommit"])):
+        raise ManifestError("coreCommit must be a full 40-character lowercase hex SHA")
+
+    policy_version = body["safeCorePolicyVersion"]
+    if not isinstance(policy_version, int) or isinstance(policy_version, bool) or \
+            policy_version < 1:
+        raise ManifestError("safeCorePolicyVersion must be a positive integer")
+    if not isinstance(body["configCompatibility"], dict):
+        raise ManifestError("configCompatibility must be an object")
+
+    db = body["dbCompatibility"]
+    if not isinstance(db, dict):
+        raise ManifestError("dbCompatibility must be an object")
+    schema = db.get("schemaVersion")
+    if not isinstance(schema, int) or isinstance(schema, bool) or schema < 1:
+        raise ManifestError("dbCompatibility.schemaVersion must be a positive integer")
+    migration = db.get("migration")
+    if migration is not None:
+        if not isinstance(migration, dict):
+            raise ManifestError("dbCompatibility.migration must be an object")
+        required = {"fromSchema", "toSchema", "reversible"}
+        if not required <= set(migration):
+            raise ManifestError(
+                "dbCompatibility.migration must include fromSchema, toSchema, reversible")
+        if not isinstance(migration["fromSchema"], int) or isinstance(
+                migration["fromSchema"], bool) or migration["fromSchema"] < 1:
+            raise ManifestError("migration.fromSchema must be a positive integer")
+        if migration["toSchema"] != schema:
+            raise ManifestError("migration.toSchema must equal dbCompatibility.schemaVersion")
+        if not isinstance(migration["reversible"], bool):
+            raise ManifestError("migration.reversible must be boolean")
+
     if not isinstance(body["rollbackSafe"], bool):
-        raise ManifestError("rollbackSafe must be a boolean")
+        raise ManifestError("rollbackSafe must be boolean")
     if not isinstance(body["consensusImpact"], bool):
-        raise ManifestError("consensusImpact must be a boolean")
+        raise ManifestError("consensusImpact must be boolean")
     if not isinstance(body["autoUpdateEligible"], bool):
-        raise ManifestError("autoUpdateEligible must be a boolean")
-    if body["consensusImpact"] and body["autoUpdateEligible"]:
+        raise ManifestError("autoUpdateEligible must be boolean")
+    consensus_classification(body)
+    if migration is not None and migration["reversible"] is False and body["rollbackSafe"]:
         raise ManifestError(
-            "autoUpdateEligible cannot be true when consensusImpact is true")
-    if not body["installerFilename"]:
-        raise ManifestError("installerFilename is required")
-    if not body["installerDigest"]:
-        raise ManifestError("installerDigest is required")
-    try:
-        datetime.datetime.fromisoformat(body["releaseTimestamp"])
-    except (TypeError, ValueError) as exc:
-        raise ManifestError("releaseTimestamp is not a valid timestamp") from exc
+            "rollbackSafe cannot be true for an irreversible DB migration")
+
+    filename = body["installerFilename"]
+    if not isinstance(filename, str) or not FILENAME_RE.fullmatch(filename):
+        raise ManifestError("installerFilename is malformed")
+    if filename != "electrumx-ravencoin-install.py":
+        raise ManifestError("installerFilename is not the canonical installer name")
 
 
 def sign_manifest(body: dict, private_key: Ed25519PrivateKey, *, key_id: str) -> dict:
-    """Wrap a manifest body with its detached signature."""
-    if not key_id:
+    validate_body(body)
+    if not isinstance(key_id, str) or not key_id:
         raise ManifestError("a signing key id is required")
     signature = private_key.sign(canonical_bytes(body))
     return {
@@ -231,56 +286,58 @@ def sign_manifest(body: dict, private_key: Ed25519PrivateKey, *, key_id: str) ->
 
 
 def verify_manifest(document: dict, trusted_keys: dict) -> dict:
-    """Verify a signed manifest and return its body, or raise ManifestError.
-
-    ``trusted_keys`` maps key id to raw 32-byte Ed25519 public key material,
-    normally just the one pinned update-signing public key
-    (core-safety/production/update-signing-public-key.hex), passed in by the
-    caller rather than read from disk here, so tests can inject an ephemeral
-    key instead of ever needing a real private key in the repository.
-    """
-    if not isinstance(document, dict):
-        raise ManifestError("manifest document must be an object")
+    if not isinstance(document, dict) or set(document) != {"manifest", "signature"}:
+        raise ManifestError("manifest document must contain exactly manifest and signature")
     body = document.get("manifest")
     signature = document.get("signature")
     if not isinstance(body, dict) or not isinstance(signature, dict):
-        raise ManifestError("manifest document must contain manifest and signature")
-
+        raise ManifestError("manifest document contains malformed objects")
+    if set(signature) != {"algorithm", "keyId", "value"}:
+        raise ManifestError("signature object contains missing or unknown fields")
     if signature.get("algorithm") != SIGNATURE_ALGORITHM:
         raise ManifestError(f"unsupported signature algorithm {signature.get('algorithm')!r}")
     key_id = signature.get("keyId")
     if key_id not in trusted_keys:
         raise ManifestError(f"manifest signed by unknown key id {key_id!r}")
+    public_bytes = trusted_keys[key_id]
+    if not isinstance(public_bytes, bytes) or len(public_bytes) != 32:
+        raise ManifestError("trusted update public key must be exactly 32 bytes")
     try:
         raw_signature = base64.b64decode(signature.get("value", ""), validate=True)
     except Exception as exc:  # noqa: BLE001
         raise ManifestError("signature is not valid base64") from exc
+    if len(raw_signature) != 64:
+        raise ManifestError("Ed25519 signature must be exactly 64 bytes")
 
-    public_key = Ed25519PublicKey.from_public_bytes(trusted_keys[key_id])
     try:
-        public_key.verify(raw_signature, canonical_bytes(body))
-    except InvalidSignature as exc:
+        Ed25519PublicKey.from_public_bytes(public_bytes).verify(
+            raw_signature, canonical_bytes(body))
+    except (InvalidSignature, ValueError) as exc:
         raise ManifestError("manifest signature does not verify") from exc
-
     validate_body(body)
     return body
 
 
 def load_trusted_key(hex_path: str) -> dict:
-    """Read the pinned public update-signing key file into a trusted_keys map."""
-    with open(hex_path, "r", encoding="ascii") as handle:
-        public_hex = handle.read().strip()
-    public_bytes = bytes.fromhex(public_hex)
+    try:
+        with open(hex_path, "r", encoding="ascii") as handle:
+            public_hex = handle.read().strip()
+        public_bytes = bytes.fromhex(public_hex)
+    except (OSError, ValueError) as exc:
+        raise ManifestError(f"cannot load update-signing public key: {exc}") from exc
+    if len(public_bytes) != 32:
+        raise ManifestError("update-signing public key must be exactly 32 bytes")
     return {key_id_for(public_bytes): public_bytes}
 
 
 def generate_keypair() -> tuple:
-    """Return (private_key, public_bytes). Used by tests and by key setup."""
+    """Ephemeral helper for tests/key-ceremony tooling; never called by runtime."""
     private_key = Ed25519PrivateKey.generate()
     public_bytes = private_key.public_key().public_bytes_raw()
     return private_key, public_bytes
 
 
 def key_id_for(public_bytes: bytes) -> str:
-    """Stable short identifier derived from the public key itself."""
+    if not isinstance(public_bytes, bytes) or len(public_bytes) != 32:
+        raise ManifestError("public key must be exactly 32 bytes")
     return hashlib.sha256(public_bytes).hexdigest()[:16]
