@@ -1,14 +1,14 @@
 # Copyright (c) 2026, the ElectrumX-RVN community maintainers
 #
-# The MIT License (MIT).  See LICENCE for details.
+# The MIT License (MIT). See LICENCE for details.
 
-"""Persistent last-known-good state for the ElectrumX node self-update system.
+"""Persistent last-known-good state for the ElectrumX node updater.
 
-Five fields, one file, written atomically (temp file + os.replace, which is
-atomic on the same filesystem) so a crash mid-write never leaves a torn,
-half-updated state file behind. This module never touches Ravencoin Core's
-blockchain data or ElectrumX's own database; it only ever writes its own
-small JSON state file.
+The state file is written atomically and never contains blockchain data,
+ElectrumX DB content, RPC credentials, or signing keys. In addition to release
+state it persists the highest verified safe-Core policy version. That monotonic
+floor prevents a later local/network rollback to an older still-valid signed
+policy from silently restoring trust that a newer policy revoked.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import os
 import tempfile
 from typing import Optional
 
-STATE_SCHEMA_VERSION = 1
+STATE_SCHEMA_VERSION = 2
 
 
 @dataclasses.dataclass
@@ -30,6 +30,7 @@ class UpdateState:
     pending_candidate: Optional[dict] = None
     update_timestamp: Optional[str] = None
     failure_reason: Optional[str] = None
+    minimum_core_policy_version: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -39,16 +40,21 @@ class UpdateState:
             "pendingCandidate": self.pending_candidate,
             "updateTimestamp": self.update_timestamp,
             "failureReason": self.failure_reason,
+            "minimumCorePolicyVersion": self.minimum_core_policy_version,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "UpdateState":
+        version = data.get("minimumCorePolicyVersion", 0)
+        if not isinstance(version, int) or isinstance(version, bool) or version < 0:
+            version = 0
         return cls(
             current_release=data.get("currentRelease"),
             last_known_good_release=data.get("lastKnownGoodRelease"),
             pending_candidate=data.get("pendingCandidate"),
             update_timestamp=data.get("updateTimestamp"),
             failure_reason=data.get("failureReason"),
+            minimum_core_policy_version=version,
         )
 
 
@@ -56,22 +62,38 @@ def load_state(path: str) -> UpdateState:
     if not os.path.exists(path):
         return UpdateState()
     with open(path, "r", encoding="utf-8") as handle:
-        return UpdateState.from_dict(json.load(handle))
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError("update state must be a JSON object")
+    return UpdateState.from_dict(payload)
 
 
 def save_state(path: str, state: UpdateState) -> None:
     """Atomic write: never leaves a partially written state file on disk."""
     directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(prefix=".update-state-", dir=directory)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(state.to_dict(), handle, indent=2, sort_keys=True)
             handle.write("\n")
+        os.chmod(tmp_path, 0o600)
         os.replace(tmp_path, path)
     except BaseException:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
         raise
+
+
+def record_verified_core_policy(state: UpdateState, version: int) -> UpdateState:
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        raise ValueError("verified Core policy version must be a positive integer")
+    if version < state.minimum_core_policy_version:
+        raise ValueError(
+            f"verified policy version {version} is below persisted anti-rollback floor "
+            f"{state.minimum_core_policy_version}")
+    state.minimum_core_policy_version = version
+    return state
 
 
 def record_check_result(state: UpdateState, *, pending_candidate: Optional[dict],
@@ -84,9 +106,6 @@ def record_check_result(state: UpdateState, *, pending_candidate: Optional[dict]
 
 
 def record_promotion(state: UpdateState, *, applied_release: dict) -> UpdateState:
-    """The previously-current release becomes last-known-good; the applied
-    candidate becomes current. Called only after all health gates pass.
-    """
     if state.current_release is not None:
         state.last_known_good_release = state.current_release
     state.current_release = applied_release
@@ -98,10 +117,6 @@ def record_promotion(state: UpdateState, *, applied_release: dict) -> UpdateStat
 
 
 def record_rollback(state: UpdateState, *, reason: str) -> UpdateState:
-    """current_release reverts to last_known_good_release. Never deletes
-    Core blockchain data or the ElectrumX database; this only ever tracks
-    which release identity is meant to be running.
-    """
     if state.last_known_good_release is not None:
         state.current_release = state.last_known_good_release
     state.pending_candidate = None
@@ -112,10 +127,6 @@ def record_rollback(state: UpdateState, *, reason: str) -> UpdateState:
 
 
 def record_stuck(state: UpdateState, *, reason: str) -> UpdateState:
-    """Health gates failed and rollbackSafe was false: neither promote nor
-    roll back. current_release is left exactly as it was; an operator must
-    decide. This is distinct from record_rollback on purpose.
-    """
     state.failure_reason = reason
     state.update_timestamp = datetime.datetime.now(datetime.timezone.utc) \
         .replace(microsecond=0).isoformat()
