@@ -41,9 +41,9 @@ def _host(**overrides) -> HostFacts:
 
 
 def _signed_manifest(key_pair, *, core_commit="c" * 40, architecture="linux/amd64",
-                     artifact_digest="sha256:deadbeef", channel="stable",
+                     artifact_digest="sha256:" + "d" * 64, channel="stable",
                      electrumx_version="1.3.0", rollback_safe=True,
-                     consensus_impact=False, cert_digest="sha256:cert",
+                     consensus_impact=False, cert_digest="c" * 64,
                      db_schema=1, auto_update_eligible=True):
         private_key, public_bytes = key_pair
         body = um.build_manifest(
@@ -150,7 +150,7 @@ class VerificationTests(unittest.TestCase):
         signed, key_id, public_bytes = _signed_manifest(self.key_pair)
         body = um.verify_manifest(signed, {key_id: public_bytes})
         d = evaluate_verification(manifest=body, signature_valid=True,
-                                  downloaded_artifact_digest="sha256:WRONG",
+                                  downloaded_artifact_digest="sha256:" + "e" * 64,
                                   host=self.host,
                                   safe_core_certified_commits=frozenset({"c" * 40}))
         self.assertEqual(d.verdict, VerificationVerdict.REFUSED_ARTIFACT_DIGEST_MISMATCH)
@@ -159,7 +159,7 @@ class VerificationTests(unittest.TestCase):
         signed, key_id, public_bytes = _signed_manifest(self.key_pair, architecture="linux/arm64")
         body = um.verify_manifest(signed, {key_id: public_bytes})
         d = evaluate_verification(manifest=body, signature_valid=True,
-                                  downloaded_artifact_digest="sha256:deadbeef",
+                                  downloaded_artifact_digest="sha256:" + "d" * 64,
                                   host=self.host,
                                   safe_core_certified_commits=frozenset({"c" * 40}))
         self.assertEqual(d.verdict, VerificationVerdict.REFUSED_ARCHITECTURE_MISMATCH)
@@ -168,17 +168,17 @@ class VerificationTests(unittest.TestCase):
         signed, key_id, public_bytes = _signed_manifest(self.key_pair, core_commit="f" * 40)
         body = um.verify_manifest(signed, {key_id: public_bytes})
         d = evaluate_verification(manifest=body, signature_valid=True,
-                                  downloaded_artifact_digest="sha256:deadbeef",
+                                  downloaded_artifact_digest="sha256:" + "d" * 64,
                                   host=self.host,
                                   safe_core_certified_commits=frozenset({"c" * 40}))
         self.assertEqual(d.verdict, VerificationVerdict.REFUSED_CORE_IDENTITY_MISMATCH)
 
     def test_missing_certification_digest_refused(self):
-        signed, key_id, public_bytes = _signed_manifest(self.key_pair, cert_digest="sha256:cert")
+        signed, key_id, public_bytes = _signed_manifest(self.key_pair, cert_digest="c" * 64)
         body = um.verify_manifest(signed, {key_id: public_bytes})
         body["certificationReportDigest"] = ""
         d = evaluate_verification(manifest=body, signature_valid=True,
-                                  downloaded_artifact_digest="sha256:deadbeef",
+                                  downloaded_artifact_digest="sha256:" + "d" * 64,
                                   host=self.host,
                                   safe_core_certified_commits=frozenset({"c" * 40}))
         self.assertEqual(d.verdict, VerificationVerdict.REFUSED_MISSING_CERTIFICATION_DIGEST)
@@ -188,7 +188,7 @@ class VerificationTests(unittest.TestCase):
         body = um.verify_manifest(signed, {key_id: public_bytes})
         body["dbCompatibility"] = {}
         d = evaluate_verification(manifest=body, signature_valid=True,
-                                  downloaded_artifact_digest="sha256:deadbeef",
+                                  downloaded_artifact_digest="sha256:" + "d" * 64,
                                   host=self.host,
                                   safe_core_certified_commits=frozenset({"c" * 40}))
         self.assertEqual(d.verdict, VerificationVerdict.REFUSED_UNKNOWN_DB_COMPATIBILITY)
@@ -197,7 +197,7 @@ class VerificationTests(unittest.TestCase):
         signed, key_id, public_bytes = _signed_manifest(self.key_pair)
         body = um.verify_manifest(signed, {key_id: public_bytes})
         d = evaluate_verification(manifest=body, signature_valid=True,
-                                  downloaded_artifact_digest="sha256:deadbeef",
+                                  downloaded_artifact_digest="sha256:" + "d" * 64,
                                   host=self.host,
                                   safe_core_certified_commits=frozenset({"c" * 40}))
         self.assertEqual(d.verdict, VerificationVerdict.VERIFIED)
@@ -206,10 +206,10 @@ class VerificationTests(unittest.TestCase):
         with self.assertRaises(um.ManifestError):
             um.build_manifest(
                 electrumx_version="1.3.0", channel="stable",
-                artifact_digest="sha256:x", architecture="linux/amd64",
+                artifact_digest="sha256:" + "d" * 64, architecture="linux/amd64",
                 core_version="4.8.0", core_repository="RavenProject/Ravencoin",
                 core_tag="v4.8.0", core_commit="c" * 40,
-                certification_report_digest="sha256:cert", safe_core_policy_version=3,
+                certification_report_digest="c" * 64, safe_core_policy_version=3,
                 required_updater_version="1.0.0", config_compatibility={},
                 db_compatibility={"schemaVersion": 2,
                                   "migration": {"reversible": False}},
@@ -224,7 +224,7 @@ class ApplyGateTests(unittest.TestCase):
 
     def test_apply_refuses_consensus_change_without_approval(self):
         d = evaluate_apply(
-            pending_candidate={"consensusImpact": True},
+            pending_candidate={"manifest": {"consensusImpact": True}},
             pending_verdict=EligibilityVerdict.ELIGIBLE,
             pending_verification=VerificationVerdict.VERIFIED,
             approve_consensus_change=False,
@@ -233,7 +233,7 @@ class ApplyGateTests(unittest.TestCase):
 
     def test_apply_allows_consensus_change_with_explicit_approval(self):
         d = evaluate_apply(
-            pending_candidate={"consensusImpact": True},
+            pending_candidate={"manifest": {"consensusImpact": True}},
             pending_verdict=EligibilityVerdict.ELIGIBLE,
             pending_verification=VerificationVerdict.VERIFIED,
             approve_consensus_change=True,
@@ -319,7 +319,7 @@ class RunCheckAndApplyIntegrationTests(unittest.TestCase):
         signed, _, _ = _signed_manifest(self.key_pair, **overrides)
         defaults = dict(version="1.3.0", channel="stable", is_prerelease=False,
                         signed_manifest_document=signed, artifact_bytes=b"x",
-                        artifact_digest="sha256:deadbeef")
+                        artifact_digest="sha256:" + "d" * 64)
         return ReleaseCandidate(**defaults)
 
     def test_successful_check_then_apply_promotes(self):
