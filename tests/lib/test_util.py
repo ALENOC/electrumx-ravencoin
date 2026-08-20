@@ -248,6 +248,34 @@ def test_data_parser_is_finished_empty_data():
     assert util.DataParser(b'').is_finished()
 
 
+def test_data_parser_read_bytes_rejects_out_of_bounds_length():
+    # _assert_space is the single bounds check every read_* method in
+    # DataParser routes through. A malformed/truncated push (e.g. an
+    # asset script claiming more bytes than remain) must raise
+    # ParserException rather than returning a short/garbage read.
+    parser = util.DataParser(b'\x01\x02\x03')
+    with pytest.raises(util.DataParser.ParserException):
+        parser.read_bytes(4)
+
+
+def test_data_parser_read_bytes_exact_remaining_length_succeeds():
+    # The boundary itself (length == exactly what remains) must still be
+    # readable; only strictly-too-long reads are rejected.
+    parser = util.DataParser(b'\x01\x02\x03')
+    assert parser.read_bytes(3) == b'\x01\x02\x03'
+    assert parser.is_finished()
+
+
+def test_data_parser_read_bytes_does_not_advance_cursor_on_failure():
+    # A failed bounds check must not leave the parser in a partially
+    # advanced state that a caller could mistake for a successful read.
+    parser = util.DataParser(b'\x01\x02')
+    with pytest.raises(util.DataParser.ParserException):
+        parser.read_bytes(3)
+    assert parser.cursor == 0
+    assert parser.read_bytes(2) == b'\x01\x02'
+
+
 def test_deeply_nested_json_becomes_a_clean_protocol_error():
     # RVN-08: json.loads() raises RecursionError (not JSONDecodeError) on
     # a deeply nested payload, which upstream aiorpcx only catches
