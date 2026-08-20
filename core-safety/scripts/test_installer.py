@@ -446,7 +446,33 @@ class ComposeOrchestrationTests(unittest.TestCase):
             self.assertFalse(payload["monitorControllerEnabled"])
 
 
+def _fake_manifest_body(**overrides):
+    kwargs = dict(
+        electrumx_version="1.3.0", channel="stable",
+        artifact_digest="sha256:" + "a" * 64,
+        architecture="linux/amd64,linux/arm64",
+        core_version="4.8.0", core_repository="RavenProject/Ravencoin",
+        core_tag="v4.8.0", core_commit="c" * 40,
+        certification_report_digest="sha256:" + "b" * 64, safe_core_policy_version=3,
+        required_updater_version="1.0.0", config_compatibility={},
+        db_compatibility={"schemaVersion": 1},
+        rollback_safe=True, consensus_impact=False, auto_update_eligible=True,
+        installer_filename="electrumx-ravencoin-install.py",
+        installer_digest="sha256:" + "d" * 64,
+    )
+    kwargs.update(overrides)
+    return um.build_manifest(**kwargs)
+
+
 class EntryPointTests(unittest.TestCase):
+
+    def setUp(self):
+        self._original_fetch_and_verify = installer.fetch_and_verify_release_manifest
+        installer.fetch_and_verify_release_manifest = lambda **k: _fake_manifest_body()
+        self.addCleanup(self._restore_fetch_and_verify)
+
+    def _restore_fetch_and_verify(self):
+        installer.fetch_and_verify_release_manifest = self._original_fetch_and_verify
 
     def test_version_prints_and_exits_zero(self):
         rc = installer.main(["--version"])
@@ -459,6 +485,34 @@ class EntryPointTests(unittest.TestCase):
             rc = installer.main(["--check-only"])
         finally:
             installer.detect_docker = original
+        self.assertEqual(rc, 1)
+
+    def test_missing_pinned_release_key_fails_closed_before_install(self):
+        """The unsigned/unpinned development build must never install
+        anything: an empty RELEASE_PUBLIC_KEY_HEX is the fail-closed default,
+        not a silently-skipped check."""
+        import tempfile
+        installer.fetch_and_verify_release_manifest = (
+            self._original_fetch_and_verify)
+        original_docker = installer.detect_docker
+        original_compose = installer.detect_compose
+        original_run_up = installer.run_compose_up
+        installer.detect_docker = lambda **k: "/usr/bin/docker"
+        installer.detect_compose = lambda **k: ["docker", "compose"]
+        installer.run_compose_up = lambda argv, files, **k: self.fail(
+            "must not invoke compose without a verified release manifest")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                cwd = os.getcwd()
+                os.chdir(tmp)
+                try:
+                    rc = installer.main(["--chainstrap", "--without-monitor"])
+                finally:
+                    os.chdir(cwd)
+        finally:
+            installer.detect_docker = original_docker
+            installer.detect_compose = original_compose
+            installer.run_compose_up = original_run_up
         self.assertEqual(rc, 1)
 
     def test_fresh_install_invokes_compose_and_writes_marker(self):

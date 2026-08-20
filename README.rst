@@ -188,12 +188,15 @@ downloaded block before ElectrumX ever reads it. The installer never
 re-triggers ChainStrap against an existing Core or ChainStrap datadir, and a
 normal ElectrumX upgrade never re-triggers it either.
 
-The installer also offers the optional `Electrum monitor`_ dashboard, enabled
-by default on a fresh interactive install (``--without-monitor`` to skip,
-``--with-monitor`` to force it non-interactively). The monitor dashboard binds
-to ``127.0.0.1:8899`` by default and runs unprivileged, with no Docker socket
-access. Its optional privileged host controller (bandwidth and connection
-management) is disabled by default and only turns on with the explicit
+The installer also offers the optional
+`ravencoin-node-monitor <https://github.com/ALENOC/ravencoin-node-monitor>`_
+dashboard (a separate project from this repository's own
+`Electrum monitor`_), enabled by default on a fresh interactive install
+(``--without-monitor`` to skip, ``--with-monitor`` to force it
+non-interactively). The installer configures its dashboard to bind to
+``127.0.0.1:8899`` and run unprivileged, with no Docker socket access. Its
+optional privileged host controller (bandwidth and connection management)
+is disabled by default and only turns on with the explicit
 ``--with-monitor-controller`` flag.
 
 If the installer detects an existing installation, it does not reinstall or

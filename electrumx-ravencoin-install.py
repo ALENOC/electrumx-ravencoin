@@ -39,6 +39,8 @@ import platform
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from typing import Callable, Optional, Sequence
 
 VERSION = "0.1.0"
@@ -87,7 +89,6 @@ RELEASE_PUBLIC_KEY_HEX = ""
 REPO = "ALENOC/electrumx-ravencoin"
 RELEASES_LATEST_BASE = f"https://github.com/{REPO}/releases/latest/download"
 MANIFEST_URL = f"{RELEASES_LATEST_BASE}/release-manifest.json"
-SIGNATURE_URL = f"{RELEASES_LATEST_BASE}/release-manifest.sig"
 
 SUPPORTED_ARCHITECTURES = ("amd64", "arm64")
 MIN_PYTHON = (3, 9)
@@ -354,6 +355,35 @@ def verify_installer_digest(installer_bytes: bytes, expected_digest: str) -> Non
     verify_artifact_digest(installer_bytes, expected_digest)
 
 
+def fetch_url(url: str, *, timeout: int = 30) -> bytes:
+    with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
+        return response.read()
+
+
+def fetch_and_verify_release_manifest(
+    *, public_key_hex: str = RELEASE_PUBLIC_KEY_HEX,
+    manifest_url: str = MANIFEST_URL,
+    fetch: Callable[[str], bytes] = fetch_url,
+) -> dict:
+    """Fetch the signed release manifest and return its verified body.
+
+    Fails closed on every path: no pinned key, no network reachability, no
+    valid JSON, no valid signature all raise InstallError, and the caller
+    must never proceed to install anything without this call succeeding.
+    """
+    key_hex = require_pinned_release_key(public_key_hex)
+    try:
+        raw = fetch(manifest_url)
+    except (OSError, urllib.error.URLError) as exc:
+        raise InstallError(
+            f"failed to fetch release manifest from {manifest_url}: {exc}") from exc
+    try:
+        document = json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        raise InstallError("release manifest is not valid JSON") from exc
+    return verify_manifest_signature(document, key_hex)
+
+
 # --------------------------------------------------------------------------
 # Interactive choices (pure resolution logic; I/O isolated to `prompt`)
 # --------------------------------------------------------------------------
@@ -592,8 +622,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"docker: {docker_path}")
         print(f"compose: {' '.join(compose_argv)}")
 
+        manifest_body = fetch_and_verify_release_manifest()
+        verify_architecture(manifest_body, architecture)
+        print(f"release manifest verified: electrumx {manifest_body['electrumxVersion']} "
+             f"(core {manifest_body['coreVersion']})")
+
         if args.check_only:
-            print("--check-only: detection complete, no changes made")
+            print("--check-only: detection complete, release trust metadata "
+                 "validated, no changes made")
             return 0
 
         if detect_existing_installation(DEFAULT_INSTALL_MARKER):
