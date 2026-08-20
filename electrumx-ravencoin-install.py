@@ -505,6 +505,65 @@ def build_monitor_service_definition(*, environment: dict,
 
 
 # --------------------------------------------------------------------------
+# Compose orchestration
+# --------------------------------------------------------------------------
+
+DEFAULT_COMPOSE_BASE = "compose.yaml"
+DEFAULT_COMPOSE_CHAINSTRAP_OVERLAY = "compose.chainstrap.yaml"
+DEFAULT_DATADIR = os.environ.get(
+    "ELECTRUMX_RAVENCOIN_DATADIR", os.path.join(os.getcwd(), "ravencoin-data"))
+DEFAULT_INSTALL_MARKER = ".electrumx-ravencoin-installed.json"
+
+
+def compose_files_for_bootstrap_choice(choice: str) -> list:
+    """Fresh ChainStrap installs layer the ChainStrap overlay, which is where
+    all of the transport-only security invariants (network_mode: none for
+    the reindex step, pinned build args, cap_drop, no-new-privileges) live
+    already in compose.chainstrap.yaml. Traditional P2P and "preserve an
+    existing datadir" both just run the base stack.
+    """
+    if choice == "chainstrap":
+        return [DEFAULT_COMPOSE_BASE, DEFAULT_COMPOSE_CHAINSTRAP_OVERLAY]
+    if choice in ("p2p", "preserve_existing"):
+        return [DEFAULT_COMPOSE_BASE]
+    raise InstallError(f"unknown bootstrap choice {choice!r}")
+
+
+def run_compose_up(
+    compose_argv: list, compose_files: list, *,
+    run: Callable[..., "subprocess.CompletedProcess"] = subprocess.run,
+    cwd: Optional[str] = None,
+) -> None:
+    cmd = list(compose_argv)
+    for compose_file in compose_files:
+        cmd += ["-f", compose_file]
+    cmd += ["up", "-d"]
+    result = run(cmd, cwd=cwd, check=False)
+    if result.returncode != 0:
+        raise InstallError(f"docker compose up failed (exit code {result.returncode})")
+
+
+def write_install_marker(
+    path: str, *, bootstrap_choice: str, monitor_enabled: bool,
+    controller_enabled: bool,
+    open_func: Callable = open,
+) -> None:
+    """Records the installer's own decisions, not secrets, so a later run
+    can tell `detect_existing_installation` "this host is already set up"
+    and hand off to the updater instead of re-bootstrapping.
+    """
+    payload = {
+        "bootstrapChoice": bootstrap_choice,
+        "monitorEnabled": monitor_enabled,
+        "monitorControllerEnabled": controller_enabled,
+        "installerVersion": VERSION,
+    }
+    with open_func(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+
+# --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
 
@@ -537,10 +596,50 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print("--check-only: detection complete, no changes made")
             return 0
 
-        raise InstallError(
-            "interactive installation is not implemented in this "
-            "development build; run with --check-only, or use the "
-            "documented Compose files directly (see docs/DOCKER_COMPOSE.md)")
+        if detect_existing_installation(DEFAULT_INSTALL_MARKER):
+            print(
+                f"an existing installation was detected ({DEFAULT_INSTALL_MARKER}); "
+                "this installer never re-bootstraps an existing install. Use "
+                "electrumx-update check / status / show / apply instead.")
+            return 0
+
+        interactive = sys.stdin.isatty()
+        datadir_state = classify_datadir(DEFAULT_DATADIR)
+        bootstrap_choice = resolve_bootstrap_choice(
+            chainstrap_flag=args.chainstrap, p2p_flag=args.p2p_bootstrap,
+            existing_datadir_state=datadir_state, interactive=interactive)
+        monitor_enabled = resolve_monitor_choice(
+            with_monitor_flag=args.with_monitor,
+            without_monitor_flag=args.without_monitor, interactive=interactive)
+        controller_enabled = resolve_monitor_controller_choice(
+            monitor_enabled=monitor_enabled,
+            with_controller_flag=args.with_monitor_controller,
+            interactive=interactive)
+
+        print(f"bootstrap method: {bootstrap_choice}")
+        print(f"node monitor: {'enabled' if monitor_enabled else 'disabled'}")
+        if monitor_enabled:
+            print(f"node monitor host controller: "
+                 f"{'enabled' if controller_enabled else 'disabled'}")
+
+        compose_files = compose_files_for_bootstrap_choice(bootstrap_choice)
+        run_compose_up(compose_argv, compose_files)
+        write_install_marker(
+            DEFAULT_INSTALL_MARKER, bootstrap_choice=bootstrap_choice,
+            monitor_enabled=monitor_enabled, controller_enabled=controller_enabled)
+
+        if monitor_enabled:
+            print(
+                f"Node Monitor selected: deploy it from "
+                f"{NODE_MONITOR_REPOSITORY}, joined to this project's "
+                f"private Compose network. Its dashboard binds to "
+                f"{MONITOR_DASHBOARD_BIND}:{MONITOR_DASHBOARD_PORT} only; "
+                f"it is never exposed publicly by default, and the "
+                f"privileged host controller stays "
+                f"{'enabled' if controller_enabled else 'disabled'} as "
+                f"decided above.")
+
+        return 0
     except InstallError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

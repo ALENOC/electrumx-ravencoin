@@ -388,6 +388,64 @@ class MonitorSecurityTests(unittest.TestCase):
         self.assertGreaterEqual(len(first), 32)
 
 
+class ComposeOrchestrationTests(unittest.TestCase):
+
+    def test_chainstrap_choice_layers_overlay(self):
+        files = installer.compose_files_for_bootstrap_choice("chainstrap")
+        self.assertEqual(files, ["compose.yaml", "compose.chainstrap.yaml"])
+
+    def test_p2p_choice_uses_base_only(self):
+        files = installer.compose_files_for_bootstrap_choice("p2p")
+        self.assertEqual(files, ["compose.yaml"])
+
+    def test_preserve_existing_uses_base_only(self):
+        files = installer.compose_files_for_bootstrap_choice("preserve_existing")
+        self.assertEqual(files, ["compose.yaml"])
+
+    def test_unknown_choice_rejected(self):
+        with self.assertRaises(installer.InstallError):
+            installer.compose_files_for_bootstrap_choice("bogus")
+
+    def test_compose_up_builds_correct_command(self):
+        captured = {}
+
+        class _Result:
+            returncode = 0
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return _Result()
+
+        installer.run_compose_up(
+            ["docker", "compose"], ["compose.yaml", "compose.chainstrap.yaml"],
+            run=fake_run)
+        self.assertEqual(captured["cmd"], [
+            "docker", "compose", "-f", "compose.yaml",
+            "-f", "compose.chainstrap.yaml", "up", "-d"])
+
+    def test_compose_up_failure_raises(self):
+        class _Result:
+            returncode = 1
+
+        with self.assertRaises(installer.InstallError):
+            installer.run_compose_up(
+                ["docker", "compose"], ["compose.yaml"],
+                run=lambda cmd, **k: _Result())
+
+    def test_install_marker_written_atomically_readable(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            marker_path = os.path.join(tmp, "marker.json")
+            installer.write_install_marker(
+                marker_path, bootstrap_choice="chainstrap",
+                monitor_enabled=True, controller_enabled=False)
+            with open(marker_path, encoding="utf-8") as handle:
+                payload = json.load(handle)
+            self.assertEqual(payload["bootstrapChoice"], "chainstrap")
+            self.assertTrue(payload["monitorEnabled"])
+            self.assertFalse(payload["monitorControllerEnabled"])
+
+
 class EntryPointTests(unittest.TestCase):
 
     def test_version_prints_and_exits_zero(self):
@@ -402,6 +460,61 @@ class EntryPointTests(unittest.TestCase):
         finally:
             installer.detect_docker = original
         self.assertEqual(rc, 1)
+
+    def test_fresh_install_invokes_compose_and_writes_marker(self):
+        import tempfile
+        original_docker = installer.detect_docker
+        original_compose = installer.detect_compose
+        original_run_up = installer.run_compose_up
+        calls = {}
+        installer.detect_docker = lambda **k: "/usr/bin/docker"
+        installer.detect_compose = lambda **k: ["docker", "compose"]
+        installer.run_compose_up = lambda argv, files, **k: calls.update(
+            argv=argv, files=files)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                cwd = os.getcwd()
+                os.chdir(tmp)
+                try:
+                    rc = installer.main(["--chainstrap", "--without-monitor"])
+                    with open(installer.DEFAULT_INSTALL_MARKER, encoding="utf-8") as handle:
+                        marker = json.load(handle)
+                finally:
+                    os.chdir(cwd)
+        finally:
+            installer.detect_docker = original_docker
+            installer.detect_compose = original_compose
+            installer.run_compose_up = original_run_up
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls["files"], ["compose.yaml", "compose.chainstrap.yaml"])
+        self.assertEqual(marker["bootstrapChoice"], "chainstrap")
+        self.assertFalse(marker["monitorEnabled"])
+
+    def test_existing_install_marker_prevents_rebootstrap(self):
+        import tempfile
+        original_docker = installer.detect_docker
+        original_compose = installer.detect_compose
+        original_run_up = installer.run_compose_up
+        installer.detect_docker = lambda **k: "/usr/bin/docker"
+        installer.detect_compose = lambda **k: ["docker", "compose"]
+        installer.run_compose_up = lambda argv, files, **k: self.fail(
+            "must not re-bootstrap an existing installation")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                cwd = os.getcwd()
+                os.chdir(tmp)
+                try:
+                    with open(installer.DEFAULT_INSTALL_MARKER, "w",
+                             encoding="utf-8") as handle:
+                        handle.write("{}")
+                    rc = installer.main(["--chainstrap"])
+                finally:
+                    os.chdir(cwd)
+        finally:
+            installer.detect_docker = original_docker
+            installer.detect_compose = original_compose
+            installer.run_compose_up = original_run_up
+        self.assertEqual(rc, 0)
 
     def test_conflicting_cli_flags_exit_nonzero(self):
         with self.assertRaises(SystemExit) as ctx:
