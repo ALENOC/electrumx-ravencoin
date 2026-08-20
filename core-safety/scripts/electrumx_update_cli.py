@@ -2,28 +2,26 @@
 #
 # The MIT License (MIT).  See LICENCE for details.
 
-"""electrumx-update: detect / verify / pre-pull ElectrumX releases
-automatically; install only on an explicit operator command.
+"""electrumx-update: detect / verify ElectrumX releases automatically;
+install only on an explicit operator command.
 
-    electrumx-update check    # detect + verify + (optionally) pre-pull
-    electrumx-update status   # print persisted state
-    electrumx-update show     # print the pending candidate's full identity
+    electrumx-update check
+    electrumx-update status
+    electrumx-update show
     electrumx-update apply [--approve-consensus-change]
 
-``check`` never installs anything: it only ever updates the persisted
-``pendingCandidate``. ``apply`` is the sole path that can change what is
-running, and a generic ``apply`` refuses a release whose manifest declares
-consensusImpact=true; that release requires
-``apply --approve-consensus-change``.
-
-Silence, a restart, a reboot, or timer expiry are never interpreted as
-consent to install.
+``check`` never installs anything: it only updates ``pendingCandidate`` after
+verifying the release signature, the actual downloaded artifact digest, and
+the bundled Core identity against the verified signed safe-Core policy.
+``apply`` is a separate operator action. Silence, restart, reboot, or timer
+expiry are never interpreted as consent to install.
 """
 
 from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import json
 import os
 import subprocess
@@ -32,6 +30,9 @@ import urllib.error
 import urllib.request
 from typing import Callable, Optional, Sequence
 
+from packaging.version import Version
+
+import policy as core_policy
 import update_apply
 import update_audit
 from update_decision import (
@@ -41,8 +42,6 @@ from update_decision import (
 from update_manifest import ManifestError, load_trusted_key, verify_manifest
 from update_state import UpdateState, load_state, record_check_result, save_state
 
-# Default on-disk locations for a real installation. Overridable via env vars
-# so tests and non-default layouts never need to touch these constants.
 DEFAULT_STATE_PATH = os.environ.get(
     "ELECTRUMX_UPDATE_STATE_PATH", "/var/lib/electrumx-ravencoin/update-state.json")
 DEFAULT_AUDIT_LOG_PATH = os.environ.get(
@@ -51,14 +50,27 @@ DEFAULT_TRUSTED_KEY_PATH = os.environ.get(
     "ELECTRUMX_UPDATE_PUBLIC_KEY_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
                  "production", "update-signing-public-key.hex"))
+DEFAULT_CORE_POLICY_PATH = os.environ.get(
+    "ELECTRUMX_CORE_POLICY_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                 "production", "safe-core-policy.json"))
+DEFAULT_CORE_POLICY_KEY_PATH = os.environ.get(
+    "ELECTRUMX_CORE_POLICY_PUBLIC_KEY_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                 "production", "core-policy-signing-public-key.hex"))
 RELEASES_API_URL = "https://api.github.com/repos/ALENOC/electrumx-ravencoin/releases"
+MAX_UPDATE_ARTIFACT_BYTES = 4 * 1024 * 1024 * 1024
+
+# Production apply is deliberately blocked until the Docker switch and all
+# twelve health gates are wired to real probes. Leaving the old placeholder
+# path callable would stop/restart a live node even though every health result
+# is synthetic False. Decision/apply logic remains unit-testable independently.
+PRODUCTION_APPLY_READY = False
 
 
 @dataclasses.dataclass
 class ReleaseCandidate:
-    """One concrete, tagged GitHub Release under consideration. Never a
-    mutable ``latest`` alias.
-    """
+    """One concrete, tagged GitHub Release under consideration."""
     version: str
     channel: str
     is_prerelease: bool
@@ -69,29 +81,23 @@ class ReleaseCandidate:
 
 @dataclasses.dataclass
 class ReleaseSource:
-    """Injected boundary between decision logic and the outside world.
-    Production wiring talks to the real GitHub Releases API and downloads
-    real artifacts; tests supply a fake that returns fixed data, including
-    simulating GitHub being unreachable.
-    """
+    """Injected boundary between update decision logic and GitHub Releases."""
     list_candidates: Callable[[], Sequence[ReleaseCandidate]]
     reachable: bool = True
 
 
 def run_check(*, state: UpdateState, source: ReleaseSource, host: HostFacts,
               trusted_keys: dict, safe_core_certified_commits: frozenset,
-              auto_update_mode: str, pre_pull: Callable[[dict], None] = None) -> UpdateState:
-    """Steps 1-13: discover, filter, verify, and (if configured) pre-pull.
-    Never installs. Always leaves the running node untouched.
-    """
+              auto_update_mode: str, pre_pull: Callable[[dict], None] = None,
+              safe_core_certification_digests: Optional[dict] = None) -> UpdateState:
+    """Discover and verify candidates. Never installs or stops services."""
     if not source.reachable:
-        record_check_result(state, pending_candidate=None,
-                            failure_reason=VerificationVerdict.REFUSED_GITHUB_UNREACHABLE.value)
+        record_check_result(
+            state, pending_candidate=None,
+            failure_reason=VerificationVerdict.REFUSED_GITHUB_UNREACHABLE.value)
         return state
 
-    best_candidate = None
-    best_verdicts = None
-
+    eligible = []
     for candidate in source.list_candidates():
         eligibility = evaluate_eligibility(
             auto_update_mode=auto_update_mode,
@@ -107,7 +113,8 @@ def run_check(*, state: UpdateState, source: ReleaseSource, host: HostFacts,
         manifest_body = None
         if candidate.signed_manifest_document is not None:
             try:
-                manifest_body = verify_manifest(candidate.signed_manifest_document, trusted_keys)
+                manifest_body = verify_manifest(
+                    candidate.signed_manifest_document, trusted_keys)
                 signature_valid = True
             except ManifestError:
                 signature_valid = False
@@ -118,18 +125,25 @@ def run_check(*, state: UpdateState, source: ReleaseSource, host: HostFacts,
             downloaded_artifact_digest=candidate.artifact_digest,
             host=host,
             safe_core_certified_commits=safe_core_certified_commits,
+            safe_core_certification_digests=safe_core_certification_digests,
         )
+        eligible.append((candidate, eligibility, verification, manifest_body))
 
-        if best_candidate is None:
-            best_candidate = candidate
-            best_verdicts = (eligibility, verification, manifest_body)
-
-    if best_candidate is None:
+    if not eligible:
         record_check_result(state, pending_candidate=None,
                             failure_reason="no eligible candidate release found")
         return state
 
-    eligibility, verification, manifest_body = best_verdicts
+    # Prefer the newest VERIFIED release. An unverifiable newest GitHub release
+    # must not hide a slightly older release that is still newer than installed
+    # and fully verifies. If none verify, retain the newest failure for operator
+    # diagnostics without treating it as installable.
+    verified = [item for item in eligible
+                if item[2].verdict == VerificationVerdict.VERIFIED]
+    pool = verified or eligible
+    best_candidate, eligibility, verification, manifest_body = max(
+        pool, key=lambda item: Version(item[0].version))
+
     pending = {
         "version": best_candidate.version,
         "manifest": manifest_body,
@@ -141,9 +155,10 @@ def run_check(*, state: UpdateState, source: ReleaseSource, host: HostFacts,
     if verification.verdict == VerificationVerdict.VERIFIED and pre_pull is not None:
         pre_pull(manifest_body)
 
-    record_check_result(state, pending_candidate=pending,
-                        failure_reason=None if verification.verdict ==
-                        VerificationVerdict.VERIFIED else verification.reason)
+    record_check_result(
+        state, pending_candidate=pending,
+        failure_reason=(None if verification.verdict == VerificationVerdict.VERIFIED
+                        else verification.reason))
     return state
 
 
@@ -174,26 +189,95 @@ def format_show(state: UpdateState) -> str:
     return "\n".join(lines)
 
 
+def _stream_sha256(url: str, *, timeout_seconds: float) -> Optional[str]:
+    request = urllib.request.Request(url, headers={"User-Agent": "electrumx-update"})
+    digest = hashlib.sha256()
+    total = 0
+    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        declared = response.headers.get("Content-Length")
+        if declared is not None:
+            try:
+                if int(declared) > MAX_UPDATE_ARTIFACT_BYTES:
+                    return None
+            except ValueError:
+                return None
+        while True:
+            chunk = response.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_UPDATE_ARTIFACT_BYTES:
+                return None
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
+def _fetch_release_assets(release: dict, *, timeout_seconds: float):
+    """Fetch a signed manifest and hash actual release artifact bytes.
+
+    The unverified manifest body is used only as a digest-selection hint. Trust
+    is granted later by ``verify_manifest``. We never copy ``artifactDigest``
+    from JSON into the observed-digest field; at least one concrete release
+    asset must hash to the signed value.
+    """
+    assets = release.get("assets") or []
+    manifest_asset = next(
+        (a for a in assets if a.get("name") == "release-manifest.json"), None)
+    if manifest_asset is None:
+        return None, None, None
+    try:
+        request = urllib.request.Request(
+            manifest_asset["browser_download_url"],
+            headers={"User-Agent": "electrumx-update"})
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            manifest_document = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError):
+        return None, None, None
+
+    body = (manifest_document.get("manifest")
+            if isinstance(manifest_document, dict) else None)
+    expected_digest = body.get("artifactDigest") if isinstance(body, dict) else None
+    if not isinstance(expected_digest, str) or not expected_digest.startswith("sha256:"):
+        return manifest_document, None, None
+    expected_hex = expected_digest[7:]
+    if len(expected_hex) != 64 or any(c not in "0123456789abcdef" for c in expected_hex):
+        return manifest_document, None, None
+
+    installer_name = body.get("installerFilename") if isinstance(body, dict) else None
+    for asset in assets:
+        name = asset.get("name")
+        url = asset.get("browser_download_url")
+        if not isinstance(name, str) or not isinstance(url, str):
+            continue
+        if name == "release-manifest.json" or name == installer_name:
+            continue
+        try:
+            observed = _stream_sha256(url, timeout_seconds=timeout_seconds)
+        except (urllib.error.URLError, TimeoutError, OSError):
+            continue
+        if observed == expected_digest:
+            return manifest_document, None, observed
+    return manifest_document, None, None
+
+
 def github_release_source(*, repository: str = "ALENOC/electrumx-ravencoin",
                           channel: str = "stable",
                           timeout_seconds: float = 10.0) -> ReleaseSource:
-    """Real GitHub Releases wiring. Only ever consulted from ``check``; never
-    installs. Any network failure (timeout, DNS, HTTP error, malformed JSON)
-    is surfaced as ``reachable=False`` so ``run_check`` leaves the node
-    untouched rather than guessing.
-    """
+    """Real GitHub Releases wiring used only by ``check``."""
 
     def _list_candidates() -> Sequence[ReleaseCandidate]:
         request = urllib.request.Request(
             f"https://api.github.com/repos/{repository}/releases",
             headers={"Accept": "application/vnd.github+json",
-                    "User-Agent": "electrumx-update"})
+                     "User-Agent": "electrumx-update"})
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             releases = json.loads(response.read().decode("utf-8"))
+        if not isinstance(releases, list):
+            raise ValueError("GitHub Releases response is not a list")
 
         candidates = []
         for release in releases:
-            if release.get("draft"):
+            if not isinstance(release, dict) or release.get("draft"):
                 continue
             manifest_document, artifact_bytes, artifact_digest = _fetch_release_assets(
                 release, timeout_seconds=timeout_seconds)
@@ -207,57 +291,70 @@ def github_release_source(*, repository: str = "ALENOC/electrumx-ravencoin",
             ))
         return candidates
 
-    reachable = True
     try:
         probe = urllib.request.Request(
             f"https://api.github.com/repos/{repository}",
             headers={"User-Agent": "electrumx-update"})
-        urllib.request.urlopen(probe, timeout=timeout_seconds)
+        with urllib.request.urlopen(probe, timeout=timeout_seconds):
+            pass
     except (urllib.error.URLError, TimeoutError, OSError):
-        reachable = False
-
-    if not reachable:
         return ReleaseSource(list_candidates=lambda: [], reachable=False)
     return ReleaseSource(list_candidates=_list_candidates, reachable=True)
 
 
-def _fetch_release_assets(release: dict, *, timeout_seconds: float):
-    """Downloads ``release-manifest.json`` for a single GitHub release, if
-    present. Returns ``(manifest_document, artifact_bytes, artifact_digest)``;
-    any missing/unreadable asset yields ``(None, None, None)`` so the
-    candidate is simply treated as unverifiable, never as verified-by-default.
-    """
-    manifest_asset = next(
-        (a for a in release.get("assets", []) if a.get("name") == "release-manifest.json"),
-        None)
-    if manifest_asset is None:
-        return None, None, None
-    try:
-        request = urllib.request.Request(
-            manifest_asset["browser_download_url"],
-            headers={"User-Agent": "electrumx-update"})
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            manifest_document = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
-        return None, None, None
+def load_safe_core_certifications(
+        *, policy_path: str = DEFAULT_CORE_POLICY_PATH,
+        key_path: str = DEFAULT_CORE_POLICY_KEY_PATH,
+        minimum_policy_version: int = 0) -> tuple[frozenset, dict, int]:
+    """Verify the signed safe-Core policy and return active RavenProject trust.
 
-    artifact_digest = None
-    body = manifest_document.get("body") if isinstance(manifest_document, dict) else None
-    if isinstance(body, dict):
-        artifact_digest = body.get("artifactDigest")
-    return manifest_document, None, artifact_digest
+    Historical 2miners entries may remain cryptographically valid evidence but
+    are never returned as trusted release identities.
+    """
+    with open(key_path, "r", encoding="ascii") as handle:
+        key_hex = handle.read().strip()
+    try:
+        public_bytes = bytes.fromhex(key_hex)
+    except ValueError as exc:
+        raise core_policy.PolicyError("Core policy public key is malformed") from exc
+    if len(public_bytes) != 32:
+        raise core_policy.PolicyError("Core policy public key must be exactly 32 bytes")
+    trusted = {core_policy.key_id_for(public_bytes): public_bytes}
+
+    with open(policy_path, "r", encoding="utf-8") as handle:
+        document = json.load(handle)
+    body = core_policy.verify_policy(
+        document, trusted, minimum_policy_version=minimum_policy_version)
+
+    commits = set()
+    digests = {}
+    for release in body.get("releases", []):
+        if release.get("repository") != "RavenProject/Ravencoin":
+            continue
+        if release.get("status") != "KNOWN_SAFE":
+            continue
+        certification = release.get("certification") or {}
+        if certification.get("result") != "PASS":
+            continue
+        commit = release.get("commit")
+        report_digest = release.get("reportDigest")
+        if not commit or not report_digest:
+            raise core_policy.PolicyError(
+                "KNOWN_SAFE RavenProject release lacks commit/reportDigest")
+        commits.add(commit)
+        digests[commit] = report_digest
+    return frozenset(commits), digests, body["policyVersion"]
 
 
 def production_apply_hooks(*, compose_files: Sequence[str] = ("compose.yaml",),
                            project_directory: Optional[str] = None) -> "update_apply.ApplyHooks":
-    """Docker-Compose-backed hooks. Every step shells out to ``docker
-    compose``; nothing here touches blockchain data, ElectrumX's database, or
-    certificates directly, matching the atomic-switch design in
-    ``update_apply.py``.
+    """Docker Compose hooks retained for development/tests.
+
+    The public CLI does not call them while ``PRODUCTION_APPLY_READY`` is false.
     """
     args_prefix = ["docker", "compose"]
-    for f in compose_files:
-        args_prefix += ["-f", f]
+    for filename in compose_files:
+        args_prefix += ["-f", filename]
 
     def _run(*extra_args: str) -> None:
         subprocess.run(list(args_prefix) + list(extra_args), check=True,
@@ -267,21 +364,12 @@ def production_apply_hooks(*, compose_files: Sequence[str] = ("compose.yaml",),
         _run("stop")
 
     def switch_atomically(manifest: dict) -> None:
-        # The compose build args (RAVENCOIN_VERSION / RAVENCOIN_SOURCE_COMMIT
-        # / *_SHA256) and the ElectrumX image tag are declarative, digest-pinned
-        # config generated from the verified manifest elsewhere in the install
-        # tree; this hook only ever pulls the already-verified, digest-pinned
-        # images and never executes anything downloaded outside the manifest.
         _run("pull")
 
     def start_services() -> None:
         _run("up", "-d")
 
     def run_health_checks(manifest: dict) -> update_apply.HealthGateResult:
-        # Placeholder conservative health gate: a real deployment wires this
-        # to RPC/DB probes (expected versions, Core RPC reachability, DB
-        # openability, tip coherence). Until those probes are implemented,
-        # fail closed rather than claim health that was never checked.
         return HealthGateResult(*([False] * 12))
 
     def rollback_to(previous: Optional[dict]) -> None:
@@ -331,28 +419,47 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.command == "check":
         try:
-            trusted_keys = {}
-            public_bytes = load_trusted_key(DEFAULT_TRUSTED_KEY_PATH)
-            from update_manifest import key_id_for
-            trusted_keys[key_id_for(public_bytes)] = public_bytes
-        except (OSError, ManifestError) as exc:
-            print(f"cannot load release public key from {DEFAULT_TRUSTED_KEY_PATH}: {exc}",
-                  file=sys.stderr)
+            # load_trusted_key already returns {keyId: raw_public_key}; do not
+            # derive a key id from the returned dict a second time.
+            trusted_keys = load_trusted_key(DEFAULT_TRUSTED_KEY_PATH)
+            minimum_policy = int(os.environ.get(
+                "ELECTRUMX_MIN_CORE_POLICY_VERSION", "0"))
+            certified_commits, certification_digests, policy_version = \
+                load_safe_core_certifications(minimum_policy_version=minimum_policy)
+        except (OSError, ValueError, ManifestError, core_policy.PolicyError,
+                json.JSONDecodeError) as exc:
+            print(f"cannot load updater trust state: {exc}", file=sys.stderr)
             return 1
 
         host = _load_current_host_facts(state)
         source = github_release_source()
-        certified_commits = frozenset({"22549129888d02e0e08fcdb9f96f3c699167e774"})
-        state = run_check(state=state, source=source, host=host,
-                          trusted_keys=trusted_keys,
-                          safe_core_certified_commits=certified_commits,
-                          auto_update_mode=os.environ.get(
-                              "ELECTRUMX_UPDATE_CHANNEL", "stable"))
+        state = run_check(
+            state=state,
+            source=source,
+            host=host,
+            trusted_keys=trusted_keys,
+            safe_core_certified_commits=certified_commits,
+            safe_core_certification_digests=certification_digests,
+            auto_update_mode=os.environ.get("ELECTRUMX_UPDATE_CHANNEL", "stable"),
+        )
+        # Persist the verified policy version alongside diagnostics so operators
+        # can set ELECTRUMX_MIN_CORE_POLICY_VERSION to the last accepted value.
+        state_dict = getattr(state, "metadata", None)
+        if isinstance(state_dict, dict):
+            state_dict["verifiedCorePolicyVersion"] = policy_version
         save_state(DEFAULT_STATE_PATH, state)
         print(format_status(state))
         return 0
 
     if args.command == "apply":
+        if not PRODUCTION_APPLY_READY:
+            print(
+                "production apply is intentionally disabled: the real atomic "
+                "Compose switch and all health probes are not yet wired; no "
+                "services were stopped or changed",
+                file=sys.stderr,
+            )
+            return 1
         if not state.pending_candidate:
             print("no pending candidate; run 'electrumx-update check' first", file=sys.stderr)
             return 1
