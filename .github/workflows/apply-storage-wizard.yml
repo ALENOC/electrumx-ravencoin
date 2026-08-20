@@ -1,14 +1,6 @@
 name: Apply reviewed project-storage wizard migration
 
 on:
-  push:
-    branches:
-      - work/chainstrap-ravenproject
-    paths:
-      - tools/apply_storage_wizard.py
-      - tools/patch_storage_legacy_tests.py
-      - tools/patch_storage_ci_fixture.py
-      - .github/workflows/apply-storage-wizard.yml
   pull_request:
     branches:
       - master
@@ -27,10 +19,10 @@ concurrency:
 
 jobs:
   migrate:
-    if: github.event_name == 'push' || github.event.pull_request.head.ref == 'work/chainstrap-ravenproject'
+    if: github.event.pull_request.head.ref == 'work/chainstrap-ravenproject'
     runs-on: ubuntu-24.04
     env:
-      TARGET_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      TARGET_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
       - name: Check out exact branch head
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -84,7 +76,7 @@ jobs:
           docker compose -f compose.yaml -f compose.storage.yaml config --quiet
           docker compose -f compose.yaml -f compose.storage.yaml -f compose.chainstrap.yaml -f compose.monitor.yaml config --quiet
 
-      - name: Publish final migration commit and remove one-shot machinery
+      - name: Publish validated non-workflow feature changes
         run: |
           set -euo pipefail
           git fetch origin work/chainstrap-ravenproject
@@ -92,11 +84,20 @@ jobs:
             echo 'branch moved during validation; refusing publication' >&2
             exit 1
           }
+
+          # GitHub Apps cannot update workflow files without the separate
+          # workflows permission. Keep both workflow files byte-for-byte at the
+          # triggering SHA here; ChatGPT/GitHub MCP updates CI and removes this
+          # one-shot workflow separately after this feature commit lands.
+          git checkout "$TARGET_SHA" -- \
+            .github/workflows/ci.yml \
+            .github/workflows/apply-storage-wizard.yml
+
           git rm \
             tools/apply_storage_wizard.py \
             tools/patch_storage_legacy_tests.py \
-            tools/patch_storage_ci_fixture.py \
-            .github/workflows/apply-storage-wizard.yml
+            tools/patch_storage_ci_fixture.py
+
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add --all
