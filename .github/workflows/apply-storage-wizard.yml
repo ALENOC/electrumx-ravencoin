@@ -7,6 +7,12 @@ on:
     paths:
       - tools/apply_storage_wizard.py
       - .github/workflows/apply-storage-wizard.yml
+  pull_request:
+    branches:
+      - master
+    paths:
+      - tools/apply_storage_wizard.py
+      - .github/workflows/apply-storage-wizard.yml
 
 permissions:
   contents: write
@@ -17,19 +23,22 @@ concurrency:
 
 jobs:
   migrate:
+    if: github.event_name == 'push' || github.event.pull_request.head.ref == 'work/chainstrap-ravenproject'
     runs-on: ubuntu-24.04
+    env:
+      TARGET_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
     steps:
-      - name: Check out exact triggering commit
+      - name: Check out exact branch head
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.TARGET_SHA }}
           fetch-depth: 0
 
       - name: Refuse stale migration
         run: |
           set -euo pipefail
           git fetch origin work/chainstrap-ravenproject
-          test "$(git rev-parse origin/work/chainstrap-ravenproject)" = "$GITHUB_SHA"
+          test "$(git rev-parse origin/work/chainstrap-ravenproject)" = "$TARGET_SHA"
 
       - name: Apply deterministic migration
         run: |
@@ -68,10 +77,11 @@ jobs:
           docker compose -f compose.yaml -f compose.storage.yaml -f compose.chainstrap.yaml -f compose.monitor.yaml config --quiet
 
       - name: Publish final migration commit and remove one-shot machinery
+        if: github.event_name == 'push'
         run: |
           set -euo pipefail
           git fetch origin work/chainstrap-ravenproject
-          test "$(git rev-parse origin/work/chainstrap-ravenproject)" = "$GITHUB_SHA" || {
+          test "$(git rev-parse origin/work/chainstrap-ravenproject)" = "$TARGET_SHA" || {
             echo 'branch moved during validation; refusing publication' >&2
             exit 1
           }
