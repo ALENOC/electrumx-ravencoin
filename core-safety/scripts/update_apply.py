@@ -13,10 +13,8 @@ also requires ``--approve-consensus-change``.
 Production hooks stage/build before stopping the old node, atomically switch a
 same-filesystem release directory, start the new stack, run real health gates,
 and either restore the exact previous release or return a promotion decision.
-The caller durably saves the promoted UpdateState *before* deleting the
-last-known-good directory/journal. This ordering means a power loss can leave an
-extra recovery copy, but cannot leave a committed new release with its only
-rollback copy already destroyed while state still says the old release.
+The caller durably saves the promoted UpdateState *before* invoking the optional
+``finalize_success`` hook that deletes the last-known-good directory/journal.
 """
 
 from __future__ import annotations
@@ -40,6 +38,9 @@ class ApplyHooks:
     start_services: Callable[[], None]
     run_health_checks: Callable[[dict], HealthGateResult]
     rollback_to: Callable[[Optional[dict]], None]
+    # Deliberately not invoked inside apply_pending_candidate. The production
+    # CLI invokes it only after save_state() has durably recorded promotion.
+    finalize_success: Optional[Callable[[], None]] = None
 
 
 @dataclasses.dataclass
@@ -121,7 +122,7 @@ def apply_pending_candidate(state: UpdateState, hooks: ApplyHooks, *,
 
     if health_decision.verdict == HealthVerdict.PROMOTE_TO_CURRENT:
         # Only in-memory state changes here. The CLI must fsync this state before
-        # it calls TransactionalComposeSwitch.finalize_success().
+        # calling hooks.finalize_success / TransactionalComposeSwitch.finalize_success.
         record_promotion(state, applied_release=manifest)
         return ApplyResult(health_decision.verdict, health_decision.reason)
 
