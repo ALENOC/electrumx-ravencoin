@@ -57,11 +57,12 @@ ravend \
     -stopafterblockimport=1
 
 # A successful block-file import exit is necessary but not sufficient. During
-# reindex Core may encounter stale/orphan/invalid records in blk*.dat without
-# turning that into a process-level error. Re-open the resulting databases with
-# networking still disabled and require the active chain to terminate at the
-# exact height/hash asserted by the vetted ChainStrap manifest before creating
-# the completion marker.
+# reindex Core may encounter stale/orphan records and Ravencoin deliberately
+# tolerates one historical transfer-deserialization condition while loading raw
+# blk*.dat records (fFromLoad). Re-open the resulting databases with networking
+# still disabled and require the active chain to terminate at the exact
+# height/hash asserted by the vetted ChainStrap manifest before creating the
+# completion marker.
 rpc_user=chainstrap-verify
 rpc_password=chainstrap-local-offline-only
 probe_pid=
@@ -126,6 +127,29 @@ observed_snapshot_hash=$(rpc getblockhash "$snapshot_height" | tr -d '\r\n[:spac
 [ "$observed_snapshot_hash" = "$snapshot_hash" ] \
     || fail "Core hash at snapshot height does not equal the vetted snapshot hash"
 
+# The snapshot is far beyond Ravencoin asset activation and this deployment
+# requires -assetindex for ElectrumX/RVN operation. Exercise both the asset
+# metadata DB and the address-by-asset index before blessing the bootstrap.
+# This is intentionally a read-only RPC probe; it does not repair or mutate an
+# index. If either database is unavailable/inconsistent, no completion marker
+# is written and normal networked startup remains blocked.
+asset_listing=$(rpc listassets "*" false 1 0) \
+    || fail 'post-reindex asset database probe failed'
+sample_asset=$(printf '%s\n' "$asset_listing" \
+    | sed -n 's/^[[:space:]]*"\([^\"]\{1,40\}\)"[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p' \
+    | sed -n '1p')
+[ -n "$sample_asset" ] \
+    || fail 'post-reindex asset database returned no sample asset at the ChainStrap snapshot tip'
+rpc getassetdata "$sample_asset" >/dev/null \
+    || fail "post-reindex asset metadata lookup failed for $sample_asset"
+asset_index_probe=$(rpc listaddressesbyasset "$sample_asset" true) \
+    || fail "post-reindex asset index lookup failed for $sample_asset"
+case "$asset_index_probe" in
+    *"not functional unless -assetindex is enabled"*)
+        fail 'post-reindex Core reports that assetindex is not enabled/usable'
+        ;;
+esac
+
 rpc stop >/dev/null
 wait "$probe_pid"
 probe_pid=
@@ -136,4 +160,4 @@ printf '%s\n' "$marker_hash" > "$temporary_marker"
 chmod 600 "$temporary_marker"
 mv "$temporary_marker" "$done_marker"
 printf '%s\n' \
-    "Full local Core reindex completed and exact snapshot tip $snapshot_height:$snapshot_hash was verified; normal Core startup is now allowed."
+    "Full local Core reindex completed; exact snapshot tip $snapshot_height:$snapshot_hash and asset database/index probes were verified. Normal Core startup is now allowed."
