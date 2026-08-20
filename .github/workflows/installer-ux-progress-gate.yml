@@ -29,6 +29,17 @@ jobs:
           git merge-base --is-ancestor bdf4bec075f2883495b3142d89f028e69a3ab689 HEAD
           test -f core-safety/scripts/apply_installer_ux_progress.py
           python3 core-safety/scripts/apply_installer_ux_progress.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('core-safety/scripts/test_installer.py')
+          text = path.read_text(encoding='utf-8')
+          old = '    assert "ELECTRUMX RAVENCOIN" in lines\n    assert "Verified Node Installer" in lines\n'
+          new = ('    assert any(line.strip() == "ELECTRUMX RAVENCOIN" for line in lines)\n'
+                 '    assert any(line.strip() == "Verified Node Installer" for line in lines)\n')
+          if text.count(old) != 1:
+              raise SystemExit('centered-banner test anchor is not unique')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
           git diff --check
           python3 -m py_compile electrumx-ravencoin-install.py
 
