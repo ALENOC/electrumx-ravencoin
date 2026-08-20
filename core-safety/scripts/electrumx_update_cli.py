@@ -35,6 +35,7 @@ from packaging.version import Version
 import policy as core_policy
 import update_apply
 import update_audit
+import update_policy
 from update_decision import (
     EligibilityVerdict, HealthGateResult, HostFacts, VerificationVerdict,
     evaluate_eligibility, evaluate_verification,
@@ -61,6 +62,11 @@ DEFAULT_CORE_POLICY_KEY_PATH = os.environ.get(
     "ELECTRUMX_CORE_POLICY_PUBLIC_KEY_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
                  "production", "core-policy-signing-public-key.hex"))
+DEFAULT_CORE_POLICY_CACHE_PATH = os.environ.get(
+    "ELECTRUMX_CORE_POLICY_CACHE_PATH",
+    "/var/lib/electrumx-ravencoin/safe-core-policy.json")
+DEFAULT_CORE_POLICY_URL = os.environ.get(
+    "ELECTRUMX_CORE_POLICY_URL", update_policy.DEFAULT_POLICY_URL)
 RELEASES_API_URL = "https://api.github.com/repos/ALENOC/electrumx-ravencoin/releases"
 MAX_UPDATE_ARTIFACT_BYTES = 4 * 1024 * 1024 * 1024
 
@@ -309,10 +315,12 @@ def load_safe_core_certifications(
         *, policy_path: str = DEFAULT_CORE_POLICY_PATH,
         key_path: str = DEFAULT_CORE_POLICY_KEY_PATH,
         minimum_policy_version: int = 0) -> tuple[frozenset, dict, int]:
-    """Verify the signed safe-Core policy and return active RavenProject trust.
+    """Verify one local signed safe-Core policy (legacy/test helper).
 
-    Historical 2miners entries may remain cryptographically valid evidence but
-    are never returned as trusted release identities.
+    Production ``check`` uses ``update_policy.resolve_safe_core_policy`` so a
+    newer verified remote policy can advance trust and the last verified policy
+    remains usable during an outage. This helper remains useful to tests and
+    offline tooling that explicitly want exactly one local document.
     """
     with open(key_path, "r", encoding="ascii") as handle:
         key_hex = handle.read().strip()
@@ -328,25 +336,8 @@ def load_safe_core_certifications(
         document = json.load(handle)
     body = core_policy.verify_policy(
         document, trusted, minimum_policy_version=minimum_policy_version)
-
-    commits = set()
-    digests = {}
-    for release in body.get("releases", []):
-        if release.get("repository") != "RavenProject/Ravencoin":
-            continue
-        if release.get("status") != "KNOWN_SAFE":
-            continue
-        certification = release.get("certification") or {}
-        if certification.get("result") != "PASS":
-            continue
-        commit = release.get("commit")
-        report_digest = release.get("reportDigest")
-        if not commit or not report_digest:
-            raise core_policy.PolicyError(
-                "KNOWN_SAFE RavenProject release lacks commit/reportDigest")
-        commits.add(commit)
-        digests[commit] = report_digest
-    return frozenset(commits), digests, body["policyVersion"]
+    commits, digests = update_policy.extract_ravenproject_certifications(body)
+    return commits, digests, body["policyVersion"]
 
 
 def production_apply_hooks(*, compose_files: Sequence[str] = ("compose.yaml",),
@@ -419,6 +410,31 @@ def _configured_policy_floor() -> int:
     return value
 
 
+def resolve_production_core_policy(
+        state: UpdateState, *, configured_floor: Optional[int] = None,
+        resolver: Callable[..., update_policy.ResolvedPolicy] =
+        update_policy.resolve_safe_core_policy) -> update_policy.ResolvedPolicy:
+    """Resolve production Core trust and monotonically advance the local floor.
+
+    The release updater must never derive Core trust from a hardcoded commit or
+    directly from RavenProject releases. It consumes only our signed safe-Core
+    policy. HTTPS is transport; the policy signature and persisted monotonic
+    version are the trust controls.
+    """
+    configured = (_configured_policy_floor()
+                  if configured_floor is None else configured_floor)
+    floor = effective_core_policy_floor(state, configured)
+    resolved = resolver(
+        bundled_path=DEFAULT_CORE_POLICY_PATH,
+        cache_path=DEFAULT_CORE_POLICY_CACHE_PATH,
+        key_path=DEFAULT_CORE_POLICY_KEY_PATH,
+        minimum_policy_version=floor,
+        remote_url=DEFAULT_CORE_POLICY_URL,
+    )
+    record_verified_core_policy(state, resolved.version)
+    return resolved
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
     try:
@@ -440,15 +456,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # load_trusted_key already returns {keyId: raw_public_key}; do not
             # derive a key id from the returned dict a second time.
             trusted_keys = load_trusted_key(DEFAULT_TRUSTED_KEY_PATH)
-            minimum_policy = effective_core_policy_floor(
-                state, _configured_policy_floor())
-            certified_commits, certification_digests, policy_version = \
-                load_safe_core_certifications(minimum_policy_version=minimum_policy)
-            # Advance the persisted floor only after the policy's signature,
-            # schema, expiry and monotonic version checks have all succeeded.
-            record_verified_core_policy(state, policy_version)
+            resolved_policy = resolve_production_core_policy(state)
         except (OSError, ValueError, ManifestError, core_policy.PolicyError,
-                json.JSONDecodeError) as exc:
+                update_policy.PolicyResolutionError, json.JSONDecodeError) as exc:
             print(f"cannot load updater trust state: {exc}", file=sys.stderr)
             return 1
 
@@ -459,8 +469,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             source=source,
             host=host,
             trusted_keys=trusted_keys,
-            safe_core_certified_commits=certified_commits,
-            safe_core_certification_digests=certification_digests,
+            safe_core_certified_commits=resolved_policy.commits,
+            safe_core_certification_digests=resolved_policy.certification_digests,
             auto_update_mode=os.environ.get("ELECTRUMX_UPDATE_CHANNEL", "stable"),
         )
         save_state(DEFAULT_STATE_PATH, state)
