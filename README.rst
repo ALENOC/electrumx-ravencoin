@@ -158,6 +158,50 @@ The script does not print credentials or delete existing data. ``--enable-reboot
 is optional and installs a user service for reboot recovery. Read `Getting
 started`_ before using an existing Core instead of the bundled mode.
 
+Single-file installer (alternative to git clone)
+--------------------------------------------------
+
+Instead of cloning the repository, a host can fetch and run one signed,
+self-contained Python file:
+
+.. code-block:: sh
+
+   curl -fL -O https://github.com/ALENOC/electrumx-ravencoin/releases/latest/download/electrumx-ravencoin-install.py
+   python3 electrumx-ravencoin-install.py
+
+Never pipe the download straight into an interpreter (``curl ... | python3``
+or ``curl ... | bash``). Fetch the file, read it if you want to, then run it.
+
+The installer verifies a signed release manifest against a pinned ElectrumX
+release public key before installing anything; this key is a separate trust
+root from the Core certification signing key used elsewhere in this
+repository, and the installer never has access to either private key. Run
+``python3 electrumx-ravencoin-install.py --check-only`` to detect the host and
+validate release trust metadata without making any persistent change.
+
+On a fresh, empty bundled-Core install the installer defaults to the ChainStrap
+Fast Verified Bootstrap described in the `August 2026 incident guide`_; press
+Enter to accept it, or pass ``--p2p-bootstrap`` for traditional Ravencoin P2P
+synchronization instead.
+ChainStrap is transport only: Ravencoin Core independently validates every
+downloaded block before ElectrumX ever reads it. The installer never
+re-triggers ChainStrap against an existing Core or ChainStrap datadir, and a
+normal ElectrumX upgrade never re-triggers it either.
+
+The installer also offers the optional `Electrum monitor`_ dashboard, enabled
+by default on a fresh interactive install (``--without-monitor`` to skip,
+``--with-monitor`` to force it non-interactively). The monitor dashboard binds
+to ``127.0.0.1:8899`` by default and runs unprivileged, with no Docker socket
+access. Its optional privileged host controller (bandwidth and connection
+management) is disabled by default and only turns on with the explicit
+``--with-monitor-controller`` flag.
+
+If the installer detects an existing installation, it does not reinstall or
+re-bootstrap anything; it hands off to ``electrumx-update check`` /
+``status`` / ``show`` / ``apply``. Applying an update always requires an
+explicit operator command, and a release marked as a consensus-affecting
+change is never installed by an ordinary ``electrumx-update apply``.
+
 Installing Docker when it is missing
 ------------------------------------
 
