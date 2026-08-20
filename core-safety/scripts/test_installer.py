@@ -223,6 +223,43 @@ def test_chainstrap_exact_tip_gate_is_required_by_installer():
         installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
+def test_chainstrap_reindex_missing_rpc_gate_is_refused():
+    files = bundle_files()
+    files["docker/core/bootstrap-reindex.sh"] = (
+        b"#!/bin/sh\nravend -connect=0\nravend -connect=0\n"
+        b"raven-cli getbestblockhash\nraven-cli getblockhash 1\n"
+    )
+    data = make_bundle(files)
+    document, public_bytes = signed_document(
+        um.generate_keypair(),
+        artifact_digest="sha256:" + hashlib.sha256(data).hexdigest())
+    body = installer.verify_manifest_signature(document, public_bytes.hex())
+    with pytest.raises(installer.InstallError, match="lacks gate 'listassets'"):
+        installer.validate_bundle(data, body, public_key_hex="a" * 64)
+
+
+def test_bundle_updater_key_must_match_installer_trust_root():
+    data = make_bundle()
+    document, public_bytes = signed_document(
+        um.generate_keypair(),
+        artifact_digest="sha256:" + hashlib.sha256(data).hexdigest())
+    body = installer.verify_manifest_signature(document, public_bytes.hex())
+    with pytest.raises(installer.InstallError, match="trust root"):
+        installer.validate_bundle(data, body, public_key_hex="c" * 64)
+
+
+def test_incomplete_bundle_is_refused():
+    files = bundle_files()
+    del files["core-safety/production/safe-core-policy.json"]
+    data = make_bundle(files)
+    document, public_bytes = signed_document(
+        um.generate_keypair(),
+        artifact_digest="sha256:" + hashlib.sha256(data).hexdigest())
+    body = installer.verify_manifest_signature(document, public_bytes.hex())
+    with pytest.raises(installer.InstallError, match="release bundle is incomplete"):
+        installer.validate_bundle(data, body, public_key_hex="a" * 64)
+
+
 def test_safe_extract_writes_no_path_outside_destination(tmp_path):
     data = make_bundle()
     destination = tmp_path / "install"
