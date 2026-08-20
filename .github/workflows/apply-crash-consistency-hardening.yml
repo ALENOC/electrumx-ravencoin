@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       TARGET_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      MONITOR_SHA: b59e7efdea2fe8c0114b5f72e139931fe86ae571
     steps:
       - name: Check out exact branch head
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -44,6 +45,12 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/apply_monitor_network_resilience.py
+          # Normalize the one-shot documentation append to exactly one EOF LF.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('docs/crash-consistency.md')
+          p.write_text(p.read_text(encoding='utf-8').rstrip() + '\n', encoding='utf-8')
+          PY
           python3 -m py_compile \
             electrumx-ravencoin-install.py \
             core-safety/scripts/configure_monitor_admin_network.py
@@ -58,10 +65,21 @@ jobs:
           python3 -m pip install .
           python3 -m pip install cryptography==43.0.3 pytest==8.3.5 pytest-asyncio==0.24.0
 
-      - name: Run full regression suite
+      - name: Run full ElectrumX regression suite
         run: |
           set -euo pipefail
           pytest -q
+
+      - name: Exercise pinned Node Monitor reboot-publish verifier
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/ravencoin-node-monitor-ci
+          git clone --quiet https://github.com/ALENOC/ravencoin-node-monitor.git /tmp/ravencoin-node-monitor-ci
+          git -C /tmp/ravencoin-node-monitor-ci checkout --quiet --detach "$MONITOR_SHA"
+          test "$(git -C /tmp/ravencoin-node-monitor-ci rev-parse HEAD)" = "$MONITOR_SHA"
+          python3 -m py_compile /tmp/ravencoin-node-monitor-ci/contrib/verify-published-port.py
+          python3 -m unittest \
+            /tmp/ravencoin-node-monitor-ci/tests/test_verify_published_port.py -v
 
       - name: Validate collision-safe Compose models
         run: |
