@@ -97,7 +97,11 @@ MONITOR_CONTROLLER_OVERLAY = "compose.monitor-controller.yaml"
 CONTROLLER_SCRIPT = f"{MONITOR_PATH}/contrib/ravencoin-bandwidth-controller.py"
 CONTROLLER_UNIT = "electrumx-ravencoin-monitor-controller.service"
 CHAINSTRAP_OVERLAY = "compose.chainstrap.yaml"
+STORAGE_OVERLAY = "compose.storage.yaml"
 BASE_COMPOSE = "compose.yaml"
+STORAGE_ROOT_DIRNAME = "electrumx-ravencoin-storage"
+STORAGE_SUBDIRS = ("ravencoin-data", "ravencoin-config", "electrumx-data", "monitor-data")
+SAFE_STORAGE_PATH_RE = re.compile(r"^[A-Za-z0-9_./ +@-]+$")
 UPDATE_PUBLIC_KEY_PATH = "core-safety/production/update-signing-public-key.hex"
 CORE_POLICY_PATH = "core-safety/production/safe-core-policy.json"
 CORE_POLICY_PUBLIC_KEY_PATH = "core-safety/production/core-policy-signing-public-key.hex"
@@ -120,6 +124,7 @@ SAFE_CONTROLLER_ROOT_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
 
 REQUIRED_BUNDLE_PATHS = frozenset({
     BASE_COMPOSE,
+    STORAGE_OVERLAY,
     CHAINSTRAP_OVERLAY,
     MONITOR_OVERLAY,
     MONITOR_CONTROLLER_OVERLAY,
@@ -169,6 +174,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
                              "core-safety/scripts/build_local_release_validation_bundle.py "
                              "instead of the real GitHub release. Never use this for a real "
                              "install; it never touches the production trust roots.")
+    parser.add_argument(
+        "--storage-root", default=None, metavar="DIR",
+        help="store Ravencoin/ChainStrap, ElectrumX and Node Monitor persistent "
+             "data under DIR; interactive installs offer mounted disks/filesystems")
     return parser
 
 
@@ -778,6 +787,262 @@ def print_local_validation_banner(directory: Path) -> None:
     print("=" * 72, file=sys.stderr)
 
 
+
+
+def _format_storage_bytes(value: int) -> str:
+    amount = float(value)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if amount < 1024.0 or unit == "TiB":
+            return f"{amount:.1f} {unit}" if unit != "B" else f"{amount:.0f} {unit}"
+        amount /= 1024.0
+    raise AssertionError("unreachable")
+
+
+def _nearest_existing_parent(path: Path) -> Path:
+    current = path
+    while not current.exists() and current != current.parent:
+        current = current.parent
+    return current
+
+
+def validate_storage_root_path(path: Path) -> Path:
+    raw = str(path.expanduser())
+    if not raw or not SAFE_STORAGE_PATH_RE.fullmatch(raw) or any(ch in raw for ch in ":'$\n\r"):
+        raise InstallError(
+            "storage path contains unsupported characters; use letters, digits, spaces, "
+            "and common path characters only")
+    resolved = path.expanduser().resolve(strict=False)
+    home = Path.home().resolve()
+    if resolved in (Path("/"), home):
+        raise InstallError("storage root must be a dedicated child directory, not / or $HOME")
+    if resolved.exists():
+        raise InstallError(
+            f"fresh install storage root already exists: {resolved}; preserve or remove it "
+            "explicitly before retrying")
+    parent = _nearest_existing_parent(resolved.parent)
+    if not parent.is_dir() or not os.access(parent, os.W_OK | os.X_OK):
+        raise InstallError(f"storage parent is not writable by the current user: {parent}")
+    try:
+        mount = Path(subprocess.run(
+            ["findmnt", "-n", "-o", "TARGET", "--target", str(parent)],
+            check=False, capture_output=True, text=True).stdout.strip() or "/").resolve()
+    except OSError:
+        mount = Path("/")
+    if resolved == mount:
+        raise InstallError("storage root must be a child directory, not the filesystem mountpoint")
+    return resolved
+
+
+def _storage_candidate_root(mountpoint: Path) -> Optional[Path]:
+    try:
+        home = Path.home().resolve()
+        if os.stat(home).st_dev == os.stat(mountpoint).st_dev:
+            return home / STORAGE_ROOT_DIRNAME
+    except OSError:
+        pass
+    if os.access(mountpoint, os.W_OK | os.X_OK):
+        return mountpoint / STORAGE_ROOT_DIRNAME
+    return None
+
+
+def discover_storage_candidates() -> list[dict]:
+    """Return writable mounted block filesystems without changing the host."""
+    lsblk = shutil.which("lsblk")
+    candidates: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    if lsblk is not None:
+        completed = subprocess.run(
+            [lsblk, "--json", "--bytes", "--output",
+             "NAME,PATH,TYPE,FSTYPE,SIZE,MOUNTPOINTS,RO"],
+            check=False, capture_output=True, text=True)
+        if completed.returncode == 0:
+            try:
+                payload = json.loads(completed.stdout)
+            except json.JSONDecodeError:
+                payload = {}
+
+            def walk(nodes) -> None:
+                for node in nodes or []:
+                    mountpoints = node.get("mountpoints") or []
+                    if isinstance(mountpoints, str):
+                        mountpoints = [mountpoints]
+                    source = str(node.get("path") or node.get("name") or "unknown")
+                    if node.get("fstype") and not node.get("ro"):
+                        for raw_mount in mountpoints:
+                            if not raw_mount:
+                                continue
+                            mountpoint = Path(raw_mount).resolve()
+                            if not mountpoint.is_dir():
+                                continue
+                            suggested = _storage_candidate_root(mountpoint)
+                            if suggested is None:
+                                continue
+                            key = (source, str(mountpoint))
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            try:
+                                usage = shutil.disk_usage(mountpoint)
+                            except OSError:
+                                continue
+                            candidates.append({
+                                "source": source,
+                                "mountpoint": mountpoint,
+                                "fstype": str(node.get("fstype")),
+                                "size": int(node.get("size") or usage.total),
+                                "free": int(usage.free),
+                                "root": suggested,
+                            })
+                    walk(node.get("children"))
+
+            walk(payload.get("blockdevices"))
+
+    if not candidates:
+        home = Path.home().resolve()
+        usage = shutil.disk_usage(home)
+        candidates.append({
+            "source": "current-home-filesystem",
+            "mountpoint": home,
+            "fstype": "unknown",
+            "size": usage.total,
+            "free": usage.free,
+            "root": home / STORAGE_ROOT_DIRNAME,
+        })
+    return sorted(candidates, key=lambda item: (str(item["mountpoint"]) != "/", str(item["mountpoint"])))
+
+
+def choose_storage_root(args, interactive: bool,
+                        prompt: Callable[[str], str] = input) -> Path:
+    if args.storage_root:
+        selected = validate_storage_root_path(Path(args.storage_root))
+        usage = shutil.disk_usage(_nearest_existing_parent(selected.parent))
+        print(f"project data storage: {selected} ({_format_storage_bytes(usage.free)} free)")
+        return selected
+    if not interactive:
+        raise InstallError("--storage-root is required for a non-interactive fresh install")
+
+    candidates = discover_storage_candidates()
+    print("Project data storage (Docker images remain in Docker's existing data-root):")
+    for index, item in enumerate(candidates, 1):
+        state = ""
+        if item["root"].exists():
+            state = " [existing path - cannot use for fresh install]"
+        print(
+            f"  {index}. {item['source']} mounted at {item['mountpoint']} "
+            f"({item['fstype']}, {_format_storage_bytes(item['free'])} free / "
+            f"{_format_storage_bytes(item['size'])}){state}")
+        print(f"     data directory: {item['root']}")
+    print("  C. Custom dedicated directory on another mounted filesystem")
+
+    answer = prompt("Storage choice [1]: ").strip().lower()
+    if answer in ("c", "custom"):
+        custom = prompt("Dedicated storage directory: ").strip()
+        if not custom:
+            raise InstallError("no custom storage directory supplied")
+        selected = validate_storage_root_path(Path(custom))
+    else:
+        if answer == "":
+            answer = "1"
+        try:
+            index = int(answer)
+        except ValueError as exc:
+            raise InstallError(f"unrecognized storage choice {answer!r}") from exc
+        if index < 1 or index > len(candidates):
+            raise InstallError(f"storage choice {index} is outside the displayed range")
+        selected = validate_storage_root_path(candidates[index - 1]["root"])
+
+    usage = shutil.disk_usage(_nearest_existing_parent(selected.parent))
+    print(f"selected project data storage: {selected} ({_format_storage_bytes(usage.free)} free)")
+    return selected
+
+
+def require_clean_storage_root(storage_root: Path) -> None:
+    validate_storage_root_path(storage_root)
+
+
+def prepare_storage_layout(storage_root: Path) -> None:
+    require_clean_storage_root(storage_root)
+    created = False
+    try:
+        storage_root.mkdir(mode=0o755, parents=False, exist_ok=False)
+        created = True
+        for name in STORAGE_SUBDIRS:
+            (storage_root / name).mkdir(mode=0o755)
+    except BaseException:
+        if created:
+            shutil.rmtree(storage_root, ignore_errors=True)
+        raise
+
+
+def _storage_env_value(path: Path) -> str:
+    value = str(path)
+    if not SAFE_STORAGE_PATH_RE.fullmatch(value) or any(ch in value for ch in ":'$\n\r"):
+        raise InstallError(f"storage path cannot be represented safely in Compose: {path}")
+    return value
+
+
+def write_storage_env(root: Path, storage_root: Path) -> None:
+    env_path = root / ".env"
+    if not env_path.is_file():
+        raise InstallError("setup.sh did not create .env before storage configuration")
+    mapping = {
+        "RAVENCOIN_DATA_HOST_DIR": storage_root / "ravencoin-data",
+        "RAVENCOIN_CONFIG_HOST_DIR": storage_root / "ravencoin-config",
+        "ELECTRUMX_DATA_HOST_DIR": storage_root / "electrumx-data",
+        "MONITOR_DATA_HOST_DIR": storage_root / "monitor-data",
+    }
+    existing = env_path.read_text(encoding="utf-8")
+    if any(f"{key}=" in existing for key in mapping):
+        raise InstallError("refusing to overwrite pre-existing storage path configuration")
+    with env_path.open("a", encoding="utf-8") as handle:
+        handle.write("\n# Selected by the verified installer; project data only, not Docker images.\n")
+        for key, path in mapping.items():
+            handle.write(f"{key}={_storage_env_value(path)}\n")
+
+
+def initialize_storage_permissions(storage_root: Path, monitor: bool) -> None:
+    raven_mounts = [
+        (storage_root / "ravencoin-data", "/storage/ravencoin-data"),
+        (storage_root / "ravencoin-config", "/storage/ravencoin-config"),
+    ]
+    if monitor:
+        raven_mounts.append((storage_root / "monitor-data", "/storage/monitor-data"))
+    argv = ["docker", "run", "--rm", "--network", "none", "--user", "0:0",
+            "--entrypoint", "/bin/sh"]
+    for host, container in raven_mounts:
+        argv += ["-v", f"{host}:{container}"]
+    targets = " ".join(container for _host, container in raven_mounts)
+    argv += ["alenoc/ravencoin-core:4.8.0", "-ec",
+             f"chown -R 10001:10001 {targets}; chmod 0750 {targets}"]
+    run_checked(argv)
+
+    electrumx_dir = storage_root / "electrumx-data"
+    run_checked([
+        "docker", "run", "--rm", "--network", "none", "--user", "0:0",
+        "--entrypoint", "/bin/sh", "-v", f"{electrumx_dir}:/storage/electrumx-data",
+        "alenoc/electrumx-ravencoin:1.13.0", "-ec",
+        "uid=$(id -u electrumx); gid=$(id -g electrumx); "
+        "chown -R \"$uid:$gid\" /storage/electrumx-data; chmod 0750 /storage/electrumx-data",
+    ])
+
+
+def cleanup_storage_layout_best_effort(storage_root: Path) -> None:
+    if not storage_root.exists():
+        return
+    # Container UIDs own the data subdirectories. Use the already-built Core
+    # image only to return ownership to the invoking host user before rmtree.
+    try:
+        subprocess.run([
+            "docker", "run", "--rm", "--network", "none", "--user", "0:0",
+            "--entrypoint", "/bin/sh", "-v", f"{storage_root}:/storage",
+            "alenoc/ravencoin-core:4.8.0", "-ec",
+            f"chown -R {os.getuid()}:{os.getgid()} /storage",
+        ], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+    shutil.rmtree(storage_root, ignore_errors=True)
+
+
 # ---------------------------------------------------------------------------
 # Operator choices / generated configuration
 # ---------------------------------------------------------------------------
@@ -860,6 +1125,8 @@ def write_monitor_env(root: Path) -> None:
         "ELECTRUMX_RPC_PORT=8000\nELECTRUMX_SSL_HOST=127.0.0.1\n"
         "ELECTRUMX_SSL_PORT=50002\nELECTRUMX_SSL_VERIFY=false\n"
         "HISTORY_ENABLED=true\nHISTORY_STORAGE=memory\n"
+        "HISTORY_DB_PATH=/data/history.db\n"
+        "EXTRA_DISK_PATHS=Project storage=/data\n"
         "PRICE_FEED_ENABLED=true\nPRICE_FEED_SYMBOL=RVNUSDT\n"
         "PROMETHEUS_ENABLED=true\nMIN_SAFE_CORE_VERSION=4.8.0\n"
         "BANDWIDTH_CONTROL_ENABLED=false\n"
@@ -882,7 +1149,7 @@ def run_checked(argv: Sequence[str], *, cwd: Optional[Path] = None,
 
 
 def compose_files(bootstrap: str, monitor: bool, controller: bool = False) -> list[str]:
-    files = [BASE_COMPOSE]
+    files = [BASE_COMPOSE, STORAGE_OVERLAY]
     if bootstrap == "chainstrap":
         files.append(CHAINSTRAP_OVERLAY)
     elif bootstrap != "p2p":
@@ -1053,7 +1320,8 @@ def write_initial_update_state(target: Path, body: dict) -> None:
 
 
 def write_install_marker(root: Path, *, body: dict, metadata: dict,
-                         bootstrap: str, monitor: bool, controller: bool) -> None:
+                         bootstrap: str, monitor: bool, controller: bool,
+                         storage_root: Path) -> None:
     marker = {
         "schemaVersion": 1,
         "electrumxVersion": body["electrumxVersion"],
@@ -1069,12 +1337,14 @@ def write_install_marker(root: Path, *, body: dict, metadata: dict,
         "monitorControllerEnabled": controller,
         "nodeMonitorCommit": metadata["nodeMonitor"]["commit"] if monitor else None,
         "installerVersion": VERSION,
+        "storageRoot": str(storage_root),
     }
     _private_atomic_json(root / INSTALL_MARKER, marker)
 
 
 def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
-                  bootstrap: str, monitor: bool, controller: bool) -> None:
+                  bootstrap: str, monitor: bool, controller: bool,
+                  storage_root: Path) -> None:
     if target.exists():
         marker = target / INSTALL_MARKER
         if marker.is_file():
@@ -1094,17 +1364,20 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
     # fresh install must prove that no old project runtime exists before it can
     # create named volumes.
     require_clean_docker_project_runtime()
+    require_clean_storage_root(storage_root)
 
     parent = target.parent.resolve()
     parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".electrumx-ravencoin-install-", dir=parent))
     moved = False
     controller_installed = False
+    storage_prepared = False
     files = compose_files(bootstrap, monitor, controller)
     base = _compose_prefix(files)
     try:
         extract_bundle(data, staging)
         run_checked(["sh", "./setup.sh", "--bundled-core"], cwd=staging)
+        write_storage_env(staging, storage_root)
         if monitor:
             write_monitor_env(staging)
         run_checked(base + ["config", "--quiet"], cwd=staging)
@@ -1112,6 +1385,9 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
         # Build before activation; target still does not exist and no named
         # volumes have been created. This catches architecture/toolchain errors.
         run_checked(base + ["build"], cwd=staging)
+        prepare_storage_layout(storage_root)
+        storage_prepared = True
+        initialize_storage_permissions(storage_root, monitor)
 
         os.replace(staging, target)
         moved = True
@@ -1140,7 +1416,7 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
         # successfully installed.
         write_install_marker(
             target, body=body, metadata=metadata, bootstrap=bootstrap,
-            monitor=monitor, controller=controller)
+            monitor=monitor, controller=controller, storage_root=storage_root)
         write_initial_update_state(target, body)
     except BaseException:
         if moved and target.exists():
@@ -1157,6 +1433,8 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
             shutil.rmtree(state_dir, ignore_errors=True)
         if moved and target.exists():
             shutil.rmtree(target, ignore_errors=True)
+        if storage_prepared:
+            cleanup_storage_layout_best_effort(storage_root)
         raise
     finally:
         if not moved and staging.exists():
@@ -1202,6 +1480,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             f"Node Monitor @ {metadata['nodeMonitor']['commit'][:12]}")
 
         interactive = sys.stdin.isatty()
+        storage_root = None
+        if not args.check_only or args.storage_root:
+            storage_root = choose_storage_root(args, interactive)
         # Resolve choices even in --check-only so explicit unsupported controller
         # requests also have their prerequisites checked without changing state.
         bootstrap = choose_bootstrap(args, interactive)
@@ -1217,11 +1498,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         compose_command()
         target = Path(args.install_dir).expanduser().resolve()
+        if storage_root is None:
+            raise InstallError("fresh install requires a selected project storage root")
         install_fresh(
             target, bundle, body=body, metadata=metadata,
-            bootstrap=bootstrap, monitor=monitor, controller=controller)
+            bootstrap=bootstrap, monitor=monitor, controller=controller,
+            storage_root=storage_root)
 
         print(f"installation complete in {target}")
+        print(f"project data storage: {storage_root}")
+        print("Docker images remain in the daemon existing DockerRootDir")
         print(f"bootstrap: {bootstrap}")
         if monitor:
             print("Node Monitor: enabled at http://127.0.0.1:8899")
