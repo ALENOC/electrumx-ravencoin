@@ -6,7 +6,7 @@ on:
       - security/ravenproject-only-core-source
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   MIGRATION_REVOCATION: >-
@@ -17,15 +17,91 @@ env:
   REVIEWED_CANDIDATE: core-safety/production/safe-core-policy-v3.unsigned.json
 
 jobs:
-  migrate:
+  preflight:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
-    environment: core-safety-signing
+    permissions:
+      contents: read
+      statuses: write
     steps:
-      - name: Check out migration branch
+      - name: Check out the exact triggering commit
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: security/ravenproject-only-core-source
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with:
+          python-version: "3.12"
+
+      - name: Install verification dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --require-hashes -r core-safety/requirements.txt
+
+      - name: Verify the atomic migration before protected signing
+        id: verify
+        run: |
+          set -euo pipefail
+          python core-safety/scripts/verify_migration_v3.py \
+            --previous-policy core-safety/production/safe-core-policy.json \
+            --public-key core-safety/production/core-policy-signing-public-key.hex \
+            --report "$CERTIFICATION_REPORT" \
+            --revoke "$MIGRATION_REVOCATION" \
+            --candidate "$REVIEWED_CANDIDATE"
+
+      - name: Publish observable preflight status
+        if: always()
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          STATUS_STATE: ${{ steps.verify.outcome == 'success' && 'success' || 'failure' }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          state = os.environ['STATUS_STATE']
+          payload = json.dumps({
+              'state': state,
+              'context': 'core-policy-migration/preflight',
+              'description': ('RavenProject-only v2->v3 migration reproduced exactly'
+                              if state == 'success'
+                              else 'RavenProject-only migration preflight failed'),
+          }).encode()
+          request = urllib.request.Request(
+              f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}"
+              f"/statuses/{os.environ['GITHUB_SHA']}",
+              data=payload,
+              method='POST',
+              headers={
+                  'Authorization': f"Bearer {os.environ['GITHUB_TOKEN']}",
+                  'Accept': 'application/vnd.github+json',
+                  'Content-Type': 'application/json',
+                  'User-Agent': 'electrumx-core-policy-migration',
+              },
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              if response.status not in (200, 201):
+                  raise SystemExit(f'unexpected GitHub status response {response.status}')
+          PY
+
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    needs: preflight
+    runs-on: ubuntu-24.04
+    environment: core-safety-signing
+    permissions:
+      contents: write
+      statuses: write
+    steps:
+      - name: Check out the exact preflighted commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Set up Python
@@ -38,14 +114,7 @@ jobs:
           set -euo pipefail
           python -m pip install --require-hashes -r core-safety/requirements.txt
 
-      # This step never touches POLICY_SIGNING_KEY. It independently
-      # regenerates the atomic v2 -> v3 migration (2miners REVOKED,
-      # RavenProject/Ravencoin KNOWN_SAFE) from the signed v2 baseline and
-      # the real certification report, and fails the job if the result does
-      # not match core-safety/production/safe-core-policy-v3.unsigned.json,
-      # the reviewed candidate, field for field. Signing only happens after
-      # this gate passes.
-      - name: Verify the atomic migration before signing
+      - name: Re-verify the atomic migration inside the protected job
         run: |
           set -euo pipefail
           python core-safety/scripts/verify_migration_v3.py \
@@ -55,7 +124,18 @@ jobs:
             --revoke "$MIGRATION_REVOCATION" \
             --candidate "$REVIEWED_CANDIDATE"
 
+      - name: Refuse a stale signing run before touching the secret
+        run: |
+          set -euo pipefail
+          git fetch origin security/ravenproject-only-core-source
+          remote_sha="$(git rev-parse origin/security/ravenproject-only-core-source)"
+          test "$remote_sha" = "$GITHUB_SHA" || {
+            echo "migration branch moved from $GITHUB_SHA to $remote_sha; refusing stale signing run" >&2
+            exit 1
+          }
+
       - name: Generate and sign policy v3
+        id: sign
         env:
           POLICY_SIGNING_KEY: ${{ secrets.POLICY_SIGNING_KEY }}
         run: |
@@ -91,12 +171,13 @@ jobs:
           ravenproject = releases_by_repository['RavenProject/Ravencoin']
           assert ravenproject['status'] == 'KNOWN_SAFE', ravenproject['status']
           assert ravenproject['commit'] == '22549129888d02e0e08fcdb9f96f3c699167e774'
+          assert ravenproject['reportDigest'] == \
+              '949ec5eb66fc5fef709a75073bb5aba8964b1212e4b407369aace0cde3a34045'
           assert ravenproject['certification']['result'] == 'PASS'
 
           known_safe = [entry for entry in body['releases'] if entry['status'] == 'KNOWN_SAFE']
           assert len(known_safe) == 1 and known_safe[0]['repository'] == 'RavenProject/Ravencoin', \
-              'a revocation-only migration or an unexpected KNOWN_SAFE entry is not a complete ' \
-              'RavenProject-only trust migration'
+              'migration must leave exactly RavenProject/Ravencoin as KNOWN_SAFE'
 
           signature = document['signature']['value'] + '\n'
           pathlib.Path('core-safety/production/safe-core-policy-v3.sig').write_text(
@@ -105,7 +186,8 @@ jobs:
               signature, encoding='utf-8')
           PY
 
-      - name: Verify signed policy against published public key
+      - name: Verify signed policy against the already published public key
+        id: verify_signed
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -139,6 +221,8 @@ jobs:
           )
           assert ravenproject is not None
           assert ravenproject['status'] == 'KNOWN_SAFE'
+          assert ravenproject['reportDigest'] == \
+              '949ec5eb66fc5fef709a75073bb5aba8964b1212e4b407369aace0cde3a34045'
 
           two_miners = next(entry for entry in body['releases']
                             if entry['repository'] == '2miners/Ravencoin')
@@ -146,8 +230,16 @@ jobs:
           PY
 
       - name: Publish signed migration to migration branch
+        id: publish
         run: |
           set -euo pipefail
+          git fetch origin security/ravenproject-only-core-source
+          remote_sha="$(git rev-parse origin/security/ravenproject-only-core-source)"
+          test "$remote_sha" = "$GITHUB_SHA" || {
+            echo "migration branch moved during signing; refusing non-fast-forward publication" >&2
+            exit 1
+          }
+
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git rm .github/workflows/ravenproject-trust-migration.yml
@@ -159,3 +251,41 @@ jobs:
           git diff --cached --check
           git commit -m 'security: migrate Core trust from 2miners to RavenProject official releases'
           git push origin HEAD:security/ravenproject-only-core-source
+
+      - name: Publish observable protected-signing status
+        if: always()
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          STATUS_STATE: ${{ steps.publish.outcome == 'success' && 'success' || 'failure' }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          state = os.environ['STATUS_STATE']
+          payload = json.dumps({
+              'state': state,
+              'context': 'core-policy-migration/protected-signing',
+              'description': ('Signed RavenProject-only policy v3 published'
+                              if state == 'success'
+                              else 'Protected Core-policy signing did not publish v3'),
+          }).encode()
+          request = urllib.request.Request(
+              f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}"
+              f"/statuses/{os.environ['GITHUB_SHA']}",
+              data=payload,
+              method='POST',
+              headers={
+                  'Authorization': f"Bearer {os.environ['GITHUB_TOKEN']}",
+                  'Accept': 'application/vnd.github+json',
+                  'Content-Type': 'application/json',
+                  'User-Agent': 'electrumx-core-policy-migration',
+              },
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              if response.status not in (200, 201):
+                  raise SystemExit(f'unexpected GitHub status response {response.status}')
+          PY
