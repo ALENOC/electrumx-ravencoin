@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - work/chainstrap-ravenproject
+  pull_request:
 
 permissions:
   contents: write
@@ -69,6 +70,7 @@ jobs:
           docker compose -f compose.yaml -f compose.storage.yaml -f compose.chainstrap.yaml -f compose.monitor.yaml config --quiet
 
       - name: Publish only validated feature changes
+        if: github.event_name == 'push'
         env:
           BRANCH: work/chainstrap-ravenproject
         run: |
