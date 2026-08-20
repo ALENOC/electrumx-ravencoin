@@ -30,6 +30,23 @@ without printing them, and validates the Compose model. It does not delete
 existing data. The user service is optional; confirm its behavior before
 relying on it for reboot recovery.
 
+### Optional fast bootstrap for a fresh node
+
+For a new bundled-Core deployment on an empty data volume, the project can use
+ChainStrap/IPFS to obtain historical raw block files before Core starts:
+
+```sh
+./fast-bootstrap.sh --enable-reboot
+docker compose up -d --build
+```
+
+This path does **not** trust a downloaded chainstate or index. It uses a
+release-pinned RVN mainnet manifest, verifies each part, extracts only
+`blocks/blk*.dat`, and requires the bundled Core 4.8.0 to run a complete local
+`-reindex -assumevalid=0` before normal Core and ElectrumX startup. See
+[Fast Verified Bootstrap](fast-bootstrap.md) for the trust model, storage
+requirements and operational details.
+
 ## PATH B - Existing Core mode
 
 Use this only with a non-pruned mainnet Core whose deployment identity is known
@@ -82,6 +99,10 @@ the same as its complete runtime having been validated.
 architecture, creates `.env` without overwriting an existing file, generates
 RPC credentials below the Git-ignored `.secrets/` directory, and validates the
 Compose files. It does not print credentials or delete blockchain data.
+
+`fast-bootstrap.sh` first runs that same bundled-Core setup, then enables the
+ChainStrap Compose overlay in `.env`. It refuses to overwrite a custom
+`COMPOSE_FILE` value.
 
 `--enable-reboot` installs a user systemd unit for the bundled stack. If the
 host must start user services before login, configure user lingering as

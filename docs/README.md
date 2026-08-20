@@ -15,6 +15,8 @@ operator or reference section.
 
 - [Getting started](getting-started.md): concepts, bundled Core and
   existing-Core deployment.
+- [Fast Verified Bootstrap](fast-bootstrap.md): optional ChainStrap/IPFS block
+  transport followed by a full local Core reindex before ElectrumX can start.
 - [Hardware](hardware.md): RAM, NVMe, cooling, boards and storage reasoning.
 - [Operations](operations.md): start, stop, status, progress, backups and
   upgrades.
