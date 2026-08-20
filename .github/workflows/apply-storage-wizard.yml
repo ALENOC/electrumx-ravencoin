@@ -1,0 +1,84 @@
+name: Apply reviewed project-storage wizard migration
+
+on:
+  push:
+    branches:
+      - work/chainstrap-ravenproject
+    paths:
+      - tools/apply_storage_wizard.py
+      - .github/workflows/apply-storage-wizard.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-project-storage-wizard
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact triggering commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Refuse stale migration
+        run: |
+          set -euo pipefail
+          git fetch origin work/chainstrap-ravenproject
+          test "$(git rev-parse origin/work/chainstrap-ravenproject)" = "$GITHUB_SHA"
+
+      - name: Apply deterministic migration
+        run: |
+          set -euo pipefail
+          python3 tools/apply_storage_wizard.py
+          python3 -m py_compile electrumx-ravencoin-install.py
+          git diff --check
+
+      - name: Install targeted test dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pytest==8.3.5 cryptography==43.0.3
+
+      - name: Run installer storage regression tests
+        run: |
+          set -euo pipefail
+          pytest -q tests/test_installer_storage.py core-safety/scripts/test_installer.py
+
+      - name: Validate combined Compose storage model
+        run: |
+          set -euo pipefail
+          mkdir -p .secrets
+          printf 'migration-user\n' > .secrets/raven_rpc_user
+          printf 'migration-password-not-for-production\n' > .secrets/raven_rpc_password
+          cp .env.example .env
+          STORAGE_TEST_ROOT="$RUNNER_TEMP/electrumx-storage"
+          mkdir -p "$STORAGE_TEST_ROOT"/{ravencoin-data,ravencoin-config,electrumx-data,monitor-data}
+          cat >> .env <<EOF
+          RAVENCOIN_DATA_HOST_DIR=$STORAGE_TEST_ROOT/ravencoin-data
+          RAVENCOIN_CONFIG_HOST_DIR=$STORAGE_TEST_ROOT/ravencoin-config
+          ELECTRUMX_DATA_HOST_DIR=$STORAGE_TEST_ROOT/electrumx-data
+          MONITOR_DATA_HOST_DIR=$STORAGE_TEST_ROOT/monitor-data
+          EOF
+          docker compose -f compose.yaml -f compose.storage.yaml config --quiet
+          docker compose -f compose.yaml -f compose.storage.yaml -f compose.chainstrap.yaml -f compose.monitor.yaml config --quiet
+
+      - name: Publish final migration commit and remove one-shot machinery
+        run: |
+          set -euo pipefail
+          git fetch origin work/chainstrap-ravenproject
+          test "$(git rev-parse origin/work/chainstrap-ravenproject)" = "$GITHUB_SHA" || {
+            echo 'branch moved during validation; refusing publication' >&2
+            exit 1
+          }
+          git rm tools/apply_storage_wizard.py .github/workflows/apply-storage-wizard.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --all
+          git diff --cached --check
+          git commit -m 'feat(installer): select project data disk for persistent node storage'
+          git push origin HEAD:work/chainstrap-ravenproject
