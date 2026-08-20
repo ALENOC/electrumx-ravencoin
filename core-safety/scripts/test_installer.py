@@ -425,8 +425,10 @@ def test_failed_chainstrap_run_is_torn_down_with_volumes(monkeypatch, tmp_path):
     monkeypatch.setattr(installer, "write_storage_env", lambda _root, _storage: None)
 
     def fake_run_checked(argv, *, cwd=None, quiet=False):
-        if "up" in argv:
-            raise installer.InstallError("simulated chainstrap failure")
+        return None
+
+    def fake_activate(_root, _base, _bootstrap):
+        raise installer.InstallError("simulated chainstrap failure")
 
     class Completed:
         returncode = 0
@@ -438,6 +440,7 @@ def test_failed_chainstrap_run_is_torn_down_with_volumes(monkeypatch, tmp_path):
         return Completed()
 
     monkeypatch.setattr(installer, "run_checked", fake_run_checked)
+    monkeypatch.setattr(installer, "activate_compose", fake_activate)
     monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
 
     with pytest.raises(installer.InstallError, match="automatic P2P fallback is intentionally disabled"):
@@ -596,3 +599,56 @@ def test_monitor_controller_real_docker_socket_grant_is_still_refused():
     body = manifest_for_bundle(data)
     with pytest.raises(installer.InstallError, match="forbidden privileges"):
         installer.validate_bundle(data, body, public_key_hex="a" * 64)
+
+
+
+def test_installer_banner_is_terminal_width_aware(monkeypatch, capsys):
+    monkeypatch.setattr(
+        installer.shutil, "get_terminal_size",
+        lambda fallback=(88, 24): os.terminal_size((64, 24)))
+    installer.print_installer_banner()
+    lines = [line for line in capsys.readouterr().out.splitlines() if line]
+    assert any(line.strip() == "ELECTRUMX RAVENCOIN" for line in lines)
+    assert any(line.strip() == "Verified Node Installer" for line in lines)
+    assert max(len(line) for line in lines) <= 64
+
+
+def test_interactive_choices_have_distinct_spaced_sections(capsys):
+    args = installer.parse_args([])
+    assert installer.choose_bootstrap(args, True, prompt=lambda _message: "1") == "chainstrap"
+    assert installer.choose_monitor(args, True, prompt=lambda _message: "y") is True
+    assert installer.choose_monitor_controller(
+        args, True, True, prompt=lambda _message: "n") is False
+    output = capsys.readouterr().out
+    assert "[ 2 / 4  Blockchain bootstrap ]" in output
+    assert "[ 3 / 4  Ravencoin Node Monitor ]" in output
+    assert "[ 4 / 4  Advanced host controls ]" in output
+    assert "requires sudo" in output
+
+
+def test_installation_summary_makes_advanced_controller_explicit(capsys, tmp_path):
+    installer.print_installation_summary(tmp_path / "storage", "chainstrap", True, False)
+    output = capsys.readouterr().out
+    assert "Installation summary" in output
+    assert "ChainStrap Fast Verified Bootstrap" in output
+    assert "Node Monitor" in output and "enabled" in output
+    assert "Advanced controls" in output and "disabled" in output
+    assert "Docker images" in output and "unchanged" in output
+
+
+def test_chainstrap_activation_dispatches_live_progress(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        installer, "run_chainstrap_activation_with_live_logs",
+        lambda root, base: calls.append((root, list(base))))
+    installer.activate_compose(tmp_path, ["docker", "compose"], "chainstrap")
+    assert calls == [(tmp_path, ["docker", "compose"])]
+
+
+def test_p2p_activation_keeps_normal_detached_start(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        installer, "run_checked",
+        lambda argv, **kwargs: calls.append((list(argv), kwargs.get("cwd"))))
+    installer.activate_compose(tmp_path, ["docker", "compose"], "p2p")
+    assert calls == [(["docker", "compose", "up", "-d", "--no-build"], tmp_path)]

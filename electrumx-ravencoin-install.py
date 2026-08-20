@@ -50,12 +50,14 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import textwrap
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path, PurePosixPath
 from typing import Callable, Optional, Sequence
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 SIGNATURE_DOMAIN = b"ALENOC-RVN-ELECTRUMX-UPDATE-MANIFEST-v1\x00"
 CORE_POLICY_SIGNATURE_DOMAIN = b"ALENOC-RVN-CORE-POLICY-v1\x00"
 SIGNATURE_ALGORITHM = "ed25519"
@@ -147,6 +149,56 @@ REQUIRED_BUNDLE_PATHS = frozenset({
 
 class InstallError(RuntimeError):
     """Fatal fail-closed installation error."""
+
+
+def _ui_width() -> int:
+    """Return a bounded width that stays readable on narrow and wide terminals."""
+    columns = shutil.get_terminal_size(fallback=(88, 24)).columns
+    return max(56, min(columns, 100))
+
+
+def _ui_wrap(text: str, *, initial: str = "", subsequent: str = "") -> str:
+    return textwrap.fill(
+        text, width=_ui_width(), initial_indent=initial, subsequent_indent=subsequent,
+        break_long_words=False, break_on_hyphens=False)
+
+
+def print_installer_banner() -> None:
+    width = _ui_width()
+    print()
+    print("=" * width)
+    print("ELECTRUMX RAVENCOIN".center(width))
+    print("Verified Node Installer".center(width))
+    print("=" * width)
+    print()
+
+
+def ui_section(title: str, subtitle: Optional[str] = None) -> None:
+    print()
+    print(f"[ {title} ]")
+    print("-" * _ui_width())
+    if subtitle:
+        print(_ui_wrap(subtitle))
+    print()
+
+
+def print_installation_summary(storage_root: Optional[Path], bootstrap: str,
+                               monitor: bool, controller: bool) -> None:
+    ui_section(
+        "Installation summary",
+        "The selections below are the exact configuration the installer will activate.")
+    rows = (
+        ("Project data", str(storage_root) if storage_root else "not selected (--check-only)"),
+        ("Docker images", "existing Docker data-root (unchanged)"),
+        ("Bootstrap", "ChainStrap Fast Verified Bootstrap" if bootstrap == "chainstrap" else "Traditional Ravencoin P2P"),
+        ("Node Monitor", "enabled" if monitor else "disabled"),
+        ("Advanced controls", "enabled (root-owned helper)" if controller else "disabled"),
+    )
+    label_width = max(len(label) for label, _value in rows)
+    for label, value in rows:
+        prefix = f"  {label:<{label_width}} : "
+        print(_ui_wrap(value, initial=prefix, subsequent=" " * len(prefix)))
+    print()
 
 
 # ---------------------------------------------------------------------------
@@ -926,17 +978,24 @@ def choose_storage_root(args, interactive: bool,
         raise InstallError("--storage-root is required for a non-interactive fresh install")
 
     candidates = discover_storage_candidates()
-    print("Project data storage (Docker images remain in Docker's existing data-root):")
+    ui_section(
+        "1 / 4  Project data storage",
+        "Choose the mounted filesystem that will hold the Ravencoin blockchain, "
+        "ChainStrap data, ElectrumX database and Node Monitor history. Docker images "
+        "remain in Docker's existing data-root.")
     for index, item in enumerate(candidates, 1):
         state = ""
         if item["root"].exists():
             state = " [existing path - cannot use for fresh install]"
-        print(
-            f"  {index}. {item['source']} mounted at {item['mountpoint']} "
+        description = (
+            f"{index}. {item['source']} mounted at {item['mountpoint']} "
             f"({item['fstype']}, {_format_storage_bytes(item['free'])} free / "
             f"{_format_storage_bytes(item['size'])}){state}")
-        print(f"     data directory: {item['root']}")
+        print(_ui_wrap(description, initial="  ", subsequent="     "))
+        print(_ui_wrap(f"data directory: {item['root']}", initial="     ", subsequent="     "))
+        print()
     print("  C. Custom dedicated directory on another mounted filesystem")
+    print()
 
     answer = prompt("Storage choice [1]: ").strip().lower()
     if answer in ("c", "custom"):
@@ -956,7 +1015,10 @@ def choose_storage_root(args, interactive: bool,
         selected = validate_storage_root_path(candidates[index - 1]["root"])
 
     usage = shutil.disk_usage(_nearest_existing_parent(selected.parent))
-    print(f"selected project data storage: {selected} ({_format_storage_bytes(usage.free)} free)")
+    print()
+    print(_ui_wrap(
+        f"Selected project data storage: {selected} ({_format_storage_bytes(usage.free)} free)"))
+    print()
     return selected
 
 
@@ -1058,11 +1120,16 @@ def choose_bootstrap(args, interactive: bool, prompt: Callable[[str], str] = inp
         return "p2p"
     if not interactive:
         return "chainstrap"
-    answer = prompt(
-        "Blockchain bootstrap method:\n"
-        "  1. Fast Verified Bootstrap using ChainStrap [recommended, default]\n"
-        "  2. Traditional Ravencoin P2P synchronization\n"
-        "Choice [1]: ").strip()
+    ui_section(
+        "2 / 4  Blockchain bootstrap",
+        "ChainStrap downloads a vetted snapshot and then Ravencoin Core reindexes and "
+        "validates it offline. Traditional P2P synchronization remains available as an "
+        "explicit alternative.")
+    print("  1. Fast Verified Bootstrap using ChainStrap  [recommended, default]")
+    print("  2. Traditional Ravencoin P2P synchronization")
+    print()
+    answer = prompt("Choice [1]: ").strip()
+    print()
     if answer in ("", "1"):
         return "chainstrap"
     if answer == "2":
@@ -1079,11 +1146,15 @@ def choose_monitor(args, interactive: bool, prompt: Callable[[str], str] = input
         return False
     if not interactive:
         return True
-    answer = prompt(
-        "Install Ravencoin Node Monitor?\n"
-        "  Y. Yes [recommended, default]\n"
-        "  N. No\n"
-        "Choice [Y]: ").strip().lower()
+    ui_section(
+        "3 / 4  Ravencoin Node Monitor",
+        "The monitor is isolated from ElectrumX failure and remains available to report "
+        "Core, host and network state when ElectrumX is degraded.")
+    print("  Y. Install Node Monitor  [recommended, default]")
+    print("  N. Do not install Node Monitor")
+    print()
+    answer = prompt("Choice [Y]: ").strip().lower()
+    print()
     if answer in ("", "y", "yes"):
         return True
     if answer in ("n", "no"):
@@ -1099,11 +1170,15 @@ def choose_monitor_controller(args, monitor: bool, interactive: bool,
         return True
     if not interactive:
         return False
-    answer = prompt(
-        "Enable advanced host controls (bandwidth / connection limits)?\n"
-        "  y. Yes\n"
-        "  N. No [default]\n"
-        "Choice [N]: ").strip().lower()
+    ui_section(
+        "4 / 4  Advanced host controls",
+        "Optional. Enabling this installs a separate root-owned systemd helper and may "
+        "request sudo. It is not required for normal monitoring.")
+    print("  N. Keep advanced host controls disabled  [recommended, default]")
+    print("  Y. Enable bandwidth / connection controls (requires sudo)")
+    print()
+    answer = prompt("Choice [N]: ").strip().lower()
+    print()
     if answer in ("", "n", "no"):
         return False
     if answer in ("y", "yes"):
@@ -1149,6 +1224,125 @@ def run_checked(argv: Sequence[str], *, cwd: Optional[Path] = None,
     if completed.returncode != 0:
         raise InstallError(
             f"command failed with exit code {completed.returncode}: {' '.join(argv)}")
+
+
+def _compose_output_tail(handle, limit: int = 80) -> str:
+    handle.flush()
+    handle.seek(0)
+    return "\n".join(handle.read().splitlines()[-limit:])
+
+
+def _wait_for_compose_container(root: Path, base: Sequence[str], service: str,
+                                parent, output_handle, timeout: float = 90.0) -> str:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        completed = subprocess.run(
+            list(base) + ["ps", "-a", "-q", service], cwd=root, check=False,
+            capture_output=True, text=True)
+        if completed.returncode == 0 and completed.stdout.strip():
+            return completed.stdout.strip().splitlines()[-1]
+        if parent.poll() is not None:
+            tail = _compose_output_tail(output_handle)
+            detail = f"\n{tail}" if tail else ""
+            raise InstallError(
+                f"Compose activation exited before {service} was created{detail}")
+        time.sleep(0.25)
+    raise InstallError(f"timed out waiting for Compose service {service}")
+
+
+def _compose_container_result(container_id: str) -> tuple[str, int]:
+    completed = subprocess.run(
+        ["docker", "inspect", "--format", "{{.State.Status}} {{.State.ExitCode}}",
+         container_id], check=False, capture_output=True, text=True)
+    if completed.returncode != 0:
+        raise InstallError("cannot inspect completed bootstrap container state")
+    fields = completed.stdout.strip().split()
+    if len(fields) != 2:
+        raise InstallError("Docker returned malformed bootstrap container state")
+    try:
+        exit_code = int(fields[1])
+    except ValueError as exc:
+        raise InstallError("Docker returned a malformed bootstrap exit code") from exc
+    return fields[0], exit_code
+
+
+def _stream_compose_one_shot(root: Path, base: Sequence[str], service: str,
+                             title: str, subtitle: str, parent, output_handle) -> None:
+    ui_section(title, subtitle)
+    container_id = _wait_for_compose_container(
+        root, base, service, parent, output_handle)
+    print("Live progress follows. Leave this terminal running.\n")
+    logs = subprocess.run(
+        list(base) + ["logs", "--no-color", "--follow", service],
+        cwd=root, check=False)
+    if logs.returncode != 0:
+        print(
+            "Warning: the live log follower ended unexpectedly; "
+            "the service exit status will still be verified.",
+            file=sys.stderr)
+    status, exit_code = _compose_container_result(container_id)
+    if status != "exited" or exit_code != 0:
+        raise InstallError(
+            f"{service} did not complete successfully: status={status}, exit={exit_code}")
+    print()
+    print(f"[OK] {title}")
+    print()
+
+
+def run_chainstrap_activation_with_live_logs(root: Path, base: Sequence[str]) -> None:
+    """Activate Compose while streaming the two long one-shot bootstrap phases."""
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as compose_output:
+        parent = subprocess.Popen(
+            list(base) + ["up", "-d", "--no-build"], cwd=root,
+            stdout=compose_output, stderr=subprocess.STDOUT, text=True)
+        try:
+            _stream_compose_one_shot(
+                root, base, "chainstrap-bootstrap",
+                "ChainStrap verified bootstrap",
+                "Downloading and verifying the vetted snapshot. Progress includes part and "
+                "snapshot percentage, bytes, transfer rate and ETA.",
+                parent, compose_output)
+            _stream_compose_one_shot(
+                root, base, "ravencoin-bootstrap-reindex",
+                "Offline Ravencoin Core validation",
+                "Ravencoin Core is reindexing the downloaded raw blocks with networking "
+                "disabled and will verify the exact snapshot tip and asset indexes.",
+                parent, compose_output)
+            ui_section(
+                "Starting node services",
+                "Bootstrap validation succeeded. Starting Ravencoin Core, ElectrumX and the "
+                "selected optional services.")
+            returncode = parent.wait()
+            if returncode != 0:
+                tail = _compose_output_tail(compose_output)
+                if tail:
+                    print(tail, file=sys.stderr)
+                raise InstallError(
+                    f"docker compose activation failed with exit code {returncode}")
+            print("[OK] Docker services started")
+            print()
+        except BaseException:
+            if parent.poll() is None:
+                parent.terminate()
+                try:
+                    parent.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    parent.kill()
+                    parent.wait()
+            raise
+
+
+def activate_compose(root: Path, base: Sequence[str], bootstrap: str) -> None:
+    if bootstrap == "chainstrap":
+        run_chainstrap_activation_with_live_logs(root, base)
+        return
+    if bootstrap != "p2p":
+        raise InstallError(f"unknown bootstrap choice {bootstrap!r}")
+    ui_section(
+        "Starting node services",
+        "Traditional P2P synchronization selected. Starting Ravencoin Core, ElectrumX and "
+        "the selected optional services.")
+    run_checked(list(base) + ["up", "-d", "--no-build"], cwd=root)
 
 
 def verify_monitor_host_publish(root: Path, files: Sequence[str]) -> None:
@@ -1420,7 +1614,7 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
             install_controller(target)
             controller_installed = True
         try:
-            run_checked(base + ["up", "-d", "--no-build"], cwd=target)
+            activate_compose(target, base, bootstrap)
         except InstallError as exc:
             if bootstrap == "chainstrap":
                 # Preserve the useful service output before the failed run is
@@ -1480,6 +1674,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     try:
+        print_installer_banner()
         check_python_version()
         architecture = detect_architecture()
 
@@ -1502,10 +1697,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             body, fetch=bundle_fetch, public_key_hex=public_key_hex,
             core_policy_public_key_hex=core_policy_public_key_hex)
 
-        print(
-            f"verified ElectrumX {body['electrumxVersion']} release bundle; "
-            f"official Core {body['coreVersion']} @ {body['coreCommit'][:12]}; "
-            f"Node Monitor @ {metadata['nodeMonitor']['commit'][:12]}")
+        ui_section("Verified release", "All signed release and independent Core-policy checks passed.")
+        print(f"  ElectrumX    : {body['electrumxVersion']}")
+        print(f"  Ravencoin    : Core {body['coreVersion']} @ {body['coreCommit'][:12]}")
+        print(f"  Node Monitor : {metadata['nodeMonitor']['commit'][:12]}")
+        print()
 
         interactive = sys.stdin.isatty()
         storage_root = None
@@ -1518,6 +1714,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         controller = choose_monitor_controller(args, monitor, interactive)
         if controller:
             controller_prerequisites(require_sudo=False if args.check_only else True)
+
+        print_installation_summary(storage_root, bootstrap, monitor, controller)
 
         if args.check_only:
             compose_command()
