@@ -1,0 +1,287 @@
+name: RavenProject trust migration
+
+on:
+  push:
+    branches:
+      - security/ravenproject-only-core-source
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: security/ravenproject-only-core-source
+          fetch-depth: 0
+
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with:
+          python-version: "3.12"
+
+      - name: Restrict Core trust to RavenProject
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import re
+
+          ROOT = pathlib.Path('.')
+
+          def read(path):
+              return (ROOT / path).read_text(encoding='utf-8')
+
+          def write(path, text):
+              (ROOT / path).write_text(text, encoding='utf-8')
+
+          # Runtime backend identity allowlist.
+          path = 'electrumx/server/ravencoin_backend.py'
+          text = read(path)
+          text = text.replace(
+              'KNOWN_SOURCE_REPOSITORIES = ("2miners/Ravencoin", "RavenProject/Ravencoin")',
+              'KNOWN_SOURCE_REPOSITORIES = ("RavenProject/Ravencoin",)')
+          write(path, text)
+
+          # Certification discovery allowlist.
+          path = 'core-safety/scripts/candidate.py'
+          text = read(path)
+          text = text.replace(
+              'Two repositories publishing the same version are two\ndifferent candidates and each must be certified separately.',
+              'Repository plus commit remains the immutable candidate identity; version and tag are metadata only.')
+          text = text.replace(
+              '#: Repositories a candidate may be *discovered* from.  Presence here grants the\n#: right to be tested, never the right to be trusted.  Both entries are treated\n#: identically by every later stage.\nALLOWED_SOURCE_REPOSITORIES = (\n    "2miners/Ravencoin",\n    "RavenProject/Ravencoin",\n)',
+              '#: Only official RavenProject releases may enter certification. Presence here\n#: grants the right to be tested, never trust by repository name or version alone.\nALLOWED_SOURCE_REPOSITORIES = (\n    "RavenProject/Ravencoin",\n)')
+          write(path, text)
+
+          # Discovery documentation follows the single source allowlist.
+          path = 'core-safety/scripts/discover_releases.py'
+          text = read(path)
+          text = text.replace(
+              'Discover Ravencoin Core release candidates from the two allowed repositories.',
+              'Discover Ravencoin Core release candidates from official RavenProject releases.')
+          text = text.replace(
+              'Neither repository is trusted\nbecause of its name, and the allowlist lives in code, not in configuration a\nworkflow input could change.',
+              'The repository name alone never makes a release safe; each exact release must\npass certification. The allowlist lives in code, not in workflow input.')
+          write(path, text)
+
+          # Policy runtime/generation hard gate. Historical signed policies remain
+          # verifiable, but an untrusted repository can never resolve as KNOWN_SAFE.
+          path = 'core-safety/scripts/policy.py'
+          text = read(path)
+          if 'TRUSTED_RELEASE_REPOSITORIES' not in text:
+              text = text.replace(
+                  'VALID_RELEASE_STATUSES = ("KNOWN_SAFE", "KNOWN_UNSAFE", "REVOKED")\n',
+                  'VALID_RELEASE_STATUSES = ("KNOWN_SAFE", "KNOWN_UNSAFE", "REVOKED")\n'
+                  'TRUSTED_RELEASE_REPOSITORIES = ("RavenProject/Ravencoin",)\n')
+              text = text.replace(
+                  '    body = {\n        "schemaVersion": SCHEMA_VERSION,\n        "policyVersion": policy_version,\n        "generatedAt": generated,\n        "safetyProfile": safety_profile,\n        "releases": [_normalize_release(entry) for entry in releases],\n    }',
+                  '    normalized_releases = [_normalize_release(entry) for entry in releases]\n'
+                  '    for entry in normalized_releases:\n'
+                  '        if entry["status"] == "KNOWN_SAFE" and \\\n'
+                  '                entry["repository"] not in TRUSTED_RELEASE_REPOSITORIES:\n'
+                  '            raise PolicyError(\n'
+                  '                f"repository {entry[\'repository\']!r} is not an approved Core trust source"\n'
+                  '            )\n'
+                  '    body = {\n'
+                  '        "schemaVersion": SCHEMA_VERSION,\n'
+                  '        "policyVersion": policy_version,\n'
+                  '        "generatedAt": generated,\n'
+                  '        "safetyProfile": safety_profile,\n'
+                  '        "releases": normalized_releases,\n'
+                  '    }')
+              text = text.replace(
+                  'def lookup_release(body: dict, repository: str, commit: str) -> Optional[dict]:\n    """Find a release by its identity.  Never matches on version alone."""\n    for entry in body.get("releases", []):',
+                  'def lookup_release(body: dict, repository: str, commit: str) -> Optional[dict]:\n'
+                  '    """Find a trusted release by identity. Never matches on version alone."""\n'
+                  '    if repository not in TRUSTED_RELEASE_REPOSITORIES:\n'
+                  '        return None\n'
+                  '    for entry in body.get("releases", []):')
+              text = text.replace(
+                  '    body = dict(remote_body)\n    body["releases"] = sorted(merged.values(),\n                              key=lambda item: (item["repository"], item["commit"]))',
+                  '    body = dict(remote_body)\n'
+                  '    effective = [\n'
+                  '        entry for entry in merged.values()\n'
+                  '        if not (entry["status"] == "KNOWN_SAFE" and\n'
+                  '                entry["repository"] not in TRUSTED_RELEASE_REPOSITORIES)\n'
+                  '    ]\n'
+                  '    body["releases"] = sorted(effective,\n'
+                  '                              key=lambda item: (item["repository"], item["commit"]))')
+          write(path, text)
+
+          # Policy generation refuses conclusive reports from any other repository.
+          path = 'core-safety/scripts/generate_policy.py'
+          text = read(path)
+          text = text.replace(
+              'from candidate import CandidateState, KNOWN_UNSAFE_VERSIONS  # noqa: E402',
+              'from candidate import (  # noqa: E402\n    ALLOWED_SOURCE_REPOSITORIES, CandidateState, KNOWN_UNSAFE_VERSIONS,\n)')
+          if 'candidate repository is not an approved Core source' not in text:
+              text = text.replace(
+                  '    candidate = report["candidate"]\n    overall = report["overall"]',
+                  '    candidate = report["candidate"]\n'
+                  '    if candidate.get("repository") not in ALLOWED_SOURCE_REPOSITORIES:\n'
+                  '        raise PolicyError("candidate repository is not an approved Core source")\n'
+                  '    overall = report["overall"]')
+          write(path, text)
+
+          # Safety profile source policy changes are immutable profile metadata.
+          profile_path = ROOT / 'core-safety/profiles/rvn-consensus-2026-08-v1.json'
+          profile = json.loads(profile_path.read_text(encoding='utf-8'))
+          profile['profileRevision'] = 2
+          profile['candidateSources'] = {
+              'note': ('Only official RavenProject GitHub releases may enter certification. '
+                       'Discovery grants only the right to be tested; trust still requires a full PASS.'),
+              'allowed': ['RavenProject/Ravencoin'],
+          }
+          profile['identity']['note'] = (
+              'The certified identity key is repository plus commit. Version and tag are metadata only. '
+              'Only RavenProject/Ravencoin is an eligible source repository.')
+          definition = dict(profile)
+          definition.pop('profileRevision', None)
+          definition.pop('profileSha256', None)
+          profile['profileSha256'] = hashlib.sha256(
+              json.dumps(definition, sort_keys=True, separators=(',', ':')).encode()
+          ).hexdigest()
+          profile_path.write_text(json.dumps(profile, indent=2) + '\n', encoding='utf-8')
+
+          # Watcher UI and docs: RavenProject only.
+          path = '.github/workflows/core-safety-watch.yml'
+          text = read(path)
+          text = text.replace(
+              '# Watches the two allowed Ravencoin Core sources, certifies new candidates, and',
+              '# Watches official RavenProject Ravencoin Core releases, certifies new candidates, and')
+          text = text.replace('          - 2miners/Ravencoin\n', '')
+          write(path, text)
+
+          # Tests: positive identities now use RavenProject. Keep explicit 2miners
+          # strings only in negative rejection tests.
+          for path in ('tests/server/test_ravencoin_session.py', 'tests/test_core_safety_policy.py'):
+              text = read(path).replace('2miners/Ravencoin', 'RavenProject/Ravencoin')
+              write(path, text)
+
+          path = 'tests/server/test_ravencoin_backend.py'
+          text = read(path).replace('repository="2miners/Ravencoin"',
+                                    'repository="RavenProject/Ravencoin"')
+          text = text.replace('{"repository": "2miners/Ravencoin", "commit": "short"}',
+                              '{"repository": "RavenProject/Ravencoin", "commit": "short"}')
+          text = text.replace('{"repository": "2miners/Ravencoin", "commit": CERTIFIED_COMMIT,',
+                              '{"repository": "RavenProject/Ravencoin", "commit": CERTIFIED_COMMIT,')
+          anchor = 'def test_operator_configured_identity_is_only_attested():\n'
+          if 'def test_2miners_source_is_refused()' not in text:
+              text = text.replace(
+                  anchor,
+                  'def test_2miners_source_is_refused():\n'
+                  '    with pytest.raises(ValueError, match="not one of"):\n'
+                  '        BackendIdentity.from_config(\n'
+                  '            repository="2miners/Ravencoin", commit=CERTIFIED_COMMIT)\n\n\n'
+                  + anchor,
+                  1)
+          write(path, text)
+
+          path = 'tests/test_core_safety.py'
+          text = read(path)
+          text = text.replace('repository="2miners/Ravencoin"', 'repository="RavenProject/Ravencoin"')
+          text = text.replace('https://github.com/2miners/Ravencoin/releases/tag/{tag}',
+                              'https://github.com/RavenProject/Ravencoin/releases/tag/{tag}')
+          text = text.replace('/repos/2miners/Ravencoin/', '/repos/RavenProject/Ravencoin/')
+          text = text.replace('"2miners/Ravencoin@', '"RavenProject/Ravencoin@')
+          text = re.sub(
+              r'def test_identity_is_repository_and_commit_not_version\(\):\n.*?\n\n(?=def test_repository_outside_allowlist_is_refused)',
+              'def test_identity_is_repository_and_commit_not_version():\n'
+              '    first = make_candidate()\n'
+              '    same_version_other_commit = make_candidate(commit=OTHER_COMMIT)\n'
+              '    assert first.identity != same_version_other_commit.identity\n'
+              '    assert first.version == same_version_other_commit.version == "4.8.0"\n'
+              '    assert first.identity.startswith("RavenProject/Ravencoin@")\n\n\n',
+              text, flags=re.S)
+          text = re.sub(
+              r'def test_same_version_from_both_repositories_are_two_candidates\(\):\n.*?\n\n(?=def test_tag_pointing_at_unexpected_object_is_provenance_failure)',
+              'def test_2miners_repository_is_not_discoverable():\n'
+              '    with pytest.raises(discover.DiscoveryError, match="allowlist"):\n'
+              '        discover.discover_repository("2miners/Ravencoin", fake_github({}))\n\n\n',
+              text, flags=re.S)
+          text = re.sub(
+              r'def test_rate_limit_becomes_review_required_not_silence\(\):\n.*?\n\n(?=def test_malformed_api_response_is_an_error)',
+              'def test_rate_limit_becomes_review_required_not_silence():\n'
+              '    error = discover.DiscoveryError("GitHub rate limited or refused the request (403)")\n'
+              '    pages = {"/repos/RavenProject/Ravencoin/releases?per_page=10": error}\n'
+              '    found = discover.discover_all(fake_github(pages))\n'
+              '    assert len(found) == 1\n'
+              '    assert found[0]["state"] == CandidateState.REVIEW_REQUIRED.value\n\n\n',
+              text, flags=re.S)
+          write(path, text)
+
+          # Documentation: no trust is attributed to 2miners.
+          path = 'docs/security-model.md'
+          text = read(path)
+          text = text.replace(
+              'The initial certified identity\nis `2miners/Ravencoin` `v4.8.0` at\n`b60f50e04f1fba425b28804e61be2694faaf3469`.',
+              'The only eligible Core source is the official RavenProject release channel: '
+              '`https://github.com/RavenProject/Ravencoin/releases`.')
+          write(path, text)
+
+          path = 'docs/core-certification.md'
+          text = read(path)
+          text = text.replace(
+              'The watcher observes both `2miners/Ravencoin` and `RavenProject/Ravencoin`.\nRepository names grant permission to test, never permission to trust:',
+              'The watcher observes only official `RavenProject/Ravencoin` releases.\n'
+              'The official release channel is `https://github.com/RavenProject/Ravencoin/releases`.\n'
+              'Repository membership grants permission to test, never permission to trust:')
+          text = text.replace(
+              'The watcher polls the two permitted source repositories:\n\n- [2miners/Ravencoin](https://github.com/2miners/Ravencoin)\n- [RavenProject/Ravencoin](https://github.com/RavenProject/Ravencoin)\n',
+              'The watcher polls the single permitted source:\n\n'
+              '- [RavenProject/Ravencoin releases](https://github.com/RavenProject/Ravencoin/releases)\n')
+          text = text.replace('The current certified baseline is `2miners/Ravencoin` `v4.8.0` at commit',
+                              'The historical certified baseline used `2miners/Ravencoin`; it is no longer an eligible trust source. The official candidate is `RavenProject/Ravencoin` `v4.8.0` at commit')
+          text = text.replace('Profile revision 1 has digest', 'Profile revision 2 has digest')
+          old_digest = '1342d079f2eef7ae0803a247d2908c4b031ee4a542b0f837210f92ba36ae27b2'
+          text = text.replace(old_digest, profile['profileSha256'])
+          write(path, text)
+
+          # Existing signed v1/v2 policy/certification files are deliberately not
+          # modified: changing them would invalidate their Ed25519 signatures.
+          PY
+
+      - name: Static migration checks
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            electrumx/server/ravencoin_backend.py \
+            core-safety/scripts/candidate.py \
+            core-safety/scripts/discover_releases.py \
+            core-safety/scripts/policy.py \
+            core-safety/scripts/generate_policy.py
+          python - <<'PY'
+          import json, pathlib
+          p = json.loads(pathlib.Path('core-safety/profiles/rvn-consensus-2026-08-v1.json').read_text())
+          assert p['candidateSources']['allowed'] == ['RavenProject/Ravencoin']
+          assert p['profileRevision'] == 2
+          assert '2miners/Ravencoin' not in pathlib.Path('electrumx/server/ravencoin_backend.py').read_text()
+          assert '2miners/Ravencoin' not in pathlib.Path('core-safety/scripts/candidate.py').read_text()
+          PY
+
+      - name: Commit migration and remove one-shot workflow
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/ravenproject-trust-migration.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -- \
+            .github/workflows/core-safety-watch.yml \
+            core-safety/profiles/rvn-consensus-2026-08-v1.json \
+            core-safety/scripts/candidate.py \
+            core-safety/scripts/discover_releases.py \
+            core-safety/scripts/generate_policy.py \
+            core-safety/scripts/policy.py \
+            docs/core-certification.md \
+            docs/security-model.md \
+            electrumx/server/ravencoin_backend.py \
+            tests/server/test_ravencoin_backend.py \
+            tests/server/test_ravencoin_session.py \
+            tests/test_core_safety.py \
+            tests/test_core_safety_policy.py
+          git diff --cached --check
+          git commit -m "security: restrict Core trust to RavenProject"
+          git push origin HEAD:security/ravenproject-only-core-source
