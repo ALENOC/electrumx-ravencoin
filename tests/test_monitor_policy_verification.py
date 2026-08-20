@@ -41,7 +41,7 @@ def _backend_payload(commit=CERTIFIED_COMMIT):
         "subversion": "/Ravencoin:4.8.0/", "network": "main",
         "blocks": 4_494_000, "headers": 4_494_000, "initialBlockDownload": False,
         "identity": {"evidence": "BUILD_IDENTITY_VERIFIED",
-                     "sourceRepository": "2miners/Ravencoin", "sourceCommit": commit},
+                     "sourceRepository": "RavenProject/Ravencoin", "sourceCommit": commit},
     }
     return {
         "server": "ElectrumX-RVN", "serverVersion": "ElectrumX-RVN 1.13.0.dev1",
@@ -60,7 +60,7 @@ def _signed_policy(private_key, key_id, *, version=1):
     body = policy_mod.build_policy(
         policy_version=version, safety_profile="rvn-consensus-2026-08-v1",
         releases=[{
-            "repository": "2miners/Ravencoin", "tag": "v4.8.0", "version": "4.8.0",
+            "repository": "RavenProject/Ravencoin", "tag": "v4.8.0", "version": "4.8.0",
             "commit": CERTIFIED_COMMIT, "status": "KNOWN_SAFE",
             "certification": {"result": "PASS"},
         }])
@@ -140,7 +140,7 @@ def test_directory_signing_domain_is_rejected(tmp_path, keypair, pinned_key_file
     body = policy_mod.build_policy(
         policy_version=1, safety_profile="rvn-consensus-2026-08-v1",
         releases=[{
-            "repository": "2miners/Ravencoin", "tag": "v4.8.0", "version": "4.8.0",
+            "repository": "RavenProject/Ravencoin", "tag": "v4.8.0", "version": "4.8.0",
             "commit": CERTIFIED_COMMIT, "status": "KNOWN_SAFE",
             "certification": {"result": "PASS"},
         }])
