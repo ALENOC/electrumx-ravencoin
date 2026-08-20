@@ -842,6 +842,9 @@ class DB:
             tx_hash = None
         else:
             tx_hash = self.hashes_file.read(tx_num * 32, 32)
+            if len(tx_hash) != 32:
+                # Short read: hashes file hasn't caught up. Callers already retry on None.
+                tx_hash = None
         return tx_hash, tx_height
 
     def fs_tx_hashes_at_blockheight(self, block_height):
