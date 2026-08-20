@@ -24,6 +24,12 @@ not the final RavenProject-only production policy. The reviewed
 unsigned/non-current until the protected Core-policy signing procedure signs
 that exact body and the resulting document is reviewed and promoted.
 
+The dedicated ``security/ravenproject-only-core-source`` branch is the signing
+execution boundary. A normal developer or automation commit on other branches
+cannot turn the unsigned candidate into production policy; the migration
+workflow must pass its deterministic pre-sign check and the protected
+``core-safety-signing`` environment before any signed v3 artifact is published.
+
 The single-file installer pins the Core-policy public key independently from
 the ElectrumX release/update key. It rejects a release unless the bundled
 policy verifies under that pinned key and the manifest's exact Core repository,
