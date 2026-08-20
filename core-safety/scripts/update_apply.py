@@ -1,6 +1,6 @@
 # Copyright (c) 2026, the ElectrumX-RVN community maintainers
 #
-# The MIT License (MIT).  See LICENCE for details.
+# The MIT License (MIT). See LICENCE for details.
 
 """Orchestrates ``electrumx-update apply``: the only code path allowed to
 change what is running.
@@ -12,10 +12,11 @@ also requires ``--approve-consensus-change``.
 
 Production hooks stage/build before stopping the old node, atomically switch a
 same-filesystem release directory, start the new stack, run real health gates,
-and either finalize or restore the exact previous release. A failure is never
-silently promoted. If the signed manifest says ``rollbackSafe=false``, the
-updater deliberately leaves the failed candidate and the preserved old release
-for operator recovery instead of crossing an irreversible migration blindly.
+and either restore the exact previous release or return a promotion decision.
+The caller durably saves the promoted UpdateState *before* deleting the
+last-known-good directory/journal. This ordering means a power loss can leave an
+extra recovery copy, but cannot leave a committed new release with its only
+rollback copy already destroyed while state still says the old release.
 """
 
 from __future__ import annotations
@@ -39,7 +40,6 @@ class ApplyHooks:
     start_services: Callable[[], None]
     run_health_checks: Callable[[dict], HealthGateResult]
     rollback_to: Callable[[Optional[dict]], None]
-    finalize_success: Optional[Callable[[], None]] = None
 
 
 @dataclasses.dataclass
@@ -120,18 +120,8 @@ def apply_pending_candidate(state: UpdateState, hooks: ApplyHooks, *,
     health_decision = evaluate_health(health, rollback_safe=rollback_safe)
 
     if health_decision.verdict == HealthVerdict.PROMOTE_TO_CURRENT:
-        # Directory backup/journal cleanup is part of the transaction. If that
-        # cleanup itself fails, do not record the candidate as promoted because
-        # recovery state is still unresolved.
-        if hooks.finalize_success is not None:
-            try:
-                hooks.finalize_success()
-            except Exception as exc:  # noqa: BLE001
-                detail = (
-                    "new release passed health gates but transaction finalization failed: "
-                    f"{type(exc).__name__}: {exc}; operator intervention required")
-                record_stuck(state, reason=detail)
-                return ApplyResult(HealthVerdict.STUCK_NO_BLIND_ROLLBACK, detail)
+        # Only in-memory state changes here. The CLI must fsync this state before
+        # it calls TransactionalComposeSwitch.finalize_success().
         record_promotion(state, applied_release=manifest)
         return ApplyResult(health_decision.verdict, health_decision.reason)
 
