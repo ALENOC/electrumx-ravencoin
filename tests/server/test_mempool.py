@@ -1,6 +1,7 @@
 import datetime
 import logging
 import os
+import threading
 from collections import defaultdict
 from functools import partial
 from random import randrange, choice, seed
@@ -300,6 +301,75 @@ async def _fetch_and_accept_in_order(mempool, hashes):
         tuple(hashes), all_hashes,
         set(), set(), set(), set(), set(), set(), set(), set(),
     )
+
+
+class _ThreadGuardDict(defaultdict):
+    # RA-6: raises if touched off the main thread, to catch deserialize_txs()
+    # (run via run_in_thread) mutating a self.* dict directly.
+    def __getitem__(self, key):
+        if threading.current_thread() is not threading.main_thread():
+            raise RuntimeError('mutated self.* dict from worker thread (RA-6)')
+        return super().__getitem__(key)
+
+
+def _qualifier_tag_script(h160, asset_name, flag=True):
+    # ASSET_NULL_TEMPLATE: OP_RVN_ASSET <push h160> <push asset_portion>,
+    # matching deserialize_txs()'s op_ptr == 0 / ASSET_NULL_TEMPLATE case.
+    payload = bytes([len(asset_name)]) + asset_name.encode('ascii') + bytes([1 if flag else 0])
+    return bytes([OpCodes.OP_RVN_ASSET]) + Script.push_data(h160) + Script.push_data(payload)
+
+
+@pytest.mark.asyncio
+async def test_deserialize_txs_does_not_mutate_self_dicts_from_worker_thread():
+    # RA-6: deserialize_txs() used to mutate self.qualifier_tags (and its
+    # siblings) directly, and it runs inside run_in_thread() while the
+    # event loop may concurrently iterate the same dict from an RPC
+    # getter. Replace self.qualifier_tags with a dict that raises if
+    # touched off the main thread, then drive one refresh through it.
+    api = API()
+    h160 = os.urandom(20)
+    script = _qualifier_tag_script(h160, 'AQUALIFIER')
+    tx = Tx(2, [TxInput(bytes(32), 4294967295, b'', 4294967295)],
+            [TxOutput(0, script)], 0, [])
+    raw = tx.serialize()
+    tx_hash = double_sha256(raw)
+    api.raw_txs = {tx_hash: raw}
+
+    mempool = MemPool(env, api)
+    mempool.qualifier_tags = _ThreadGuardDict(dict)
+    await _fetch_and_accept_in_order(mempool, (tx_hash,))
+    assert tx_hash in mempool.qualifier_tags.get('AQUALIFIER', {})
+
+
+@pytest.mark.asyncio
+async def test_verifier_merge_preserves_earlier_refresh_entries_for_same_asset():
+    # RA-6: merging a worker-thread refresh's results into self.verifiers
+    # must be per-outer-key (self.verifiers[asset].update(...)), not a
+    # top-level dict.update() that would replace the whole inner dict and
+    # drop an earlier refresh's tx entry for an asset already touched.
+    api = API()
+    h160 = os.urandom(20)
+
+    def _restricted_tx(qualifier):
+        restricted_script = _transfer_asset_script(h160, '$RESTRICTED')
+        verifier_script = _null_verifier_script(qualifier)
+        tx = Tx(2, [TxInput(bytes(32), 4294967295, b'', 4294967295)],
+                [TxOutput(0, restricted_script), TxOutput(0, verifier_script)], 0, [])
+        raw = tx.serialize()
+        return double_sha256(raw), raw
+
+    tx1_hash, raw1 = _restricted_tx('FIRSTQUAL')
+    tx2_hash, raw2 = _restricted_tx('SECONDQUAL')
+    api.raw_txs = {tx1_hash: raw1, tx2_hash: raw2}
+
+    mempool = MemPool(env, api)
+    await _fetch_and_accept_in_order(mempool, (tx1_hash,))
+    assert tx1_hash in mempool.verifiers.get('$RESTRICTED', {})
+
+    await _fetch_and_accept_in_order(mempool, (tx2_hash,))
+    assert tx1_hash in mempool.verifiers.get('$RESTRICTED', {}), (
+        'a later refresh must not drop an earlier tx entry for the same asset')
+    assert tx2_hash in mempool.verifiers.get('$RESTRICTED', {})
 
 
 @pytest.mark.asyncio
