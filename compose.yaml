@@ -102,7 +102,7 @@ services:
       # publish BUILD_IDENTITY_VERIFIED.  They are configuration, never read
       # back from the running daemon, so a compromised daemon cannot choose its
       # own identity.
-      RAVENCOIN_SOURCE_REPOSITORY: 2miners/Ravencoin
+      RAVENCOIN_SOURCE_REPOSITORY: RavenProject/Ravencoin
       RAVENCOIN_SOURCE_TAG: v4.8.0
       RAVENCOIN_SOURCE_COMMIT: b60f50e04f1fba425b28804e61be2694faaf3469
       RAVENCOIN_ARTIFACT_SHA256: 966cf8978af1f2e3f36e9733d011eb92f4116750af6f8e77c5a5ced525577c4c
