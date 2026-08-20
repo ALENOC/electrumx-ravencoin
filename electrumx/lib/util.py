@@ -30,6 +30,7 @@ import array
 import inspect
 import json
 import logging
+import os
 import sys
 from collections.abc import Container, Mapping
 from ipaddress import ip_address
@@ -210,14 +211,41 @@ class LogicalFile(object):
                 size -= len(part)
         return b''.join(parts)
 
-    def write(self, start, b):
-        '''Write the bytes-like object, b, to the underlying virtual file.'''
+    def write(self, start, b, *, sync=False):
+        '''Write b to the virtual file.
+
+        If sync is true, every touched segment is fsync'd before this method
+        returns.  Newly-created segment directory entries are fsync'd too.
+        This is the durability barrier used by DB.flush_fs() before the
+        corresponding LevelDB state batch is allowed to commit.
+        '''
+        created_dirs = set()
         while b:
             size = min(len(b), self.file_size - (start % self.file_size))
+            file_num, _offset = divmod(start, self.file_size)
+            filename = self.filename_fmt.format(file_num)
+            existed = os.path.exists(filename)
             with self.open_file(start, True) as f:
                 f.write(b if size == len(b) else b[:size])
+                if sync:
+                    f.flush()
+                    os.fsync(f.fileno())
+            if sync and not existed:
+                created_dirs.add(os.path.dirname(filename) or '.')
             b = b[size:]
             start += size
+
+        # fsyncing a newly-created file does not by itself guarantee that its
+        # directory entry survives sudden power loss.  Persist those entries
+        # before the LevelDB commit can advance chain state.
+        if sync:
+            flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
+            for directory in sorted(created_dirs):
+                fd = os.open(directory, flags)
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
 
     def open_file(self, start, create):
         '''Open the virtual file and seek to start.  Return a file handle.
