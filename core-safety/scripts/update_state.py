@@ -160,8 +160,20 @@ def record_promotion(state: UpdateState, *, applied_release: dict) -> UpdateStat
     return state
 
 
-def record_rollback(state: UpdateState, *, reason: str) -> UpdateState:
-    if state.last_known_good_release is not None:
+def record_rollback(state: UpdateState, *, reason: str,
+                    restored_release: Optional[dict] = None) -> UpdateState:
+    """Record a failed candidate while preserving the release actually restored.
+
+    During an attempted update, ``current_release`` has not yet been promoted.
+    The rollback target is therefore that exact pre-update current release, not
+    ``last_known_good_release`` (which can legitimately be one generation
+    older). ``restored_release`` makes that invariant explicit. The legacy
+    fallback is retained for callers performing a standalone rollback after a
+    previously completed promotion.
+    """
+    if restored_release is not None:
+        state.current_release = restored_release
+    elif state.last_known_good_release is not None:
         state.current_release = state.last_known_good_release
     state.pending_candidate = None
     state.failure_reason = reason
