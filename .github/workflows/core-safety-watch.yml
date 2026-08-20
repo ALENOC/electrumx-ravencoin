@@ -1,8 +1,8 @@
 name: Core safety watch
 
 # Watches official stable RavenProject Ravencoin Core releases, builds each exact
-# candidate commit, certifies the resulting binaries/source, and proposes an
-# updated safe-Core policy only from conclusive reports.
+# candidate commit, certifies the resulting binaries/source, and prepares a
+# signed safe-Core policy proposal only from conclusive reports.
 #
 # Security boundary:
 #   * discovery, candidate build and certification run with contents: read and
@@ -11,10 +11,14 @@ name: Core safety watch
 #   * signing happens in a separate job bound to a protected environment, so the
 #     signing key is never present in a job that executes candidate source code;
 #   * pull_request never triggers this workflow, so a fork cannot reach the key;
-#   * third-party actions are pinned by commit sha.
+#   * third-party actions are pinned by commit sha;
+#   * the signing job accepts only an already-signed RavenProject-only policy
+#     baseline at policyVersion >= 3 and advances it monotonically;
+#   * the workflow only uploads a proposal artifact. It never merges, tags or
+#     publishes a release automatically.
 #
-# A run that cannot certify a candidate publishes a REVIEW_REQUIRED report and
-# stops. Nothing is ever promoted because a job was inconclusive.
+# A run that cannot conclusively certify a candidate leaves that identity
+# retryable. Nothing is promoted because a job was inconclusive.
 
 on:
   schedule:
@@ -161,6 +165,7 @@ jobs:
             tests/test_core_safety.py \
             tests/test_core_safety_policy.py \
             tests/test_core_safety_stable_discovery.py \
+            tests/test_core_safety_workflow.py \
             -q
 
       - name: Build and certify each exact candidate
@@ -184,10 +189,13 @@ jobs:
           for entry in candidates:
               repository = entry.get("repository")
               commit = entry.get("commit")
-              if not commit:
-                  print(f"skipping non-certifiable entry: {entry.get('state')} "
-                        f"{repository} {entry.get('reason', '')}")
+              state = entry.get("state")
+              if state != "PROVENANCE_VALIDATED":
+                  print(f"leaving candidate retryable: {state} {repository} "
+                        f"{entry.get('tag', '')} {entry.get('reason', '')}")
                   continue
+              if not commit:
+                  raise RuntimeError("PROVENANCE_VALIDATED candidate has no commit")
               if repository != "RavenProject/Ravencoin":
                   raise RuntimeError(
                       f"refusing candidate outside official source: {repository}@{commit}")
@@ -225,6 +233,10 @@ jobs:
                       "core-safety/scripts/build_candidate.sh",
                       commit, source_sha256, repository, str(build_dir),
                   ], check=True)
+                  candidate_test = build_dir / "bin" / "test_raven"
+                  if not candidate_test.is_file():
+                      raise RuntimeError(
+                          f"candidate build did not produce {candidate_test}")
                   certify_args = [
                       sys.executable, "core-safety/scripts/certify_core.py",
                       "--candidate-file", str(record),
@@ -232,15 +244,21 @@ jobs:
                       "--fixtures", "core-safety/fixtures/mainnet-incident-headers.json",
                       "--source-dir", str(build_dir / "source"),
                       "--bin-dir", str(build_dir / "bin"),
-                      "--candidate-test-binary", str(build_dir / "bin" / "test_raven"),
+                      # The certification probe suite is compiled into the exact
+                      # candidate's test_raven binary. Pass it explicitly so the
+                      # nHeight/checkpoint/transfer-overflow tests exercise Core,
+                      # not only this project's Python fixture validator.
+                      "--candidate-probe", str(candidate_test),
+                      "--candidate-test-binary", str(candidate_test),
                       "--report", str(report),
                   ]
-              except subprocess.CalledProcessError as exc:
+              except (subprocess.CalledProcessError, RuntimeError) as exc:
                   # Preserve fail-closed semantics. A build failure is not
-                  # promoted; run the harness without build evidence so it emits
-                  # REVIEW_REQUIRED rather than manufacturing a PASS.
-                  print(f"candidate build failed with {exc.returncode}; "
-                        "recording an inconclusive certification")
+                  # terminal state and is deliberately NOT entered in the
+                  # processed-candidate cache below, so the next scheduled run
+                  # may retry it.
+                  print(f"candidate build unavailable ({exc}); recording an "
+                        "inconclusive certification")
                   certify_args = [
                       sys.executable, "core-safety/scripts/certify_core.py",
                       "--candidate-file", str(record),
@@ -270,12 +288,13 @@ jobs:
           path: core-safety/state/reports
           if-no-files-found: warn
 
-      - name: Record processed candidate identities
+      - name: Record only terminal candidate identities
         env:
           CANDIDATES: ${{ needs.discover.outputs.candidates }}
         run: |
           set -euo pipefail
           python - <<'PY'
+          import glob
           import json
           import os
           import pathlib
@@ -290,16 +309,26 @@ jobs:
               commit = release.get("commit")
               if repository and commit:
                   processed[f"{repository}@{commit}"] = {"tag": release.get("tag")}
+
+          candidate_by_identity = {}
           for entry in json.loads(os.environ["CANDIDATES"]):
-              repository = entry.get("repository")
-              identity = entry.get("commit")
-              if identity:
-                  key = f"{repository}@{identity}"
-              elif repository and entry.get("tag"):
-                  key = f"{repository}#tag:{entry['tag']}"
-              else:
+              if entry.get("repository") and entry.get("commit"):
+                  candidate_by_identity[(entry["repository"], entry["commit"])] = entry
+
+          terminal = {"CERTIFICATION_PASSED", "CERTIFICATION_FAILED", "KNOWN_UNSAFE"}
+          for report_path in glob.glob("core-safety/state/reports/report-*.json"):
+              report = json.loads(pathlib.Path(report_path).read_text(encoding="utf-8"))
+              if report.get("overall") not in terminal:
                   continue
-              processed[key] = {"tag": entry.get("tag")}
+              candidate = report.get("candidate") or {}
+              identity = (candidate.get("repository"), candidate.get("commit"))
+              discovered = candidate_by_identity.get(identity)
+              if discovered is None:
+                  raise RuntimeError(
+                      f"terminal report {report_path} is not bound to this discovery run")
+              key = f"{identity[0]}@{identity[1]}"
+              processed[key] = {"tag": discovered.get("tag")}
+
           pathlib.Path("core-safety/state/processed.json").write_text(
               json.dumps({"processed": processed}, indent=2, sort_keys=True) + "\n",
               encoding="utf-8")
@@ -312,8 +341,9 @@ jobs:
           key: core-safety-state-${{ github.run_id }}
 
   propose_policy:
-    name: Propose signed policy
+    name: Prepare signed policy proposal
     needs: [discover, certify]
+    if: needs.certify.result == 'success'
     runs-on: ubuntu-24.04
     environment: core-safety-signing
     permissions:
@@ -340,6 +370,38 @@ jobs:
           name: core-safety-reports
           path: core-safety/state/reports
 
+      - name: Verify RavenProject-only signed baseline
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          sys.path.insert(0, "core-safety/scripts")
+          import policy
+
+          public = bytes.fromhex(pathlib.Path(
+              "core-safety/production/core-policy-signing-public-key.hex"
+          ).read_text(encoding="utf-8").strip())
+          if len(public) != 32:
+              raise SystemExit("invalid pinned Core policy public key")
+          document = json.loads(pathlib.Path(
+              "core-safety/production/safe-core-policy.json"
+          ).read_text(encoding="utf-8"))
+          body = policy.verify_policy(
+              document, {policy.key_id_for(public): public}, minimum_policy_version=3)
+          known_safe = [entry for entry in body.get("releases", [])
+                        if entry.get("status") == "KNOWN_SAFE"]
+          if not known_safe:
+              raise SystemExit("signed baseline has no KNOWN_SAFE Core identity")
+          if any(entry.get("repository") != "RavenProject/Ravencoin"
+                 for entry in known_safe):
+              raise SystemExit("signed baseline is not RavenProject-only")
+          print(f"verified policy baseline v{body['policyVersion']} with "
+                f"{len(known_safe)} RavenProject KNOWN_SAFE identity/identities")
+          PY
+
       - name: Verify report provenance against this run's discovery
         env:
           CANDIDATES: ${{ needs.discover.outputs.candidates }}
@@ -354,7 +416,8 @@ jobs:
           discovered = {
               (entry.get("repository"), entry.get("commit"))
               for entry in json.loads(os.environ["CANDIDATES"])
-              if entry.get("repository") and entry.get("commit")
+              if entry.get("state") == "PROVENANCE_VALIDATED" and
+                 entry.get("repository") and entry.get("commit")
           }
           failures = []
           for path in sorted(glob.glob("core-safety/state/reports/report-*.json")):
@@ -363,21 +426,21 @@ jobs:
               identity = (candidate.get("repository"), candidate.get("commit"))
               if identity not in discovered:
                   failures.append(f"{path}: candidate {identity} is not among "
-                                  f"this run's discovered candidates")
+                                  f"this run's provenance-validated candidates")
           if failures:
               print("report provenance check failed:", file=sys.stderr)
               for failure in failures:
                   print(f"  {failure}", file=sys.stderr)
               sys.exit(1)
-          print(f"{len(discovered)} discovered candidate(s), all downloaded "
-                f"reports match one of them")
+          print(f"all downloaded reports are bound to this discovery run")
           PY
 
-      - name: Generate and sign the policy
+      - name: Generate and sign monotonic policy proposal
         env:
           POLICY_SIGNING_KEY: ${{ secrets.POLICY_SIGNING_KEY }}
         run: |
           set -euo pipefail
+          test -n "$POLICY_SIGNING_KEY"
           reports=()
           for report in core-safety/state/reports/report-*.json; do
             [ -e "$report" ] || continue
@@ -385,16 +448,53 @@ jobs:
             if [ "$overall" = "CERTIFICATION_PASSED" ] || [ "$overall" = "CERTIFICATION_FAILED" ]; then
               reports+=(--report "$report")
             else
-              echo "$report is $overall, leaving it out of the policy"
+              echo "$report is $overall; leaving it out of the policy and retrying it later"
             fi
           done
           if [ ${#reports[@]} -eq 0 ]; then
-            echo "no conclusive certification report, so no policy is generated"
+            echo "no conclusive certification report, so no policy proposal is generated"
             exit 0
           fi
           python core-safety/scripts/generate_policy.py "${reports[@]}" \
+            --previous-policy core-safety/production/safe-core-policy.json \
             --profile core-safety/profiles/rvn-consensus-2026-08-v1.json \
             --output core-safety/state/safe-core-policy.json
+
+      - name: Verify generated proposal and monotonic progression
+        run: |
+          set -euo pipefail
+          if [ ! -f core-safety/state/safe-core-policy.json ]; then
+            echo "no proposal was generated"
+            exit 0
+          fi
+          python - <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          sys.path.insert(0, "core-safety/scripts")
+          import policy
+
+          public = bytes.fromhex(pathlib.Path(
+              "core-safety/production/core-policy-signing-public-key.hex"
+          ).read_text(encoding="utf-8").strip())
+          trusted = {policy.key_id_for(public): public}
+          previous = policy.verify_policy(json.loads(pathlib.Path(
+              "core-safety/production/safe-core-policy.json"
+          ).read_text(encoding="utf-8")), trusted, minimum_policy_version=3)
+          proposed = policy.verify_policy(json.loads(pathlib.Path(
+              "core-safety/state/safe-core-policy.json"
+          ).read_text(encoding="utf-8")), trusted,
+              minimum_policy_version=previous["policyVersion"] + 1)
+          if proposed["policyVersion"] != previous["policyVersion"] + 1:
+              raise SystemExit("policy proposal did not advance exactly one version")
+          known_safe = [entry for entry in proposed.get("releases", [])
+                        if entry.get("status") == "KNOWN_SAFE"]
+          if any(entry.get("repository") != "RavenProject/Ravencoin"
+                 for entry in known_safe):
+              raise SystemExit("proposal reintroduced a non-RavenProject trust source")
+          print(f"verified signed policy proposal v{proposed['policyVersion']}")
+          PY
 
       - name: Upload the proposed policy
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
