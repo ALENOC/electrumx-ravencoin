@@ -226,6 +226,11 @@ if [ ! -e .env ]; then
     chmod 600 .env
 fi
 
+if [ "$mode" = bundled ]; then
+    command -v python3 >/dev/null 2>&1         || fail 'python3 is required to select the internal monitor-admin network'
+    python3 core-safety/scripts/configure_monitor_admin_network.py --env-file .env         || fail 'could not select a collision-free internal monitor-admin network'
+fi
+
 if [ "$configure_ddns" = true ]; then
     printf '%s\n' \
         'Public reachability for this node:' \

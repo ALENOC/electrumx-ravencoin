@@ -88,7 +88,7 @@ services:
       COIN: Ravencoin
       NET: mainnet
       DB_DIRECTORY: /var/lib/electrumx/db
-      SERVICES: tcp://:50001,rpc://127.0.0.1:8000,rpc://172.29.81.2:8001
+      SERVICES: tcp://:50001,rpc://127.0.0.1:8000,rpc://${ELECTRUMX_MONITOR_ADMIN_IP:-172.29.81.2}:8001
       EVENT_LOOP_POLICY: uvloop
       CACHE_MB: ${ELECTRUMX_CACHE_MB:-1200}
       RAVENCOIN_BACKEND_CHECK_INTERVAL: 60
@@ -111,7 +111,7 @@ services:
       ravencoin-backend:
         ipv4_address: 172.29.80.20
       monitor-admin:
-        ipv4_address: 172.29.81.2
+        ipv4_address: ${ELECTRUMX_MONITOR_ADMIN_IP:-172.29.81.2}
     ports:
       - "127.0.0.1:50001:50001/tcp"
     volumes:
@@ -155,7 +155,7 @@ networks:
     internal: true
     ipam:
       config:
-        - subnet: 172.29.81.0/29
+        - subnet: ${MONITOR_ADMIN_SUBNET:-172.29.81.0/29}
 
 volumes:
   ravencoin-data:
