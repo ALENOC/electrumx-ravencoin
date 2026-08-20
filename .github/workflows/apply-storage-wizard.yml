@@ -7,6 +7,7 @@ on:
     paths:
       - tools/apply_storage_wizard.py
       - tools/patch_storage_legacy_tests.py
+      - tools/patch_storage_ci_fixture.py
       - .github/workflows/apply-storage-wizard.yml
   pull_request:
     branches:
@@ -14,6 +15,7 @@ on:
     paths:
       - tools/apply_storage_wizard.py
       - tools/patch_storage_legacy_tests.py
+      - tools/patch_storage_ci_fixture.py
       - .github/workflows/apply-storage-wizard.yml
 
 permissions:
@@ -47,6 +49,7 @@ jobs:
           set -euo pipefail
           python3 tools/apply_storage_wizard.py
           python3 tools/patch_storage_legacy_tests.py
+          python3 tools/patch_storage_ci_fixture.py
           python3 -m py_compile electrumx-ravencoin-install.py
           git diff --check
 
@@ -70,6 +73,8 @@ jobs:
           cp .env.example .env
           STORAGE_TEST_ROOT="$RUNNER_TEMP/electrumx-storage"
           mkdir -p "$STORAGE_TEST_ROOT"/{ravencoin-data,ravencoin-config,electrumx-data,monitor-data}
+          mkdir -p vendor/ravencoin-node-monitor
+          : > vendor/ravencoin-node-monitor/.env
           cat >> .env <<EOF
           RAVENCOIN_DATA_HOST_DIR=$STORAGE_TEST_ROOT/ravencoin-data
           RAVENCOIN_CONFIG_HOST_DIR=$STORAGE_TEST_ROOT/ravencoin-config
@@ -91,6 +96,7 @@ jobs:
           git rm \
             tools/apply_storage_wizard.py \
             tools/patch_storage_legacy_tests.py \
+            tools/patch_storage_ci_fixture.py \
             .github/workflows/apply-storage-wizard.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
