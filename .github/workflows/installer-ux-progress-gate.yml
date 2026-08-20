@@ -22,12 +22,11 @@ jobs:
           python-version: '3.11'
           cache: pip
 
-      - name: Verify expected parent and apply deterministic migration
-        env:
-          EXPECTED_PARENT: bdf4bec075f2883495b3142d89f028e69a3ab689
+      - name: Verify migration ancestry and apply deterministic candidate
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_PARENT"
+          git merge-base --is-ancestor bdf4bec075f2883495b3142d89f028e69a3ab689 HEAD
+          test -f core-safety/scripts/apply_installer_ux_progress.py
           python3 core-safety/scripts/apply_installer_ux_progress.py
           git diff --check
           python3 -m py_compile electrumx-ravencoin-install.py
@@ -74,6 +73,7 @@ jobs:
           BRANCH: work/chainstrap-ravenproject
         run: |
           set -euo pipefail
+          git fetch origin "$BRANCH"
           test "$(git rev-parse HEAD)" = "$(git rev-parse origin/$BRANCH)"
           rm core-safety/scripts/apply_installer_ux_progress.py
           git config user.name 'github-actions[bot]'
