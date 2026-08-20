@@ -257,9 +257,9 @@ from electrumx.server.ravencoin_backend import (  # noqa: E402
     BackendIdentity, IdentityEvidence, SAFETY_PROFILE,
 )
 
-CERTIFIED_COMMIT = "b60f50e04f1fba425b28804e61be2694faaf3469"
+CERTIFIED_COMMIT = "22549129888d02e0e08fcdb9f96f3c699167e774"
 CERTIFIED_ARTIFACT = (
-    "966cf8978af1f2e3f36e9733d011eb92f4116750af6f8e77c5a5ced525577c4c"
+    "cb359b6a5b42e47068cd655231484fcc763d2f79eae5ea318b029c704a4dc020"
 )
 
 
