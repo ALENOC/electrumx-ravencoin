@@ -59,6 +59,9 @@ REQUIRED_FIELDS = (
     "dbCompatibility",
     "rollbackSafe",
     "consensusImpact",
+    "autoUpdateEligible",
+    "installerFilename",
+    "installerDigest",
 )
 
 
@@ -83,6 +86,8 @@ def build_manifest(*, electrumx_version: str, channel: str, artifact_digest: str
                     safe_core_policy_version: int, required_updater_version: str,
                     config_compatibility: dict, db_compatibility: dict,
                     rollback_safe: bool, consensus_impact: bool,
+                    auto_update_eligible: bool, installer_filename: str,
+                    installer_digest: str,
                     release_timestamp: Optional[str] = None) -> dict:
     """Assemble an unsigned update manifest body.
 
@@ -102,6 +107,15 @@ def build_manifest(*, electrumx_version: str, channel: str, artifact_digest: str
         raise ManifestError("rollbackSafe must be a boolean")
     if not isinstance(consensus_impact, bool):
         raise ManifestError("consensusImpact must be a boolean")
+    if not isinstance(auto_update_eligible, bool):
+        raise ManifestError("autoUpdateEligible must be a boolean")
+    if consensus_impact and auto_update_eligible:
+        raise ManifestError(
+            "autoUpdateEligible cannot be true when consensusImpact is true")
+    if not installer_filename:
+        raise ManifestError("installerFilename is required")
+    if not installer_digest:
+        raise ManifestError("installerDigest is required")
     if not isinstance(db_compatibility, dict) or "schemaVersion" not in db_compatibility:
         raise ManifestError("dbCompatibility must include a schemaVersion")
     if db_compatibility.get("migration", {}).get("reversible") is False and rollback_safe:
@@ -130,6 +144,9 @@ def build_manifest(*, electrumx_version: str, channel: str, artifact_digest: str
         "dbCompatibility": db_compatibility,
         "rollbackSafe": rollback_safe,
         "consensusImpact": consensus_impact,
+        "autoUpdateEligible": auto_update_eligible,
+        "installerFilename": installer_filename,
+        "installerDigest": installer_digest,
     }
     validate_body(body)
     return body
@@ -151,6 +168,15 @@ def validate_body(body: dict) -> None:
         raise ManifestError("rollbackSafe must be a boolean")
     if not isinstance(body["consensusImpact"], bool):
         raise ManifestError("consensusImpact must be a boolean")
+    if not isinstance(body["autoUpdateEligible"], bool):
+        raise ManifestError("autoUpdateEligible must be a boolean")
+    if body["consensusImpact"] and body["autoUpdateEligible"]:
+        raise ManifestError(
+            "autoUpdateEligible cannot be true when consensusImpact is true")
+    if not body["installerFilename"]:
+        raise ManifestError("installerFilename is required")
+    if not body["installerDigest"]:
+        raise ManifestError("installerDigest is required")
     try:
         datetime.datetime.fromisoformat(body["releaseTimestamp"])
     except (TypeError, ValueError) as exc:
