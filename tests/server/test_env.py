@@ -25,6 +25,16 @@ def setup_base_env():
     os.environ.update(base_environ)
 
 
+@pytest.fixture(autouse=True, scope="module")
+def restore_environ():
+    saved = dict(os.environ)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+
+
 def assert_required(env_var):
     setup_base_env()
     os.environ.pop(env_var, None)
