@@ -14,6 +14,15 @@ asset work and later maintenance came from the Electrum-RVN-SIG community,
 including kralverde. ALENOC maintains this fork and does not claim authorship of
 the upstream software or official Ravencoin status.
 
+## ChainStrap
+
+The optional Fast Verified Bootstrap uses snapshot metadata and IPFS content
+published by the independent community project
+`chainstrap/chainstrap.github.io`. No ChainStrap downloader source is copied
+into this repository. The local integration intentionally accepts only raw
+Ravencoin `blk*.dat` files from a release-pinned manifest and requires the
+bundled Core to reindex and validate them before normal service startup.
+
 ## License
 
 The repository remains MIT-licensed. `LICENCE` retains Neil Booth's original

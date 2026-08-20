@@ -86,6 +86,7 @@ COPY --from=fetch \
     /usr/local/bin/
 COPY --chmod=0555 docker/core/entrypoint.sh /usr/local/bin/ravencoin-entrypoint
 COPY --chmod=0555 docker/core/healthcheck.sh /usr/local/bin/ravencoin-healthcheck
+COPY --chmod=0555 docker/core/bootstrap-reindex.sh /usr/local/bin/ravencoin-bootstrap-reindex
 
 USER ravencoin
 WORKDIR /var/lib/ravencoin

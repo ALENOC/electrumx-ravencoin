@@ -34,11 +34,13 @@ jobs:
         run: pytest -q
       - name: Static safety checks
         run: |
-          python -m compileall -q electrumx
+          python -m compileall -q electrumx contrib/bootstrap
           flake8 electrumx/server/ravencoin_backend.py setup.py \
+            contrib/bootstrap/chainstrap_bootstrap.py \
             tests/lib/test_ravencoin_headers.py \
             tests/server/test_ravencoin_backend.py \
-            tests/server/test_ravencoin_session.py
+            tests/server/test_ravencoin_session.py \
+            tests/test_chainstrap_bootstrap.py
 
   container:
     runs-on: ubuntu-24.04
@@ -51,10 +53,12 @@ jobs:
           printf 'ci-password-not-for-production\n' > .secrets/raven_rpc_password
           cp .env.example .env
           cp contrib/electrumx.env.example contrib/electrumx.env
-          bash -n setup.sh docker/core/entrypoint.sh docker/core/healthcheck.sh \
+          bash -n setup.sh fast-bootstrap.sh fast-bootstrap-status.sh docker/core/entrypoint.sh \
+            docker/core/healthcheck.sh docker/core/bootstrap-reindex.sh \
             contrib/docker/electrumx-entrypoint.sh
           docker compose config --quiet
           docker compose -f compose.yaml -f compose.tls.yaml config --quiet
+          docker compose -f compose.yaml -f compose.chainstrap.yaml config --quiet
           docker compose -f compose.existing-core.yaml config --quiet
       - uses: docker/setup-qemu-action@53851d14592bedcffcf25ea515637cff71ef929a  # v3.3.0
       - uses: docker/setup-buildx-action@6524bf65af31da8d45b59e8c27de4bd072b392f5  # v3.8.0

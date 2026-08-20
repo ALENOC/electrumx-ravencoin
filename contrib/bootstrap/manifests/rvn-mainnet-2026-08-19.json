@@ -1,0 +1,32 @@
+{
+  "chain": "RVN",
+  "mode": "mainnet",
+  "blocks": 4501329,
+  "blockhash": "000000000004967a3501a0e5edca06f6a88f3a6b4af7b4688160e2b63a4a7e48",
+  "updated": "2026-08-19T22:16:38Z",
+  "bytes": 34412317255,
+  "source": {
+    "repository": "chainstrap/chainstrap.github.io",
+    "commit": "c4ed0750603ea59823cdd21854d7eb75fe365928",
+    "path": "RVN/RVN-mainnet.json"
+  },
+  "parts": [
+    {"cid": "QmY5vJPeihekwRdkz7M9ebHR38upLjQBYfHzSv7PpR8EG8", "bytes": 2082714203, "sha256": "11433c0bf94f902fc209774ebc856c05bd643d82c9447f7b6eea9a1fb7ceae18"},
+    {"cid": "QmdrKDzyj1TW6AhtFwPKhkAczhCpjZ5Q7iBRisZPrqu9J8", "bytes": 2046369276, "sha256": "f9be71081ed1a57648b4448f019bdcb041009a3be21460cde833def201a3f305"},
+    {"cid": "QmbG9mR87PP5PQ5TrEKU4DquBTjyg3aZ5dGaiwEno4QiV1", "bytes": 2013957873, "sha256": "d4b9e2c93260c10fa05b0f71f84a17b824aa2f975d7f015877f3e5b09d2855b2"},
+    {"cid": "QmXvrimG4mdbfg1MD3gnHKrfBxSQXze7pm8DNU9NKFuyB1", "bytes": 2001440735, "sha256": "c8dab500355d978b95b1eb4231b684c51d50634419924e25f12f34d61aa29faa"},
+    {"cid": "QmZrZYEt7tRGMovrE3z64CjFDDr9sYsgL77drVsPh8cSdz", "bytes": 2094375311, "sha256": "a86a1882be8778a896ee3aa5cab192e03fb2d3f14035566af8f466cc61e872fe"},
+    {"cid": "QmW49Wh1bgfqYtmeC8vWxgr3in6JT8ZVrRQD2EWZL8wwJC", "bytes": 2017154858, "sha256": "706396908ec3a9179be9fc5113a0aacfddc5a69fefdb97a809636ebfb1e9715f"},
+    {"cid": "QmRgrPbiLXzrvFrQkaZR8ZQ39wfgafVtchFaPR1TNJFZDw", "bytes": 2084884656, "sha256": "856b479515e77e77a22c26f447c0f70bb42b584a828ac33c4c20a61fc4cee396"},
+    {"cid": "QmQ7MUFaSS6dEkGSuHGdKphdCMWS2ecMNiGavhWhEQuo3c", "bytes": 2050539187, "sha256": "0afc353b25dd25b4e810a64ae4a16f508ce92198ae1c49bd2c22c9bfd15b25e3"},
+    {"cid": "QmVA6tUwhJwrVCRukMosWRcYJycRiMUEePtMDzp6FaXSVc", "bytes": 2023899736, "sha256": "d30fe4fd7f08d59263cb953c326e1273b6ddec72d697a6468fae8f5557c89b67"},
+    {"cid": "Qmb75TDrkVE9uXfCU8kEAYnAmuYhrgskMi282wyKLj9N6x", "bytes": 2082088991, "sha256": "d2e9ac3eba8c2e4e039d313d48a3e936b2b80527a5a398bfe48cb065983ce625"},
+    {"cid": "QmcHiSjtdAvg61cay6w7UXyRFvdJxCUSvpiqRfdNJ5Eozw", "bytes": 2068923909, "sha256": "7dae11670a884478e18bd58823fb595415234e3e5e0ec7bbe27229144ce6182a"},
+    {"cid": "QmY9ntECb1HM2ywbFt2VqR3rTxVWYv38hHBRwsvuqMDwbG", "bytes": 2036233983, "sha256": "8347b8b0c4e16da0f6cd065772a7d8d79218c317f4b1ff6fe387060d00c45718"},
+    {"cid": "QmUybDUN1ykVVEEAL3qoX92UZhJrtntfHYSPXLk7HAznvA", "bytes": 2028611843, "sha256": "f6555028e31f8b7a7a2ab99b3c39c5c6043b06c2051554f656ac11ae9fbbb415"},
+    {"cid": "QmdcxtNQGsT875G1wsBS2TGgnqbF6QXogB7yqdSwjxUBff", "bytes": 2001307254, "sha256": "8397e5d6764ffd7906ca0f95858ddc76781594bb35d90ecf003cf693f6e47577"},
+    {"cid": "QmYh9MMpdvh9fZuQMJPf6aDZXQNP6uPHNH3zzYEHDJY41w", "bytes": 2012589027, "sha256": "f074ecf7a901e0f7d1d7e5b5ad02a9c6810e1cde675433e4ad6a7852459fc89c"},
+    {"cid": "QmcmNmwwRUQ7bgC1c8xx3P2Fx8vP2WQF5FsVP9ZqcwLp5y", "bytes": 2006151915, "sha256": "3932bb87d37c4a52f20420e58a19f10c9a472268fcaf2f35bccf609e198aa6a5"},
+    {"cid": "Qmf5jYT3jFrwS3BTBtWxGeG9iUNukRz3qgRFNJ4pvGSdpZ", "bytes": 1761074498, "sha256": "752ebd97b638182b89c965db922d7f147ad9fdfa039d9ce14f97a416c2b3ec72"}
+  ]
+}
