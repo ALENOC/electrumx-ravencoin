@@ -320,3 +320,130 @@ def test_cli_conflicting_choices_fail():
         installer.parse_args(["--chainstrap", "--p2p-bootstrap"])
     with pytest.raises(SystemExit):
         installer.parse_args(["--with-monitor", "--without-monitor"])
+
+
+# ---------------------------------------------------------------------------
+# NON-PRODUCTION local release validation: separation from the production
+# trust root. These tests prove the validation mechanism can never be
+# mistaken for, or substitute for, a real signed release.
+# ---------------------------------------------------------------------------
+
+def _write_local_release_validation_dir(tmp_path, *, key_pair=None):
+    """Build a complete, signed, self-consistent local-validation directory
+    the same way core-safety/scripts/build_local_release_validation_bundle.py
+    does, so tests exercise the exact on-disk shape the installer reads."""
+    key_pair = key_pair or um.generate_keypair()
+    _, public_bytes = key_pair
+    files = bundle_files()
+    files["core-safety/production/update-signing-public-key.hex"] = public_bytes.hex().encode()
+    data = make_bundle(files)
+    document, _ = signed_document(
+        key_pair, artifact_digest="sha256:" + hashlib.sha256(data).hexdigest())
+    directory = tmp_path / "local-release-validation"
+    directory.mkdir()
+    (directory / installer.LOCAL_VALIDATION_MANIFEST_FILE).write_text(
+        json.dumps(document), encoding="utf-8")
+    (directory / installer.LOCAL_VALIDATION_BUNDLE_FILE).write_bytes(data)
+    (directory / installer.LOCAL_VALIDATION_PUBLIC_KEY_FILE).write_text(
+        public_bytes.hex(), encoding="utf-8")
+    return directory, document, data
+
+
+def test_separation_a_production_path_with_empty_key_fails_closed():
+    document, _ = signed_document(um.generate_keypair())
+
+    def fetch(_url):
+        return json.dumps(document).encode()
+
+    with pytest.raises(installer.InstallError):
+        installer.fetch_and_verify_release_manifest(
+            public_key_hex=installer.RELEASE_PUBLIC_KEY_HEX, fetch=fetch)
+
+
+def test_separation_b_production_path_with_unsigned_bundle_fails_closed():
+    key_pair = um.generate_keypair()
+    _, public_bytes = key_pair
+    document, _ = signed_document(key_pair)
+    unsigned = {"manifest": document["manifest"]}  # signature stripped
+    with pytest.raises(installer.InstallError):
+        installer.verify_manifest_signature(unsigned, public_bytes.hex())
+
+
+def test_separation_c_production_path_with_unknown_signer_fails_closed():
+    document, _ = signed_document(um.generate_keypair())
+    _, trusted_public = um.generate_keypair()
+    with pytest.raises(installer.InstallError):
+        installer.verify_manifest_signature(document, trusted_public.hex())
+
+
+def test_separation_d_explicit_local_validation_with_matching_key_succeeds(tmp_path):
+    directory, _, _ = _write_local_release_validation_dir(tmp_path)
+    public_key_hex, manifest_fetch, bundle_fetch = \
+        installer.load_local_release_validation(directory)
+    body = installer.fetch_and_verify_release_manifest(
+        public_key_hex=public_key_hex, fetch=manifest_fetch)
+    _, metadata = installer.fetch_and_verify_bundle(
+        body, fetch=bundle_fetch, public_key_hex=public_key_hex)
+    assert metadata["nodeMonitor"]["commit"] == MONITOR_COMMIT
+
+
+def test_separation_e_validation_key_is_never_persisted_as_trust_root(tmp_path):
+    directory, _, _ = _write_local_release_validation_dir(tmp_path)
+    public_key_hex, _, _ = installer.load_local_release_validation(directory)
+    assert public_key_hex != installer.RELEASE_PUBLIC_KEY_HEX
+    assert installer.RELEASE_PUBLIC_KEY_HEX == ""
+
+
+def test_separation_f_production_installer_still_refuses_same_release_afterward(tmp_path):
+    directory, document, _ = _write_local_release_validation_dir(tmp_path)
+    public_key_hex, manifest_fetch, _ = installer.load_local_release_validation(directory)
+    installer.fetch_and_verify_release_manifest(
+        public_key_hex=public_key_hex, fetch=manifest_fetch)
+
+    def production_fetch(_url):
+        return json.dumps(document).encode()
+
+    with pytest.raises(installer.InstallError):
+        installer.fetch_and_verify_release_manifest(
+            public_key_hex=installer.RELEASE_PUBLIC_KEY_HEX, fetch=production_fetch)
+
+
+def test_local_release_validation_dir_missing_file_fails_closed(tmp_path):
+    directory = tmp_path / "incomplete"
+    directory.mkdir()
+    (directory / installer.LOCAL_VALIDATION_MANIFEST_FILE).write_text("{}", encoding="utf-8")
+    with pytest.raises(installer.InstallError):
+        installer.load_local_release_validation(directory)
+
+
+def test_monitor_controller_comment_mentioning_forbidden_terms_is_not_a_false_positive():
+    files = bundle_files()
+    files["compose.monitor-controller.yaml"] = (
+        b"services:\n  controller:\n"
+        b"    # Intentionally no /var/run/docker.sock and no CAP_NET_ADMIN here.\n"
+        b"    volumes:\n"
+        b"      - /run/ravencoin-bandwidth:/run/ravencoin-bandwidth:ro\n"
+    )
+    data = make_bundle(files)
+    document, public_bytes = signed_document(
+        um.generate_keypair(),
+        artifact_digest="sha256:" + hashlib.sha256(data).hexdigest())
+    body = installer.verify_manifest_signature(document, public_bytes.hex())
+    installer.validate_bundle(data, body, public_key_hex="a" * 64)
+
+
+def test_monitor_controller_real_docker_socket_grant_is_still_refused():
+    files = bundle_files()
+    files["compose.monitor-controller.yaml"] = (
+        b"services:\n  controller:\n"
+        b"    volumes:\n"
+        b"      - /var/run/docker.sock:/var/run/docker.sock\n"
+        b"      - /run/ravencoin-bandwidth:/run/ravencoin-bandwidth:ro\n"
+    )
+    data = make_bundle(files)
+    document, public_bytes = signed_document(
+        um.generate_keypair(),
+        artifact_digest="sha256:" + hashlib.sha256(data).hexdigest())
+    body = installer.verify_manifest_signature(document, public_bytes.hex())
+    with pytest.raises(installer.InstallError, match="forbidden privileges"):
+        installer.validate_bundle(data, body, public_key_hex="a" * 64)
