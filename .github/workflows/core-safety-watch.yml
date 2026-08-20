@@ -1,7 +1,7 @@
 name: Core safety watch
 
-# Watches the two allowed Ravencoin Core sources, certifies new candidates, and
-# proposes an updated safe-Core policy.
+# Watches official RavenProject Ravencoin Core releases, certifies new candidates,
+# and proposes an updated safe-Core policy.
 #
 # Security boundary:
 #   * discovery, build and certification run with contents: read and no secrets;
@@ -21,12 +21,11 @@ on:
   workflow_dispatch:
     inputs:
       repository:
-        description: "Restrict discovery to one allowed repository"
+        description: "Restrict discovery to the official RavenProject repository"
         required: false
         type: choice
         options:
           - all
-          - 2miners/Ravencoin
           - RavenProject/Ravencoin
         default: all
 
@@ -159,7 +158,7 @@ jobs:
       - name: Run the harness self-test
         run: |
           set -euo pipefail
-          # Initialize the package once before importing a submodule.  The
+          # Initialize the package once before importing a submodule. The
           # upstream package exposes controller/env from __init__, and direct
           # first import of coins can otherwise look circular in a fresh job.
           python -c 'import electrumx'
@@ -299,13 +298,6 @@ jobs:
           path: core-safety/state/reports
 
       - name: Verify report provenance against this run's discovery
-        # The signing step below trusts each report's embedded candidate
-        # identity to decide what it is signing as KNOWN_SAFE or
-        # KNOWN_UNSAFE. Within-run artifact integrity is a GitHub guarantee,
-        # but nothing previously checked that a downloaded report's
-        # candidate was actually one this same run's discover job produced,
-        # so a report naming an unrelated repository@commit (however it got
-        # into the artifact) would have been signed without complaint.
         env:
           CANDIDATES: ${{ needs.discover.outputs.candidates }}
         run: |
