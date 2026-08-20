@@ -1,26 +1,24 @@
-name: Apply crash-consistency and monitor-isolation hardening
+name: Apply monitor network and reboot resilience
 
 on:
   push:
     branches:
       - work/chainstrap-ravenproject
     paths:
-      - tools/apply_crash_consistency_hardening.py
-      - tools/patch_crash_consistency_import.py
+      - tools/apply_monitor_network_resilience.py
       - .github/workflows/apply-crash-consistency-hardening.yml
   pull_request:
     branches:
       - master
     paths:
-      - tools/apply_crash_consistency_hardening.py
-      - tools/patch_crash_consistency_import.py
+      - tools/apply_monitor_network_resilience.py
       - .github/workflows/apply-crash-consistency-hardening.yml
 
 permissions:
   contents: write
 
 concurrency:
-  group: apply-crash-consistency-hardening-${{ github.event_name }}
+  group: apply-monitor-network-resilience-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -42,15 +40,13 @@ jobs:
           git fetch origin work/chainstrap-ravenproject
           test "$(git rev-parse origin/work/chainstrap-ravenproject)" = "$TARGET_SHA"
 
-      - name: Apply deterministic hardening
+      - name: Apply deterministic network/reboot hardening
         run: |
           set -euo pipefail
-          python3 tools/apply_crash_consistency_hardening.py
-          python3 tools/patch_crash_consistency_import.py
+          python3 tools/apply_monitor_network_resilience.py
           python3 -m py_compile \
-            electrumx/lib/util.py \
-            electrumx/server/db.py \
-            electrumx/server/block_processor.py
+            electrumx-ravencoin-install.py \
+            core-safety/scripts/configure_monitor_admin_network.py
           git diff --check
 
       - name: Install test dependencies
@@ -62,16 +58,12 @@ jobs:
           python3 -m pip install .
           python3 -m pip install cryptography==43.0.3 pytest==8.3.5 pytest-asyncio==0.24.0
 
-      - name: Run crash-consistency and monitor regressions
+      - name: Run full regression suite
         run: |
           set -euo pipefail
-          pytest -q \
-            tests/lib/test_util.py \
-            tests/server/test_db_crash_consistency.py \
-            tests/test_monitor_failure_isolation.py \
-            tests/server/test_db_fs_tx_hash.py
+          pytest -q
 
-      - name: Validate isolated monitor Compose model
+      - name: Validate collision-safe Compose models
         run: |
           set -euo pipefail
           mkdir -p .secrets vendor/ravencoin-node-monitor
@@ -79,6 +71,10 @@ jobs:
           printf 'ci-password-not-for-production\n' > .secrets/raven_rpc_password
           cp .env.example .env
           : > vendor/ravencoin-node-monitor/.env
+          python3 core-safety/scripts/configure_monitor_admin_network.py --env-file .env
+          grep -q '^MONITOR_ADMIN_SUBNET=' .env
+          grep -q '^ELECTRUMX_MONITOR_ADMIN_IP=' .env
+          grep -q '^MONITOR_ADMIN_IP=' .env
           docker compose -f compose.yaml -f compose.monitor.yaml config --quiet
           docker compose -f compose.yaml -f compose.tls.yaml -f compose.monitor.yaml config --quiet
           docker compose -f compose.yaml -f compose.chainstrap.yaml -f compose.monitor.yaml config --quiet
@@ -93,14 +89,15 @@ jobs:
             exit 1
           }
 
-          # Keep this workflow unchanged in the feature commit.  It is removed
-          # separately through GitHub MCP after the validated code lands.
+          # Workflow removal is done separately through GitHub MCP after the
+          # validated feature commit lands; GitHub Actions tokens cannot safely
+          # self-edit workflow files.
           git checkout "$TARGET_SHA" -- .github/workflows/apply-crash-consistency-hardening.yml
-          git rm tools/apply_crash_consistency_hardening.py tools/patch_crash_consistency_import.py
+          git rm tools/apply_monitor_network_resilience.py
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898233+github-actions[bot]@users.noreply.github.com'
           git add --all
           git diff --cached --check
-          git commit -m 'fix(db): harden crash consistency and isolate node monitor failures'
+          git commit -m 'fix(installer): collision-safe monitor network and host-port recovery'
           git push origin HEAD:work/chainstrap-ravenproject
