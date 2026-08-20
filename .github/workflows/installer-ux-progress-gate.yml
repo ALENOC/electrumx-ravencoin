@@ -23,11 +23,12 @@ jobs:
           python-version: '3.11'
           cache: pip
 
-      - name: Verify migration ancestry and apply deterministic candidate
+      - name: Verify migration ancestry and materialize clean candidate
         run: |
           set -euo pipefail
           git merge-base --is-ancestor bdf4bec075f2883495b3142d89f028e69a3ab689 HEAD
           test -f core-safety/scripts/apply_installer_ux_progress.py
+          printf '%s\n' "$(git rev-parse HEAD)" > "$RUNNER_TEMP/ux-base-sha"
           python3 core-safety/scripts/apply_installer_ux_progress.py
           python3 - <<'PY'
           from pathlib import Path
@@ -42,6 +43,11 @@ jobs:
           PY
           git diff --check
           python3 -m py_compile electrumx-ravencoin-install.py
+          git config user.name 'candidate-builder'
+          git config user.email 'candidate@localhost'
+          git add electrumx-ravencoin-install.py core-safety/scripts/test_installer.py
+          git commit -m 'candidate: installer UX and live progress'
+          test -z "$(git status --porcelain --untracked-files=no)"
 
       - name: Install test dependencies
         run: |
@@ -86,12 +92,13 @@ jobs:
           BRANCH: work/chainstrap-ravenproject
         run: |
           set -euo pipefail
+          BASE_SHA="$(cat "$RUNNER_TEMP/ux-base-sha")"
           git fetch origin "$BRANCH"
-          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/$BRANCH)"
+          test "$BASE_SHA" = "$(git rev-parse origin/$BRANCH)"
+          git reset --soft "$BASE_SHA"
           rm core-safety/scripts/apply_installer_ux_progress.py
+          git add -A
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git status --short
           git commit -m 'ux(installer): stream ChainStrap progress and polish wizard'
           git push origin "HEAD:$BRANCH"
