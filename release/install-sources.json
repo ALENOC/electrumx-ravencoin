@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "nodeMonitor": {
     "repository": "ALENOC/ravencoin-node-monitor",
-    "commit": "fabaaee1184e954cd2c585e28bc2e9f9f95f2c19",
+    "commit": "b59e7efdea2fe8c0114b5f72e139931fe86ae571",
     "bundledPath": "vendor/ravencoin-node-monitor"
   }
 }

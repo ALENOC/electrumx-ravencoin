@@ -147,6 +147,8 @@ def bundle_files(*, core_policy_document=None,
         "vendor/ravencoin-node-monitor/Dockerfile": b"FROM scratch\n",
         "vendor/ravencoin-node-monitor/.env.example": b"BIND_PORT=8899\n",
         "vendor/ravencoin-node-monitor/contrib/ravencoin-bandwidth-controller.py": b"#!/usr/bin/env python3\n",
+        "vendor/ravencoin-node-monitor/contrib/verify-published-port.py": b"#!/usr/bin/env python3\n",
+        "core-safety/scripts/configure_monitor_admin_network.py": b"#!/usr/bin/env python3\n",
         "compose.monitor-controller.yaml": (
             b"services:\n  controller:\n"
             b"    volumes:\n"

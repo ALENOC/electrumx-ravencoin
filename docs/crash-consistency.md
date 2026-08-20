@@ -29,3 +29,19 @@ The hardened design has three layers:
 This is defense in depth; clean shutdown and stable power are still strongly
 recommended, but correctness no longer depends on the kernel flushing unrelated
 flat-file page-cache writes before LevelDB's WAL/state commit.
+
+## Monitor network and host-port resilience
+
+The Monitor admin network is no longer tied to a single hard-coded Docker
+subnet.  `configure_monitor_admin_network.py` inspects existing Docker IPv4
+subnets and host routes, chooses a free RFC1918 `/29`, and records the subnet,
+ElectrumX address and Monitor address in `.env`.  Complete operator overrides
+are preserved; partial overrides fail closed.
+
+The Monitor container healthcheck intentionally remains an in-container liveness
+check.  Because that cannot prove Docker actually installed the host-side 8899
+mapping, the verified installer additionally executes the pinned Node Monitor
+`contrib/verify-published-port.py` after activation.  It requires both Docker
+port metadata and a real host-loopback `/healthz` response.  On the known reboot
+failure it may force-recreate **only** the Monitor once, then verifies again and
+fails instead of looping or touching Core/ElectrumX.

@@ -15,7 +15,7 @@ services:
     networks:
       ravencoin-backend: {}
       monitor-admin:
-        ipv4_address: 172.29.81.3
+        ipv4_address: ${MONITOR_ADMIN_IP:-172.29.81.3}
     env_file:
       - ./vendor/ravencoin-node-monitor/.env
     environment:
@@ -24,7 +24,7 @@ services:
       CORE_RPC_USER_FILE: /run/raven-secrets/raven_rpc_user
       CORE_RPC_PASSWORD_FILE: /run/raven-secrets/raven_rpc_password
       ELECTRUMX_ENABLED: "true"
-      ELECTRUMX_RPC_HOST: 172.29.81.2
+      ELECTRUMX_RPC_HOST: ${ELECTRUMX_MONITOR_ADMIN_IP:-172.29.81.2}
       ELECTRUMX_RPC_PORT: "8001"
       ELECTRUMX_SSL_HOST: electrumx
       ELECTRUMX_SSL_PORT: "50002"

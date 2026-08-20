@@ -1,7 +1,7 @@
 services:
   electrumx:
     environment:
-      SERVICES: ssl://:50002,rpc://127.0.0.1:8000,rpc://172.29.81.2:8001
+      SERVICES: ssl://:50002,rpc://127.0.0.1:8000,rpc://${ELECTRUMX_MONITOR_ADMIN_IP:-172.29.81.2}:8001
       SSL_CERTFILE: /run/electrumx/tls/fullchain.pem
       SSL_KEYFILE: /run/electrumx/tls/privkey.pem
       REPORT_SERVICES: ssl://${ELECTRUMX_PUBLIC_HOST:?set ELECTRUMX_PUBLIC_HOST in .env}:50002

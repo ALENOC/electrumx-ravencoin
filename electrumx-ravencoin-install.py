@@ -95,6 +95,8 @@ MONITOR_ENV = f"{MONITOR_PATH}/.env"
 MONITOR_OVERLAY = "compose.monitor.yaml"
 MONITOR_CONTROLLER_OVERLAY = "compose.monitor-controller.yaml"
 CONTROLLER_SCRIPT = f"{MONITOR_PATH}/contrib/ravencoin-bandwidth-controller.py"
+MONITOR_PORT_VERIFY = f"{MONITOR_PATH}/contrib/verify-published-port.py"
+NETWORK_CONFIG_HELPER = "core-safety/scripts/configure_monitor_admin_network.py"
 CONTROLLER_UNIT = "electrumx-ravencoin-monitor-controller.service"
 CHAINSTRAP_OVERLAY = "compose.chainstrap.yaml"
 STORAGE_OVERLAY = "compose.storage.yaml"
@@ -138,6 +140,8 @@ REQUIRED_BUNDLE_PATHS = frozenset({
     f"{MONITOR_PATH}/Dockerfile",
     f"{MONITOR_PATH}/.env.example",
     CONTROLLER_SCRIPT,
+    MONITOR_PORT_VERIFY,
+    NETWORK_CONFIG_HELPER,
 })
 
 
@@ -1121,9 +1125,8 @@ def write_monitor_env(root: Path) -> None:
         "CORE_RPC_HOST=ravencoin-core\nCORE_RPC_PORT=8766\n"
         "CORE_RPC_USER_FILE=/run/raven-secrets/raven_rpc_user\n"
         "CORE_RPC_PASSWORD_FILE=/run/raven-secrets/raven_rpc_password\n"
-        "ELECTRUMX_ENABLED=true\nELECTRUMX_RPC_HOST=172.29.81.2\n"
-        "ELECTRUMX_RPC_PORT=8001\nELECTRUMX_SSL_HOST=electrumx\n"
-        "ELECTRUMX_SSL_PORT=50002\nELECTRUMX_SSL_VERIFY=false\n"
+        "ELECTRUMX_ENABLED=true\n"
+        "ELECTRUMX_SSL_VERIFY=false\n"
         "HISTORY_ENABLED=true\nHISTORY_STORAGE=memory\n"
         "HISTORY_DB_PATH=/data/history.db\n"
         "EXTRA_DISK_PATHS=Project storage=/data\n"
@@ -1146,6 +1149,28 @@ def run_checked(argv: Sequence[str], *, cwd: Optional[Path] = None,
     if completed.returncode != 0:
         raise InstallError(
             f"command failed with exit code {completed.returncode}: {' '.join(argv)}")
+
+
+def verify_monitor_host_publish(root: Path, files: Sequence[str]) -> None:
+    """Prove the Monitor is published on the host, not merely alive in-container.
+
+    The helper performs at most one monitor-only force-recreate when Docker has
+    lost the 8899 host publication after a reboot.  Failure after that single
+    repair attempt aborts the fresh install; Core and ElectrumX are never
+    recreated by this recovery path.
+    """
+    script = root / MONITOR_PORT_VERIFY
+    argv = [
+        sys.executable, str(script),
+        "--compose-dir", str(root),
+        "--container", "ravencoin-node-monitor",
+        "--host", "127.0.0.1",
+        "--port", "8899",
+        "--repair",
+    ]
+    for filename in files:
+        argv += ["--compose-file", filename]
+    run_checked(argv, cwd=root)
 
 
 def compose_files(bootstrap: str, monitor: bool, controller: bool = False) -> list[str]:
@@ -1410,6 +1435,9 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
                     "and retry explicitly with --p2p-bootstrap if traditional sync is desired"
                 ) from exc
             raise
+
+        if monitor:
+            verify_monitor_host_publish(target, files)
 
         # Marker/state are commit records and are written only after Compose
         # accepted the final release directory and the optional controller was
