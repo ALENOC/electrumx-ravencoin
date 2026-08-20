@@ -19,7 +19,7 @@ does not recognize, or a check it cannot complete, must not silently pass.
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from packaging.version import InvalidVersion, Version
@@ -44,6 +44,7 @@ class VerificationVerdict(enum.Enum):
     REFUSED_ARCHITECTURE_MISMATCH = "REFUSED_ARCHITECTURE_MISMATCH"
     REFUSED_CORE_IDENTITY_MISMATCH = "REFUSED_CORE_IDENTITY_MISMATCH"
     REFUSED_MISSING_CERTIFICATION_DIGEST = "REFUSED_MISSING_CERTIFICATION_DIGEST"
+    REFUSED_CERTIFICATION_DIGEST_MISMATCH = "REFUSED_CERTIFICATION_DIGEST_MISMATCH"
     REFUSED_UNKNOWN_DB_COMPATIBILITY = "REFUSED_UNKNOWN_DB_COMPATIBILITY"
     REFUSED_GITHUB_UNREACHABLE = "REFUSED_GITHUB_UNREACHABLE"
 
@@ -139,7 +140,8 @@ def evaluate_eligibility(*, auto_update_mode: str, channel: str,
         current = Version(current_version)
         candidate = Version(candidate_version)
     except InvalidVersion as exc:
-        return Decision(EligibilityVerdict.REFUSED_OLDER_VERSION, f"unparseable version: {exc}")
+        return Decision(EligibilityVerdict.REFUSED_OLDER_VERSION,
+                        f"unparseable version: {exc}")
 
     if candidate == current:
         return Decision(EligibilityVerdict.IGNORED_SAME_VERSION)
@@ -151,15 +153,16 @@ def evaluate_eligibility(*, auto_update_mode: str, channel: str,
 def evaluate_verification(*, manifest: Optional[dict], signature_valid: bool,
                           downloaded_artifact_digest: Optional[str],
                           host: HostFacts, safe_core_certified_commits: frozenset,
-                          github_reachable: bool = True) -> Decision:
+                          github_reachable: bool = True,
+                          safe_core_certification_digests: Optional[dict] = None) -> Decision:
     """Steps 6-12: verify everything about a candidate before it may ever be
     pre-pulled or presented to an operator as a real candidate.
 
     ``safe_core_certified_commits`` is the set of Core commits this
-    installation's safe-Core policy currently recognizes as certified
-    (core-safety/scripts/policy.py); a manifest naming any other commit, or a
-    commit whose certification report digest does not match what the policy
-    recorded, is refused rather than trusted on the manifest's word alone.
+    installation's verified safe-Core policy currently recognizes as certified.
+    When ``safe_core_certification_digests`` is supplied, the signed ElectrumX
+    manifest must also name the exact certification report digest recorded by
+    that policy; a matching commit alone is not enough.
     """
     if not github_reachable:
         return Decision(VerificationVerdict.REFUSED_GITHUB_UNREACHABLE)
@@ -176,8 +179,18 @@ def evaluate_verification(*, manifest: Optional[dict], signature_valid: bool,
     commit = manifest.get("coreCommit")
     if not commit or commit not in safe_core_certified_commits:
         return Decision(VerificationVerdict.REFUSED_CORE_IDENTITY_MISMATCH)
-    if not manifest.get("certificationReportDigest"):
+
+    certification_digest = manifest.get("certificationReportDigest")
+    if not certification_digest:
         return Decision(VerificationVerdict.REFUSED_MISSING_CERTIFICATION_DIGEST)
+    if safe_core_certification_digests is not None:
+        expected_digest = safe_core_certification_digests.get(commit)
+        if not expected_digest or certification_digest != expected_digest:
+            return Decision(
+                VerificationVerdict.REFUSED_CERTIFICATION_DIGEST_MISMATCH,
+                "signed update manifest certification digest does not match "
+                "the verified safe-Core policy",
+            )
 
     db_compat = manifest.get("dbCompatibility")
     if not isinstance(db_compat, dict) or "schemaVersion" not in db_compat:
