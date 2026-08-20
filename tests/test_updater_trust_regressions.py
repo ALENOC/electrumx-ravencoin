@@ -14,6 +14,7 @@ SCRIPTS = ROOT / "core-safety" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import electrumx_update_cli as cli  # noqa: E402
+import update_policy  # noqa: E402
 from update_decision import (  # noqa: E402
     HostFacts, VerificationVerdict, evaluate_verification,
 )
@@ -161,3 +162,71 @@ def test_invalid_environment_policy_floor_is_rejected(monkeypatch):
     monkeypatch.setenv("ELECTRUMX_MIN_CORE_POLICY_VERSION", "-1")
     with pytest.raises(ValueError, match="cannot be negative"):
         cli._configured_policy_floor()
+
+
+def _resolved_policy(version):
+    return update_policy.ResolvedPolicy(
+        body={"policyVersion": version},
+        source="test",
+        commits=frozenset({"c" * 40}),
+        certification_digests={"c" * 40: "d" * 64},
+    )
+
+
+def test_production_resolver_uses_persisted_floor_and_advances_it():
+    state = UpdateState(minimum_core_policy_version=4)
+    observed = {}
+
+    def resolver(**kwargs):
+        observed.update(kwargs)
+        return _resolved_policy(6)
+
+    resolved = cli.resolve_production_core_policy(
+        state, configured_floor=2, resolver=resolver)
+    assert resolved.version == 6
+    assert observed["minimum_policy_version"] == 4
+    assert observed["bundled_path"] == cli.DEFAULT_CORE_POLICY_PATH
+    assert observed["cache_path"] == cli.DEFAULT_CORE_POLICY_CACHE_PATH
+    assert observed["key_path"] == cli.DEFAULT_CORE_POLICY_KEY_PATH
+    assert observed["remote_url"] == cli.DEFAULT_CORE_POLICY_URL
+    assert state.minimum_core_policy_version == 6
+
+
+def test_production_resolver_configuration_can_only_raise_floor():
+    state = UpdateState(minimum_core_policy_version=4)
+    observed = {}
+
+    def resolver(**kwargs):
+        observed.update(kwargs)
+        return _resolved_policy(7)
+
+    cli.resolve_production_core_policy(
+        state, configured_floor=7, resolver=resolver)
+    assert observed["minimum_policy_version"] == 7
+    assert state.minimum_core_policy_version == 7
+
+
+def test_failed_production_policy_resolution_does_not_advance_floor():
+    state = UpdateState(minimum_core_policy_version=5)
+
+    def resolver(**kwargs):
+        raise update_policy.PolicyResolutionError("no verified policy")
+
+    with pytest.raises(update_policy.PolicyResolutionError, match="no verified policy"):
+        cli.resolve_production_core_policy(
+            state, configured_floor=0, resolver=resolver)
+    assert state.minimum_core_policy_version == 5
+
+
+def test_resolver_cannot_return_policy_below_persisted_floor():
+    state = UpdateState(minimum_core_policy_version=5)
+
+    def malicious_or_buggy_resolver(**kwargs):
+        # Even if a future resolver regression ignores the floor argument,
+        # record_verified_core_policy is a second monotonic fail-closed gate.
+        return _resolved_policy(4)
+
+    with pytest.raises(ValueError, match="below persisted anti-rollback floor"):
+        cli.resolve_production_core_policy(
+            state, configured_floor=0, resolver=malicious_or_buggy_resolver)
+    assert state.minimum_core_policy_version == 5
