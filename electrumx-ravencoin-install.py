@@ -21,6 +21,12 @@ Ravencoin Node Monitor is offered by default and remains unprivileged. Its
 optional root-owned host controller is a separate explicit opt-in security
 domain; the monitor never receives the Docker socket or CAP_NET_ADMIN.
 
+The Core certification policy has an independent, pinned Ed25519 trust root.
+A release manifest is accepted only when its exact RavenProject Core commit,
+policy version and certification report digest are present as KNOWN_SAFE in
+that signed policy. The release signer therefore cannot substitute both a Core
+policy and its key inside the release bundle.
+
 This source-tree copy intentionally contains no production release public key.
 The reviewed release packaging step injects the public key created by the
 separate update-signing key ceremony. Without it this development installer
@@ -51,6 +57,7 @@ from typing import Callable, Optional, Sequence
 
 VERSION = "0.3.0"
 SIGNATURE_DOMAIN = b"ALENOC-RVN-ELECTRUMX-UPDATE-MANIFEST-v1\x00"
+CORE_POLICY_SIGNATURE_DOMAIN = b"ALENOC-RVN-CORE-POLICY-v1\x00"
 SIGNATURE_ALGORITHM = "ed25519"
 
 REQUIRED_MANIFEST_FIELDS = (
@@ -66,6 +73,13 @@ REQUIRED_MANIFEST_FIELDS = (
 # dedicated release/update signing-key ceremony. Never place a private key here.
 RELEASE_PUBLIC_KEY_HEX = ""
 
+# Independent Core-policy trust root. This public key is already ceremonied and
+# is intentionally pinned in the single-file bootstrap rather than learned from
+# the release bundle. The bundle must contain the same key byte-for-byte.
+PRODUCTION_CORE_POLICY_PUBLIC_KEY_HEX = (
+    "9fc91edbe763513490248a23ae97575a6b963101b644e01493a3860b99e35648"
+)
+
 REPO = "ALENOC/electrumx-ravencoin"
 RELEASE_BASE = f"https://github.com/{REPO}/releases/latest/download"
 MANIFEST_URL = f"{RELEASE_BASE}/release-manifest.json"
@@ -75,6 +89,7 @@ BUNDLE_METADATA = "release-install-metadata.json"
 
 DEFAULT_INSTALL_DIR = "electrumx-ravencoin"
 INSTALL_MARKER = ".electrumx-ravencoin-installed.json"
+COMPOSE_PROJECT_NAME = "electrumx-ravencoin"
 MONITOR_PATH = "vendor/ravencoin-node-monitor"
 MONITOR_ENV = f"{MONITOR_PATH}/.env"
 MONITOR_OVERLAY = "compose.monitor.yaml"
@@ -153,7 +168,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
                              "release bundle built by "
                              "core-safety/scripts/build_local_release_validation_bundle.py "
                              "instead of the real GitHub release. Never use this for a real "
-                             "install; it never touches the production trust root.")
+                             "install; it never touches the production trust roots.")
     return parser
 
 
@@ -213,7 +228,7 @@ def controller_prerequisites(*, require_sudo: bool = True) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Signed release manifest
+# Signed release manifest and independent Core policy
 # ---------------------------------------------------------------------------
 
 def canonical_bytes(body: dict) -> bytes:
@@ -222,9 +237,15 @@ def canonical_bytes(body: dict) -> bytes:
         ensure_ascii=True).encode("utf-8")
 
 
+def core_policy_canonical_bytes(body: dict) -> bytes:
+    return CORE_POLICY_SIGNATURE_DOMAIN + json.dumps(
+        body, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=True).encode("utf-8")
+
+
 def key_id_for(public_bytes: bytes) -> str:
     if len(public_bytes) != 32:
-        raise InstallError("release public key must be exactly 32 bytes")
+        raise InstallError("public key must be exactly 32 bytes")
     return hashlib.sha256(public_bytes).hexdigest()[:16]
 
 
@@ -238,7 +259,15 @@ def require_release_public_key(value: str = RELEASE_PUBLIC_KEY_HEX) -> bytes:
     return bytes.fromhex(value)
 
 
-def _verify_ed25519(public_bytes: bytes, signature: bytes, message: bytes) -> None:
+def require_core_policy_public_key(value: str) -> bytes:
+    value = (value or "").strip()
+    if not HEX_KEY_RE.fullmatch(value):
+        raise InstallError("pinned safe-Core policy public key is malformed")
+    return bytes.fromhex(value)
+
+
+def _verify_ed25519(public_bytes: bytes, signature: bytes, message: bytes,
+                    *, what: str = "release manifest") -> None:
     try:
         from cryptography.exceptions import InvalidSignature
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -260,12 +289,12 @@ def _verify_ed25519(public_bytes: bytes, signature: bytes, message: bytes) -> No
                 "-sigfile", str(tmp_path / "signature.bin"),
             ], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if completed.returncode != 0:
-                raise InstallError("release manifest signature does not verify")
+                raise InstallError(f"{what} signature does not verify")
         return
     try:
         Ed25519PublicKey.from_public_bytes(public_bytes).verify(signature, message)
     except (InvalidSignature, ValueError) as exc:
-        raise InstallError("release manifest signature does not verify") from exc
+        raise InstallError(f"{what} signature does not verify") from exc
 
 
 def _manifest_architectures(value) -> set[str]:
@@ -366,6 +395,95 @@ def verify_manifest_signature(document: dict, public_key_hex: str) -> dict:
         raise InstallError("release manifest signature has the wrong length")
     _verify_ed25519(public_bytes, raw_signature, canonical_bytes(body))
     validate_manifest_body(body)
+    return body
+
+
+def verify_safe_core_policy(document: dict, release_body: dict,
+                            public_key_hex: str) -> dict:
+    """Verify the independent safe-Core policy and bind it to the release.
+
+    The policy key is supplied by the bootstrap trust root (production) or by
+    the explicit local-validation directory (non-production), never learned
+    from the bundle being authenticated.
+    """
+    public_bytes = require_core_policy_public_key(public_key_hex)
+    if not isinstance(document, dict) or set(document) != {"policy", "signature"}:
+        raise InstallError("safe-Core policy document is malformed")
+    body = document.get("policy")
+    signature = document.get("signature")
+    if not isinstance(body, dict) or not isinstance(signature, dict) or \
+            set(signature) != {"algorithm", "keyId", "value"}:
+        raise InstallError("safe-Core policy signature object is malformed")
+    if signature.get("algorithm") != SIGNATURE_ALGORITHM:
+        raise InstallError("safe-Core policy signature algorithm is unsupported")
+    if signature.get("keyId") != key_id_for(public_bytes):
+        raise InstallError("safe-Core policy keyId does not match pinned public key")
+    try:
+        raw_signature = base64.b64decode(signature.get("value", ""), validate=True)
+    except (ValueError, TypeError) as exc:
+        raise InstallError("safe-Core policy signature is not valid base64") from exc
+    if len(raw_signature) != 64:
+        raise InstallError("safe-Core policy signature has the wrong length")
+    _verify_ed25519(
+        public_bytes, raw_signature, core_policy_canonical_bytes(body),
+        what="safe-Core policy")
+
+    if body.get("schemaVersion") != 1:
+        raise InstallError("safe-Core policy schemaVersion is unsupported")
+    version = body.get("policyVersion")
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        raise InstallError("safe-Core policyVersion is malformed")
+    if version != release_body.get("safeCorePolicyVersion"):
+        raise InstallError("release manifest and safe-Core policy versions disagree")
+    if not isinstance(body.get("safetyProfile"), str) or not body["safetyProfile"]:
+        raise InstallError("safe-Core policy safetyProfile is malformed")
+
+    expires_at = body.get("expiresAt")
+    if expires_at is not None:
+        try:
+            expiry = datetime.datetime.fromisoformat(expires_at)
+        except (TypeError, ValueError) as exc:
+            raise InstallError("safe-Core policy expiresAt is malformed") from exc
+        if expiry.tzinfo is None:
+            raise InstallError("safe-Core policy expiresAt must include a timezone")
+        if datetime.datetime.now(datetime.timezone.utc) > expiry:
+            raise InstallError("safe-Core policy has expired")
+
+    releases = body.get("releases")
+    if not isinstance(releases, list):
+        raise InstallError("safe-Core policy releases must be a list")
+    seen = set()
+    matches = []
+    for entry in releases:
+        if not isinstance(entry, dict):
+            raise InstallError("safe-Core policy release entry is malformed")
+        repository = entry.get("repository")
+        commit = entry.get("commit")
+        status = entry.get("status")
+        if not isinstance(repository, str) or not COMMIT_RE.fullmatch(str(commit or "")):
+            raise InstallError("safe-Core policy release identity is malformed")
+        identity = (repository, commit)
+        if identity in seen:
+            raise InstallError("safe-Core policy contains duplicate release identity")
+        seen.add(identity)
+        if status == "KNOWN_SAFE" and repository != "RavenProject/Ravencoin":
+            raise InstallError("safe-Core policy trusts a non-RavenProject Core source")
+        if identity == (release_body["coreRepository"], release_body["coreCommit"]):
+            matches.append(entry)
+
+    if len(matches) != 1:
+        raise InstallError("safe-Core policy does not uniquely certify the manifest Core commit")
+    entry = matches[0]
+    if entry.get("status") != "KNOWN_SAFE":
+        raise InstallError("manifest Core commit is not KNOWN_SAFE in the signed policy")
+    if entry.get("version") != release_body["coreVersion"]:
+        raise InstallError("safe-Core policy Core version disagrees with manifest")
+    if entry.get("tag") != release_body["coreTag"]:
+        raise InstallError("safe-Core policy Core tag disagrees with manifest")
+    if entry.get("reportDigest") != release_body["certificationReportDigest"]:
+        raise InstallError("safe-Core certification report digest disagrees with manifest")
+    if (entry.get("certification") or {}).get("result") != "PASS":
+        raise InstallError("safe-Core policy entry lacks passing certification evidence")
     return body
 
 
@@ -487,7 +605,8 @@ def _validate_metadata(metadata: dict, body: dict) -> None:
 
 
 def validate_bundle(data: bytes, body: dict,
-                    public_key_hex: str = RELEASE_PUBLIC_KEY_HEX) -> dict:
+                    public_key_hex: str = RELEASE_PUBLIC_KEY_HEX,
+                    core_policy_public_key_hex: Optional[str] = None) -> dict:
     verify_digest(data, body["artifactDigest"], "release bundle")
     if len(data) > MAX_BUNDLE_BYTES:
         raise InstallError("release bundle exceeds size limit")
@@ -526,12 +645,27 @@ def validate_bundle(data: bytes, body: dict,
             raise InstallError("bundle installation metadata is invalid JSON") from exc
         _validate_metadata(metadata, body)
 
-        # The release public key embedded in this bootstrap file must be exactly
-        # the public key installed for future electrumx-update checks.
+        # The update key embedded in this bootstrap file must be exactly the key
+        # installed for future electrumx-update checks.
         embedded = require_release_public_key(public_key_hex).hex()
         bundled_key = _archive_text(archive, UPDATE_PUBLIC_KEY_PATH).strip()
         if bundled_key != embedded:
             raise InstallError("bundle updater public key differs from installer trust root")
+
+        # The Core-policy key is a second, independent trust root. Never trust a
+        # key merely because the release bundle contains it.
+        trusted_core_key = (
+            core_policy_public_key_hex or PRODUCTION_CORE_POLICY_PUBLIC_KEY_HEX
+        ).strip()
+        require_core_policy_public_key(trusted_core_key)
+        bundled_core_key = _archive_text(archive, CORE_POLICY_PUBLIC_KEY_PATH).strip()
+        if bundled_core_key != trusted_core_key:
+            raise InstallError("bundle safe-Core policy key differs from pinned trust root")
+        try:
+            core_policy_document = json.loads(_archive_text(archive, CORE_POLICY_PATH))
+        except json.JSONDecodeError as exc:
+            raise InstallError("bundle safe-Core policy is invalid JSON") from exc
+        verify_safe_core_policy(core_policy_document, body, trusted_core_key)
 
         compose = _archive_text(archive, BASE_COMPOSE)
         if f"RAVENCOIN_SOURCE_COMMIT: {body['coreCommit']}" not in compose:
@@ -588,44 +722,43 @@ def extract_bundle(data: bytes, destination: Path) -> None:
 
 
 def fetch_and_verify_bundle(body: dict, fetch: Callable[[str], bytes] = None,
-                            public_key_hex: str = RELEASE_PUBLIC_KEY_HEX) -> tuple[bytes, dict]:
+                            public_key_hex: str = RELEASE_PUBLIC_KEY_HEX,
+                            core_policy_public_key_hex: Optional[str] = None) -> tuple[bytes, dict]:
     data = (fetch(BUNDLE_URL) if fetch is not None
             else fetch_bytes(BUNDLE_URL, max_bytes=MAX_BUNDLE_BYTES, timeout=180))
-    metadata = validate_bundle(data, body, public_key_hex=public_key_hex)
+    metadata = validate_bundle(
+        data, body, public_key_hex=public_key_hex,
+        core_policy_public_key_hex=core_policy_public_key_hex)
     return data, metadata
 
 
 # ---------------------------------------------------------------------------
 # NON-PRODUCTION local release validation
-#
-# This block exists only to let a developer run this same installer, through
-# the same signature/manifest/digest/bundle verification code paths used for
-# a real release, against a locally built and ephemeral-key-signed bundle
-# before any production release exists. It never reads or writes
-# RELEASE_PUBLIC_KEY_HEX, never writes into the repository, and is only
-# reachable through the explicit --local-release-validation-dir flag. See
-# core-safety/scripts/build_local_release_validation_bundle.py, which builds
-# the directory this reads and prints the exact command line to use it.
 # ---------------------------------------------------------------------------
 
 LOCAL_VALIDATION_MANIFEST_FILE = "manifest.json"
 LOCAL_VALIDATION_BUNDLE_FILE = "bundle.tar.gz"
 LOCAL_VALIDATION_PUBLIC_KEY_FILE = "public-key.hex"
+LOCAL_VALIDATION_CORE_POLICY_PUBLIC_KEY_FILE = "core-policy-public-key.hex"
 
 
 def load_local_release_validation(directory: Path) -> tuple[
-        str, Callable[[str], bytes], Callable[[str], bytes]]:
+        str, str, Callable[[str], bytes], Callable[[str], bytes]]:
     directory = directory.expanduser().resolve()
     manifest_path = directory / LOCAL_VALIDATION_MANIFEST_FILE
     bundle_path = directory / LOCAL_VALIDATION_BUNDLE_FILE
     key_path = directory / LOCAL_VALIDATION_PUBLIC_KEY_FILE
-    for path in (manifest_path, bundle_path, key_path):
+    core_key_path = directory / LOCAL_VALIDATION_CORE_POLICY_PUBLIC_KEY_FILE
+    for path in (manifest_path, bundle_path, key_path, core_key_path):
         if not path.is_file():
             raise InstallError(
                 f"local release validation directory is missing {path.name}: {path}")
     public_key_hex = key_path.read_text(encoding="utf-8").strip()
+    core_policy_public_key_hex = core_key_path.read_text(encoding="utf-8").strip()
     if not HEX_KEY_RE.fullmatch(public_key_hex):
         raise InstallError("local release validation public key is malformed")
+    if not HEX_KEY_RE.fullmatch(core_policy_public_key_hex):
+        raise InstallError("local safe-Core policy validation key is malformed")
 
     def manifest_fetch(_url: str) -> bytes:
         return manifest_path.read_bytes()
@@ -633,15 +766,15 @@ def load_local_release_validation(directory: Path) -> tuple[
     def bundle_fetch(_url: str) -> bytes:
         return bundle_path.read_bytes()
 
-    return public_key_hex, manifest_fetch, bundle_fetch
+    return public_key_hex, core_policy_public_key_hex, manifest_fetch, bundle_fetch
 
 
 def print_local_validation_banner(directory: Path) -> None:
     print("=" * 72, file=sys.stderr)
     print("NON-PRODUCTION LOCAL RELEASE VALIDATION MODE", file=sys.stderr)
-    print(f"Trust root: ephemeral key from {directory}", file=sys.stderr)
-    print("This is NOT the production release trust root and must never be", file=sys.stderr)
-    print("used for a real install.", file=sys.stderr)
+    print(f"Trust roots: two ephemeral public keys from {directory}", file=sys.stderr)
+    print("These are NOT the production release/Core-policy trust roots and", file=sys.stderr)
+    print("must never be used for a real install.", file=sys.stderr)
     print("=" * 72, file=sys.stderr)
 
 
@@ -768,6 +901,37 @@ def _compose_prefix(files: Sequence[str]) -> list[str]:
     for filename in files:
         result += ["-f", filename]
     return result
+
+
+def _docker_project_resources() -> dict[str, list[str]]:
+    """Return existing Compose-labelled runtime state for this fixed project.
+
+    A fresh installer must never silently inherit named volumes from an aborted
+    or unrelated run. We fail before activation if anything already exists.
+    """
+    label = f"label=com.docker.compose.project={COMPOSE_PROJECT_NAME}"
+    commands = {
+        "containers": ["docker", "ps", "-a", "--filter", label, "--format", "{{.Names}}"],
+        "volumes": ["docker", "volume", "ls", "--filter", label, "--format", "{{.Name}}"],
+        "networks": ["docker", "network", "ls", "--filter", label, "--format", "{{.Name}}"],
+    }
+    result = {}
+    for kind, command in commands.items():
+        completed = subprocess.run(command, check=False, capture_output=True, text=True)
+        if completed.returncode != 0:
+            raise InstallError(f"cannot inspect existing Docker {kind} for fresh install")
+        result[kind] = [line for line in completed.stdout.splitlines() if line.strip()]
+    return result
+
+
+def require_clean_docker_project_runtime() -> None:
+    resources = _docker_project_resources()
+    present = [f"{kind}={','.join(values)}" for kind, values in resources.items() if values]
+    if present:
+        raise InstallError(
+            "fresh install refuses existing Docker resources for project "
+            f"{COMPOSE_PROJECT_NAME!r}: {'; '.join(present)}; remove or preserve them "
+            "explicitly before retrying so no old blockchain/database state is reused")
 
 
 def _sudo_prefix() -> list[str]:
@@ -925,6 +1089,12 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
         controller_prerequisites(require_sudo=True)
         controller_unit_body(target)
 
+    # compose.yaml intentionally has a fixed project name because monitor and
+    # controller isolation reference deterministic container names. Therefore a
+    # fresh install must prove that no old project runtime exists before it can
+    # create named volumes.
+    require_clean_docker_project_runtime()
+
     parent = target.parent.resolve()
     parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".electrumx-ravencoin-install-", dir=parent))
@@ -939,8 +1109,8 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
             write_monitor_env(staging)
         run_checked(base + ["config", "--quiet"], cwd=staging)
 
-        # Build before activation; target still does not exist and the old host
-        # state is untouched. This also catches architecture/toolchain failures.
+        # Build before activation; target still does not exist and no named
+        # volumes have been created. This catches architecture/toolchain errors.
         run_checked(base + ["build"], cwd=staging)
 
         os.replace(staging, target)
@@ -948,7 +1118,22 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
         if controller:
             install_controller(target)
             controller_installed = True
-        run_checked(base + ["up", "-d", "--no-build"], cwd=target)
+        try:
+            run_checked(base + ["up", "-d", "--no-build"], cwd=target)
+        except InstallError as exc:
+            if bootstrap == "chainstrap":
+                # Preserve the useful service output before the failed run is
+                # torn down. Do not silently change the user's trust/transport
+                # choice by falling back to P2P.
+                subprocess.run(
+                    base + ["logs", "--no-color", "--tail", "200", "chainstrap-bootstrap"],
+                    cwd=target, check=False)
+                raise InstallError(
+                    "ChainStrap bootstrap failed; automatic P2P fallback is intentionally "
+                    "disabled. This failed fresh run will be removed. Review the log above "
+                    "and retry explicitly with --p2p-bootstrap if traditional sync is desired"
+                ) from exc
+            raise
 
         # Marker/state are commit records and are written only after Compose
         # accepted the final release directory and the optional controller was
@@ -959,8 +1144,13 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
         write_initial_update_state(target, body)
     except BaseException:
         if moved and target.exists():
-            subprocess.run(base + ["down"], cwd=target, check=False,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # The preflight proved this project had no runtime resources before
+            # this attempt, so volumes now carrying this project label belong to
+            # the failed fresh run and are safe to remove. This prevents a retry
+            # from silently inheriting a partial blockchain/ElectrumX database.
+            subprocess.run(
+                base + ["down", "--volumes", "--remove-orphans"], cwd=target,
+                check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if controller_installed:
             uninstall_controller_best_effort()
         if state_dir.exists():
@@ -990,10 +1180,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.local_release_validation_dir:
             validation_dir = Path(args.local_release_validation_dir)
             print_local_validation_banner(validation_dir)
-            public_key_hex, manifest_fetch, bundle_fetch = \
+            public_key_hex, core_policy_public_key_hex, manifest_fetch, bundle_fetch = \
                 load_local_release_validation(validation_dir)
         else:
             public_key_hex = RELEASE_PUBLIC_KEY_HEX
+            core_policy_public_key_hex = PRODUCTION_CORE_POLICY_PUBLIC_KEY_HEX
             manifest_fetch = None
             bundle_fetch = None
 
@@ -1002,7 +1193,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         verify_architecture(body, architecture)
         verify_running_installer(body)
         bundle, metadata = fetch_and_verify_bundle(
-            body, fetch=bundle_fetch, public_key_hex=public_key_hex)
+            body, fetch=bundle_fetch, public_key_hex=public_key_hex,
+            core_policy_public_key_hex=core_policy_public_key_hex)
 
         print(
             f"verified ElectrumX {body['electrumxVersion']} release bundle; "
