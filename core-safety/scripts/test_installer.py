@@ -44,7 +44,7 @@ def signed_document(key_pair, *, artifact_digest="sha256:" + "a" * 64,
         core_repository=core_repository,
         core_tag="v4.8.0",
         core_commit=CORE_COMMIT,
-        certification_report_digest="sha256:" + "e" * 64,
+        certification_report_digest="e" * 64,
         safe_core_policy_version=3,
         required_updater_version="1.0.0",
         config_compatibility={},
@@ -78,17 +78,33 @@ def bundle_files():
             "RAVENCOIN_SOURCE_REPOSITORY: RavenProject/Ravencoin\n"
         ).encode(),
         "compose.chainstrap.yaml": b"network_mode: none\n",
-        "compose.monitor.yaml": b"services:\n  monitor: {}\n",
+        "compose.monitor.yaml": (
+            b"services:\n  monitor:\n"
+            b"    security_opt:\n      - no-new-privileges:true\n"
+            b"    cap_drop:\n      - ALL\n"
+            b'    ports:\n      - "127.0.0.1:8899:8899/tcp"\n'
+        ),
         "setup.sh": b"#!/bin/sh\nexit 0\n",
         ".env.example": b"EXAMPLE=1\n",
         "docker/core/bootstrap-reindex.sh": (
-            b"#!/bin/sh\nravend -connect=0\n"
+            b"#!/bin/sh\nravend -connect=0\nravend -connect=0\n"
             b"raven-cli getbestblockhash\nraven-cli getblockhash 1\n"
+            b"raven-cli listassets\nraven-cli getassetdata\n"
+            b"raven-cli listaddressesbyasset\n"
         ),
         "release-install-metadata.json": (
             json.dumps(metadata, sort_keys=True) + "\n").encode(),
         "vendor/ravencoin-node-monitor/Dockerfile": b"FROM scratch\n",
         "vendor/ravencoin-node-monitor/.env.example": b"BIND_PORT=8899\n",
+        "vendor/ravencoin-node-monitor/contrib/ravencoin-bandwidth-controller.py": b"#!/usr/bin/env python3\n",
+        "compose.monitor-controller.yaml": (
+            b"services:\n  controller:\n"
+            b"    volumes:\n"
+            b"      - /run/ravencoin-bandwidth:/run/ravencoin-bandwidth:ro\n"
+        ),
+        "core-safety/production/update-signing-public-key.hex": b"a" * 64,
+        "core-safety/production/safe-core-policy.json": b"{}\n",
+        "core-safety/production/core-policy-signing-public-key.hex": b"b" * 64,
     }
 
 
@@ -145,7 +161,7 @@ def test_valid_bundle_is_bound_to_manifest_and_monitor_identity():
         um.generate_keypair(),
         artifact_digest="sha256:" + hashlib.sha256(data).hexdigest())
     body = installer.verify_manifest_signature(document, public_bytes.hex())
-    metadata = installer.validate_bundle(data, body)
+    metadata = installer.validate_bundle(data, body, public_key_hex="a" * 64)
     assert metadata["nodeMonitor"]["commit"] == MONITOR_COMMIT
 
 
@@ -154,7 +170,7 @@ def test_bundle_with_wrong_digest_is_refused():
     document, public_bytes = signed_document(um.generate_keypair())
     body = installer.verify_manifest_signature(document, public_bytes.hex())
     with pytest.raises(installer.InstallError, match="SHA-256 mismatch"):
-        installer.validate_bundle(data, body)
+        installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
 def test_bundle_path_traversal_is_refused_even_when_digest_matches():
@@ -166,7 +182,7 @@ def test_bundle_path_traversal_is_refused_even_when_digest_matches():
         artifact_digest="sha256:" + hashlib.sha256(data).hexdigest())
     body = installer.verify_manifest_signature(document, public_bytes.hex())
     with pytest.raises(installer.InstallError, match="unsafe bundle path"):
-        installer.validate_bundle(data, body)
+        installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
 def test_bundle_symlink_is_refused_even_when_digest_matches():
@@ -179,7 +195,7 @@ def test_bundle_symlink_is_refused_even_when_digest_matches():
         artifact_digest="sha256:" + hashlib.sha256(data).hexdigest())
     body = installer.verify_manifest_signature(document, public_bytes.hex())
     with pytest.raises(installer.InstallError, match="forbidden"):
-        installer.validate_bundle(data, body)
+        installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
 def test_bundle_core_identity_must_match_signed_manifest():
@@ -192,7 +208,7 @@ def test_bundle_core_identity_must_match_signed_manifest():
         artifact_digest="sha256:" + hashlib.sha256(data).hexdigest())
     body = installer.verify_manifest_signature(document, public_bytes.hex())
     with pytest.raises(installer.InstallError, match="Core commit"):
-        installer.validate_bundle(data, body)
+        installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
 def test_chainstrap_exact_tip_gate_is_required_by_installer():
@@ -203,8 +219,8 @@ def test_chainstrap_exact_tip_gate_is_required_by_installer():
         um.generate_keypair(),
         artifact_digest="sha256:" + hashlib.sha256(data).hexdigest())
     body = installer.verify_manifest_signature(document, public_bytes.hex())
-    with pytest.raises(installer.InstallError, match="exact-tip"):
-        installer.validate_bundle(data, body)
+    with pytest.raises(installer.InstallError, match="offline isolation"):
+        installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
 def test_safe_extract_writes_no_path_outside_destination(tmp_path):
@@ -252,7 +268,7 @@ def test_existing_destination_is_never_overwritten(tmp_path):
     with pytest.raises(installer.InstallError, match="refusing to overwrite"):
         installer.install_fresh(
             target, b"not-used", body={}, metadata={},
-            bootstrap="chainstrap", monitor=False)
+            bootstrap="chainstrap", monitor=False, controller=False)
 
 
 def test_architecture_detection():
