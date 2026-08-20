@@ -15,6 +15,20 @@ The detached signature and pinned public-key metadata are published beside the
 policy for auditability. The inline signature in the JSON is authoritative for
 client verification.
 
-Policy v1 is retained as historical evidence. The current policy is v2 because
-the immutable profile revision and digest were added to the signed certification
-metadata.
+Policy v1 and v2 are retained as immutable historical evidence. The currently
+published ``safe-core-policy.json`` is still signed policy v2 and therefore is
+not the final RavenProject-only production policy. The reviewed
+``safe-core-policy-v3.unsigned.json`` candidate revokes the historical
+``2miners/Ravencoin`` identity and certifies the exact official
+``RavenProject/Ravencoin`` v4.8.0 commit used by ``compose.yaml``; it must remain
+unsigned/non-current until the protected Core-policy signing procedure signs
+that exact body and the resulting document is reviewed and promoted.
+
+The single-file installer pins the Core-policy public key independently from
+the ElectrumX release/update key. It rejects a release unless the bundled
+policy verifies under that pinned key and the manifest's exact Core repository,
+commit, tag, version, policy version and certification report digest all match
+one ``KNOWN_SAFE`` policy entry. Until signed policy v3 is promoted, a real
+production release for the RavenProject Core pin is therefore expected to fail
+closed. Local end-to-end validation uses explicitly non-production ephemeral
+keys and cannot promote or replace either production trust root.
