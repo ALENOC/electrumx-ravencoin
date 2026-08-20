@@ -44,7 +44,7 @@ def _signed_manifest(key_pair, *, core_commit="c" * 40, architecture="linux/amd6
                      artifact_digest="sha256:deadbeef", channel="stable",
                      electrumx_version="1.3.0", rollback_safe=True,
                      consensus_impact=False, cert_digest="sha256:cert",
-                     db_schema=1):
+                     db_schema=1, auto_update_eligible=True):
         private_key, public_bytes = key_pair
         body = um.build_manifest(
             electrumx_version=electrumx_version, channel=channel,
@@ -55,6 +55,9 @@ def _signed_manifest(key_pair, *, core_commit="c" * 40, architecture="linux/amd6
             required_updater_version="1.0.0", config_compatibility={},
             db_compatibility={"schemaVersion": db_schema},
             rollback_safe=rollback_safe, consensus_impact=consensus_impact,
+            auto_update_eligible=auto_update_eligible and not consensus_impact,
+            installer_filename="electrumx-ravencoin-install.py",
+            installer_digest="sha256:" + "1" * 64,
         )
         key_id = um.key_id_for(public_bytes)
         return um.sign_manifest(body, private_key, key_id=key_id), key_id, public_bytes
@@ -178,6 +181,9 @@ class VerificationTests(unittest.TestCase):
                 db_compatibility={"schemaVersion": 2,
                                   "migration": {"reversible": False}},
                 rollback_safe=True, consensus_impact=False,
+                auto_update_eligible=False,
+                installer_filename="electrumx-ravencoin-install.py",
+                installer_digest="sha256:" + "1" * 64,
             )
 
 
