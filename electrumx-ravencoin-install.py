@@ -2,23 +2,24 @@
 # Copyright (c) 2026, the ElectrumX-RVN community maintainers
 # The MIT License (MIT). See LICENCE for details.
 
-"""Single-file bootstrap installer for ElectrumX-Ravencoin.
+"""Single-file verified bootstrap installer for ElectrumX-Ravencoin.
 
-Recommended use:
+Recommended use::
 
     curl -fL -O https://github.com/ALENOC/electrumx-ravencoin/releases/latest/download/electrumx-ravencoin-install.py
     python3 electrumx-ravencoin-install.py
 
 Never pipe the download directly into Python or a shell. This file is the
-initial bootstrap trust anchor and should remain inspectable before execution.
-After it starts, every release-controlled byte used for installation comes from
-one SHA-256-pinned bundle whose digest is covered by a dedicated Ed25519 release
+initial bootstrap trust anchor and remains inspectable before execution. After
+it starts, every release-controlled byte used for installation comes from one
+SHA-256-pinned bundle whose digest is covered by the dedicated Ed25519 release
 manifest signature.
 
 Fresh bundled-Core installations use ChainStrap Fast Verified Bootstrap by
-default. The operator may explicitly select traditional P2P synchronization.
-The optional Ravencoin Node Monitor is vendored into the same signed bundle at
-one exact reviewed commit; the installer never clones a mutable branch head.
+default. Traditional P2P synchronization is an explicit alternative. The
+Ravencoin Node Monitor is offered by default and remains unprivileged. Its
+optional root-owned host controller is a separate explicit opt-in security
+domain; the monitor never receives the Docker socket or CAP_NET_ADMIN.
 
 This source-tree copy intentionally contains no production release public key.
 The reviewed release packaging step injects the public key created by the
@@ -30,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import datetime
 import hashlib
 import io
 import json
@@ -47,34 +49,21 @@ import urllib.request
 from pathlib import Path, PurePosixPath
 from typing import Callable, Optional, Sequence
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 SIGNATURE_DOMAIN = b"ALENOC-RVN-ELECTRUMX-UPDATE-MANIFEST-v1\x00"
 SIGNATURE_ALGORITHM = "ed25519"
 
 REQUIRED_MANIFEST_FIELDS = (
-    "electrumxVersion",
-    "channel",
-    "releaseTimestamp",
-    "artifactDigest",
-    "architecture",
-    "coreVersion",
-    "coreRepository",
-    "coreTag",
-    "coreCommit",
-    "certificationReportDigest",
-    "safeCorePolicyVersion",
-    "requiredUpdaterVersion",
-    "configCompatibility",
-    "dbCompatibility",
-    "rollbackSafe",
-    "consensusImpact",
-    "autoUpdateEligible",
-    "installerFilename",
-    "installerDigest",
+    "electrumxVersion", "channel", "releaseTimestamp", "artifactDigest",
+    "architecture", "coreVersion", "coreRepository", "coreTag", "coreCommit",
+    "certificationReportDigest", "safeCorePolicyVersion",
+    "requiredUpdaterVersion", "configCompatibility", "dbCompatibility",
+    "rollbackSafe", "consensusImpact", "autoUpdateEligible",
+    "installerFilename", "installerDigest",
 )
 
-# Populated only by the reviewed release-packaging job after the dedicated
-# release/update signing-key ceremony. Never put a private key in this file.
+# Injected only by the reviewed release-candidate packaging job after the
+# dedicated release/update signing-key ceremony. Never place a private key here.
 RELEASE_PUBLIC_KEY_HEX = ""
 
 REPO = "ALENOC/electrumx-ravencoin"
@@ -89,30 +78,46 @@ INSTALL_MARKER = ".electrumx-ravencoin-installed.json"
 MONITOR_PATH = "vendor/ravencoin-node-monitor"
 MONITOR_ENV = f"{MONITOR_PATH}/.env"
 MONITOR_OVERLAY = "compose.monitor.yaml"
+MONITOR_CONTROLLER_OVERLAY = "compose.monitor-controller.yaml"
+CONTROLLER_SCRIPT = f"{MONITOR_PATH}/contrib/ravencoin-bandwidth-controller.py"
+CONTROLLER_UNIT = "electrumx-ravencoin-monitor-controller.service"
 CHAINSTRAP_OVERLAY = "compose.chainstrap.yaml"
 BASE_COMPOSE = "compose.yaml"
+UPDATE_PUBLIC_KEY_PATH = "core-safety/production/update-signing-public-key.hex"
+CORE_POLICY_PATH = "core-safety/production/safe-core-policy.json"
+CORE_POLICY_PUBLIC_KEY_PATH = "core-safety/production/core-policy-signing-public-key.hex"
 
 SUPPORTED_ARCHITECTURES = ("amd64", "arm64")
+SUPPORTED_MANIFEST_ARCHITECTURES = ("linux/amd64", "linux/arm64")
 MIN_PYTHON = (3, 9)
 MAX_MANIFEST_BYTES = 2 * 1024 * 1024
-MAX_BUNDLE_BYTES = 256 * 1024 * 1024
+MAX_BUNDLE_BYTES = 1024 * 1024 * 1024
 MAX_BUNDLE_FILES = 8192
 MAX_BUNDLE_FILE_BYTES = 256 * 1024 * 1024
 MAX_BUNDLE_EXTRACTED_BYTES = 768 * 1024 * 1024
 SHA256_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
+RAW_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 HEX_KEY_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+TAG_RE = re.compile(r"^[A-Za-z0-9._/-]{1,100}$")
+VERSION_RE = re.compile(r"^[0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9._-]+)?$")
+SAFE_CONTROLLER_ROOT_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
 
 REQUIRED_BUNDLE_PATHS = frozenset({
     BASE_COMPOSE,
     CHAINSTRAP_OVERLAY,
     MONITOR_OVERLAY,
+    MONITOR_CONTROLLER_OVERLAY,
     "setup.sh",
     ".env.example",
     "docker/core/bootstrap-reindex.sh",
     BUNDLE_METADATA,
+    UPDATE_PUBLIC_KEY_PATH,
+    CORE_POLICY_PATH,
+    CORE_POLICY_PUBLIC_KEY_PATH,
     f"{MONITOR_PATH}/Dockerfile",
     f"{MONITOR_PATH}/.env.example",
+    CONTROLLER_SCRIPT,
 })
 
 
@@ -136,11 +141,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--chainstrap", action="store_true",
                         help="Fast Verified Bootstrap (fresh-install default)")
     parser.add_argument("--p2p-bootstrap", action="store_true",
-                        help="traditional Ravencoin P2P blockchain synchronization")
+                        help="traditional Ravencoin P2P synchronization")
     parser.add_argument("--with-monitor", action="store_true",
-                        help="install the bundled Ravencoin Node Monitor")
+                        help="install the pinned Ravencoin Node Monitor")
     parser.add_argument("--without-monitor", action="store_true",
-                        help="do not install the bundled Ravencoin Node Monitor")
+                        help="do not install the Ravencoin Node Monitor")
+    parser.add_argument("--with-monitor-controller", action="store_true",
+                        help="explicitly install the root-owned bandwidth/connection controller")
     return parser
 
 
@@ -151,14 +158,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         parser.error("--chainstrap and --p2p-bootstrap are mutually exclusive")
     if args.with_monitor and args.without_monitor:
         parser.error("--with-monitor and --without-monitor are mutually exclusive")
+    if args.with_monitor_controller and args.without_monitor:
+        parser.error("--with-monitor-controller requires the Node Monitor")
     return args
 
 
 def check_python_version(version_info=None) -> None:
     version_info = version_info if version_info is not None else sys.version_info
     if (version_info[0], version_info[1]) < MIN_PYTHON:
-        raise InstallError(
-            f"Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ is required")
+        raise InstallError(f"Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ is required")
 
 
 def detect_architecture(machine: Optional[str] = None) -> str:
@@ -180,17 +188,22 @@ def require_command(name: str) -> str:
 
 def compose_command() -> list[str]:
     require_command("docker")
-    result = subprocess.run(
-        ["docker", "compose", "version"], check=False,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if result.returncode != 0:
-        raise InstallError("Docker Compose v2 is required")
-    result = subprocess.run(
-        ["docker", "info"], check=False,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if result.returncode != 0:
-        raise InstallError("the current user cannot reach the Docker daemon")
+    for command, error in ((["docker", "compose", "version"], "Docker Compose v2 is required"),
+                           (["docker", "info"], "the current user cannot reach the Docker daemon")):
+        result = subprocess.run(command, check=False, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+        if result.returncode != 0:
+            raise InstallError(error)
     return ["docker", "compose"]
+
+
+def controller_prerequisites(*, require_sudo: bool = True) -> None:
+    if os.name != "posix" or platform.system().lower() != "linux":
+        raise InstallError("advanced monitor controls require a Linux Docker host")
+    for command in ("systemctl", "python3", "nsenter", "ip", "tc"):
+        require_command(command)
+    if require_sudo and os.geteuid() != 0:
+        require_command("sudo")
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +217,8 @@ def canonical_bytes(body: dict) -> bytes:
 
 
 def key_id_for(public_bytes: bytes) -> str:
+    if len(public_bytes) != 32:
+        raise InstallError("release public key must be exactly 32 bytes")
     return hashlib.sha256(public_bytes).hexdigest()[:16]
 
 
@@ -218,7 +233,6 @@ def require_release_public_key(value: str = RELEASE_PUBLIC_KEY_HEX) -> bytes:
 
 
 def _verify_ed25519(public_bytes: bytes, signature: bytes, message: bytes) -> None:
-    """Use cryptography when installed, otherwise OpenSSL's Ed25519 verifier."""
     try:
         from cryptography.exceptions import InvalidSignature
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -226,8 +240,7 @@ def _verify_ed25519(public_bytes: bytes, signature: bytes, message: bytes) -> No
         openssl = shutil.which("openssl")
         if openssl is None:
             raise InstallError(
-                "Ed25519 verification requires either Python cryptography or OpenSSL")
-        # SubjectPublicKeyInfo DER for id-Ed25519 (OID 1.3.101.112) + raw key.
+                "Ed25519 verification requires Python cryptography or OpenSSL")
         public_der = bytes.fromhex("302a300506032b6570032100") + public_bytes
         with tempfile.TemporaryDirectory(prefix="electrumx-signature-") as tmp:
             tmp_path = Path(tmp)
@@ -243,55 +256,102 @@ def _verify_ed25519(public_bytes: bytes, signature: bytes, message: bytes) -> No
             if completed.returncode != 0:
                 raise InstallError("release manifest signature does not verify")
         return
-
     try:
         Ed25519PublicKey.from_public_bytes(public_bytes).verify(signature, message)
-    except InvalidSignature as exc:
+    except (InvalidSignature, ValueError) as exc:
         raise InstallError("release manifest signature does not verify") from exc
 
 
+def _manifest_architectures(value) -> set[str]:
+    if isinstance(value, str):
+        values = {item.strip() for item in value.split(",") if item.strip()}
+    elif isinstance(value, list):
+        if any(not isinstance(item, str) for item in value):
+            raise InstallError("release architecture list is malformed")
+        values = set(value)
+    else:
+        raise InstallError("release architecture is malformed")
+    if not values or not values <= set(SUPPORTED_MANIFEST_ARCHITECTURES):
+        raise InstallError("release contains unsupported architecture targets")
+    return values
+
+
 def validate_manifest_body(body: dict) -> None:
-    if not isinstance(body, dict):
-        raise InstallError("release manifest body is not an object")
-    if body.get("schemaVersion") != 1:
-        raise InstallError("unsupported release manifest schema")
-    for field in REQUIRED_MANIFEST_FIELDS:
-        if field not in body:
-            raise InstallError(f"release manifest missing {field!r}")
+    if not isinstance(body, dict) or body.get("schemaVersion") != 1:
+        raise InstallError("unsupported release manifest body/schema")
+    missing = [field for field in REQUIRED_MANIFEST_FIELDS if field not in body]
+    if missing:
+        raise InstallError(f"release manifest missing fields: {missing}")
+    unknown = set(body) - ({"schemaVersion"} | set(REQUIRED_MANIFEST_FIELDS))
+    if unknown:
+        raise InstallError(f"release manifest contains unknown fields: {sorted(unknown)}")
+
+    for field in ("electrumxVersion", "coreVersion", "requiredUpdaterVersion"):
+        if not isinstance(body[field], str) or not VERSION_RE.fullmatch(body[field]):
+            raise InstallError(f"release manifest {field} is malformed")
+    if body.get("channel") not in ("stable", "security"):
+        raise InstallError("release manifest channel is unsupported")
+    try:
+        stamp = datetime.datetime.fromisoformat(body["releaseTimestamp"])
+    except (TypeError, ValueError) as exc:
+        raise InstallError("releaseTimestamp is malformed") from exc
+    if stamp.tzinfo is None:
+        raise InstallError("releaseTimestamp must include a timezone")
+    if not SHA256_RE.fullmatch(str(body["artifactDigest"])):
+        raise InstallError("artifactDigest is malformed")
+    if not SHA256_RE.fullmatch(str(body["installerDigest"])):
+        raise InstallError("installerDigest is malformed")
+    if not RAW_SHA256_RE.fullmatch(str(body["certificationReportDigest"])):
+        raise InstallError("certificationReportDigest is malformed")
+    _manifest_architectures(body["architecture"])
+
     if body.get("coreRepository") != "RavenProject/Ravencoin":
         raise InstallError("release manifest names a non-RavenProject Core source")
+    if not TAG_RE.fullmatch(str(body.get("coreTag", ""))):
+        raise InstallError("release manifest Core tag is malformed")
     if not COMMIT_RE.fullmatch(str(body.get("coreCommit", ""))):
         raise InstallError("release manifest Core commit is malformed")
-    if body.get("channel") not in ("stable", "security"):
-        raise InstallError("release manifest channel is not supported")
-    if not isinstance(body.get("rollbackSafe"), bool):
-        raise InstallError("rollbackSafe must be boolean")
-    if not isinstance(body.get("consensusImpact"), bool):
-        raise InstallError("consensusImpact must be boolean")
-    if not isinstance(body.get("autoUpdateEligible"), bool):
-        raise InstallError("autoUpdateEligible must be boolean")
+    policy_version = body.get("safeCorePolicyVersion")
+    if not isinstance(policy_version, int) or isinstance(policy_version, bool) or policy_version < 1:
+        raise InstallError("safeCorePolicyVersion must be a positive integer")
+    if not isinstance(body.get("configCompatibility"), dict):
+        raise InstallError("configCompatibility must be an object")
+    db = body.get("dbCompatibility")
+    if not isinstance(db, dict) or not isinstance(db.get("schemaVersion"), int) or \
+            isinstance(db.get("schemaVersion"), bool) or db["schemaVersion"] < 1:
+        raise InstallError("dbCompatibility.schemaVersion is malformed")
+    migration = db.get("migration")
+    if migration is not None:
+        if not isinstance(migration, dict) or not {
+                "fromSchema", "toSchema", "reversible"} <= set(migration):
+            raise InstallError("dbCompatibility migration is malformed")
+        if migration.get("toSchema") != db["schemaVersion"] or \
+                not isinstance(migration.get("reversible"), bool):
+            raise InstallError("dbCompatibility migration is inconsistent")
+    for field in ("rollbackSafe", "consensusImpact", "autoUpdateEligible"):
+        if not isinstance(body.get(field), bool):
+            raise InstallError(f"{field} must be boolean")
     if body["consensusImpact"] and body["autoUpdateEligible"]:
         raise InstallError("consensus-changing release cannot be auto-update eligible")
-    if body.get("installerFilename") != Path(__file__).name:
-        raise InstallError("manifest installer filename does not match this file")
-    if not SHA256_RE.fullmatch(str(body.get("installerDigest", ""))):
-        raise InstallError("installerDigest is malformed")
-    if not SHA256_RE.fullmatch(str(body.get("artifactDigest", ""))):
-        raise InstallError("artifactDigest is malformed")
+    if migration is not None and migration["reversible"] is False and body["rollbackSafe"]:
+        raise InstallError("irreversible DB migration cannot be rollbackSafe")
+    if body.get("installerFilename") != "electrumx-ravencoin-install.py":
+        raise InstallError("manifest installer filename is not canonical")
 
 
 def verify_manifest_signature(document: dict, public_key_hex: str) -> dict:
     public_bytes = require_release_public_key(public_key_hex)
-    if not isinstance(document, dict):
-        raise InstallError("release manifest document is not an object")
+    if not isinstance(document, dict) or set(document) != {"manifest", "signature"}:
+        raise InstallError("release manifest document is malformed")
     body = document.get("manifest")
     signature = document.get("signature")
-    if not isinstance(body, dict) or not isinstance(signature, dict):
-        raise InstallError("release manifest lacks manifest/signature objects")
+    if not isinstance(body, dict) or not isinstance(signature, dict) or \
+            set(signature) != {"algorithm", "keyId", "value"}:
+        raise InstallError("release manifest signature object is malformed")
     if signature.get("algorithm") != SIGNATURE_ALGORITHM:
         raise InstallError("unsupported release signature algorithm")
     if signature.get("keyId") != key_id_for(public_bytes):
-        raise InstallError("release manifest keyId does not match the pinned public key")
+        raise InstallError("release manifest keyId does not match pinned public key")
     try:
         raw_signature = base64.b64decode(signature.get("value", ""), validate=True)
     except (ValueError, TypeError) as exc:
@@ -304,8 +364,8 @@ def verify_manifest_signature(document: dict, public_key_hex: str) -> dict:
 
 
 def fetch_bytes(url: str, *, max_bytes: int, timeout: int = 60) -> bytes:
-    if not url.startswith("https://github.com/ALENOC/electrumx-ravencoin/releases/"):
-        raise InstallError("refusing download outside the expected GitHub release namespace")
+    if not url.startswith(f"https://github.com/{REPO}/releases/"):
+        raise InstallError("refusing download outside expected GitHub release namespace")
     request = urllib.request.Request(
         url, headers={"User-Agent": "electrumx-ravencoin-installer"})
     try:
@@ -351,8 +411,7 @@ def verify_digest(data: bytes, expected: str, what: str) -> None:
     match = SHA256_RE.fullmatch(expected or "")
     if match is None:
         raise InstallError(f"{what} digest format is invalid")
-    observed = hashlib.sha256(data).hexdigest()
-    if observed != match.group(1):
+    if hashlib.sha256(data).hexdigest() != match.group(1):
         raise InstallError(f"{what} SHA-256 mismatch")
 
 
@@ -366,20 +425,13 @@ def verify_running_installer(body: dict, installer_path: Optional[Path] = None) 
 
 
 def verify_architecture(body: dict, architecture: str) -> None:
-    declared = body.get("architecture")
-    values = []
-    if isinstance(declared, str):
-        values = [item.strip() for item in declared.split(",")]
-    elif isinstance(declared, list):
-        values = [str(item) for item in declared]
-    accepted = set(values)
-    if architecture not in accepted and f"linux/{architecture}" not in accepted:
+    if f"linux/{architecture}" not in _manifest_architectures(body.get("architecture")):
         raise InstallError(
-            f"release targets {declared!r}, but this host is {architecture!r}")
+            f"release targets {body.get('architecture')!r}, but host is {architecture!r}")
 
 
 # ---------------------------------------------------------------------------
-# Signed bundle validation / safe extraction
+# Signed bundle validation / extraction
 # ---------------------------------------------------------------------------
 
 def _safe_member_name(name: str) -> PurePosixPath:
@@ -389,6 +441,16 @@ def _safe_member_name(name: str) -> PurePosixPath:
     if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
         raise InstallError(f"unsafe bundle path {name!r}")
     return path
+
+
+def _archive_text(archive: tarfile.TarFile, name: str) -> str:
+    handle = archive.extractfile(archive.getmember(name))
+    if handle is None:
+        raise InstallError(f"cannot read bundle member {name!r}")
+    try:
+        return handle.read().decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise InstallError(f"bundle member {name!r} is not UTF-8") from exc
 
 
 def _validate_metadata(metadata: dict, body: dict) -> None:
@@ -401,21 +463,18 @@ def _validate_metadata(metadata: dict, body: dict) -> None:
     if not COMMIT_RE.fullmatch(str(metadata.get("sourceCommit", ""))):
         raise InstallError("bundle source commit is malformed")
     monitor = metadata.get("nodeMonitor")
-    if not isinstance(monitor, dict):
-        raise InstallError("bundle has no pinned Node Monitor identity")
-    if monitor.get("repository") != "ALENOC/ravencoin-node-monitor":
-        raise InstallError("bundle Node Monitor repository is unexpected")
-    if not COMMIT_RE.fullmatch(str(monitor.get("commit", ""))):
-        raise InstallError("bundle Node Monitor commit is malformed")
-    if monitor.get("bundledPath") != MONITOR_PATH:
-        raise InstallError("bundle Node Monitor path is unexpected")
+    if not isinstance(monitor, dict) or \
+            monitor.get("repository") != "ALENOC/ravencoin-node-monitor" or \
+            not COMMIT_RE.fullmatch(str(monitor.get("commit", ""))) or \
+            monitor.get("bundledPath") != MONITOR_PATH:
+        raise InstallError("bundle Node Monitor identity is malformed")
 
 
-def validate_bundle(data: bytes, body: dict) -> dict:
+def validate_bundle(data: bytes, body: dict,
+                    public_key_hex: str = RELEASE_PUBLIC_KEY_HEX) -> dict:
     verify_digest(data, body["artifactDigest"], "release bundle")
     if len(data) > MAX_BUNDLE_BYTES:
         raise InstallError("release bundle exceeds size limit")
-
     try:
         archive = tarfile.open(fileobj=io.BytesIO(data), mode="r:gz")
     except tarfile.TarError as exc:
@@ -428,8 +487,7 @@ def validate_bundle(data: bytes, body: dict) -> dict:
         names = set()
         total = 0
         for member in members:
-            path = _safe_member_name(member.name)
-            normalized = path.as_posix()
+            normalized = _safe_member_name(member.name).as_posix()
             if normalized in names:
                 raise InstallError(f"duplicate bundle path {normalized!r}")
             names.add(normalized)
@@ -441,49 +499,55 @@ def validate_bundle(data: bytes, body: dict) -> dict:
                     raise InstallError(f"bundle file {normalized!r} has unsafe size")
                 total += member.size
                 if total > MAX_BUNDLE_EXTRACTED_BYTES:
-                    raise InstallError("release bundle expands beyond the size limit")
-
+                    raise InstallError("release bundle expands beyond size limit")
         missing = REQUIRED_BUNDLE_PATHS - names
         if missing:
-            raise InstallError(
-                "release bundle is incomplete: " + ", ".join(sorted(missing)))
+            raise InstallError("release bundle is incomplete: " + ", ".join(sorted(missing)))
 
-        metadata_member = archive.getmember(BUNDLE_METADATA)
-        handle = archive.extractfile(metadata_member)
-        if handle is None:
-            raise InstallError("cannot read bundle installation metadata")
         try:
-            metadata = json.loads(handle.read().decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            metadata = json.loads(_archive_text(archive, BUNDLE_METADATA))
+        except json.JSONDecodeError as exc:
             raise InstallError("bundle installation metadata is invalid JSON") from exc
         _validate_metadata(metadata, body)
 
-        # Bind the most important deployment identities/invariants directly to
-        # the signed manifest before anything is written to disk.
-        compose = archive.extractfile(archive.getmember(BASE_COMPOSE)).read().decode("utf-8")
+        # The release public key embedded in this bootstrap file must be exactly
+        # the public key installed for future electrumx-update checks.
+        embedded = require_release_public_key(public_key_hex).hex()
+        bundled_key = _archive_text(archive, UPDATE_PUBLIC_KEY_PATH).strip()
+        if bundled_key != embedded:
+            raise InstallError("bundle updater public key differs from installer trust root")
+
+        compose = _archive_text(archive, BASE_COMPOSE)
         if f"RAVENCOIN_SOURCE_COMMIT: {body['coreCommit']}" not in compose:
-            raise InstallError("bundle compose Core commit disagrees with signed manifest")
+            raise InstallError("bundle Compose Core commit disagrees with signed manifest")
         if "RAVENCOIN_SOURCE_REPOSITORY: RavenProject/Ravencoin" not in compose:
-            raise InstallError("bundle compose does not enforce the RavenProject Core identity")
+            raise InstallError("bundle Compose does not enforce official Core source")
         if f"RAVENCOIN_VERSION: {body['coreVersion']}" not in compose:
-            raise InstallError("bundle compose Core version disagrees with signed manifest")
+            raise InstallError("bundle Compose Core version disagrees with signed manifest")
 
-        chainstrap = archive.extractfile(
-            archive.getmember(CHAINSTRAP_OVERLAY)).read().decode("utf-8")
-        reindex = archive.extractfile(
-            archive.getmember("docker/core/bootstrap-reindex.sh")).read().decode("utf-8")
-        if "network_mode: none" not in chainstrap:
-            raise InstallError("ChainStrap validation lost Docker network isolation")
-        if "-connect=0" not in reindex:
-            raise InstallError("ChainStrap Core reindex lost explicit peer suppression")
-        if "getbestblockhash" not in reindex or "getblockhash" not in reindex:
-            raise InstallError("ChainStrap reindex lacks the exact-tip verification gate")
+        chainstrap = _archive_text(archive, CHAINSTRAP_OVERLAY)
+        reindex = _archive_text(archive, "docker/core/bootstrap-reindex.sh")
+        if "network_mode: none" not in chainstrap or reindex.count("-connect=0") < 2:
+            raise InstallError("ChainStrap Core validation lost offline isolation")
+        for required in ("getbestblockhash", "getblockhash", "listassets",
+                         "getassetdata", "listaddressesbyasset"):
+            if required not in reindex:
+                raise InstallError(f"ChainStrap reindex lacks gate {required!r}")
 
+        monitor = _archive_text(archive, MONITOR_OVERLAY)
+        for invariant in ("no-new-privileges:true", "cap_drop:", "- ALL",
+                          '"127.0.0.1:8899:8899/tcp"'):
+            if invariant not in monitor:
+                raise InstallError(f"Node Monitor isolation lost {invariant!r}")
+        controller = _archive_text(archive, MONITOR_CONTROLLER_OVERLAY)
+        if "/var/run/docker.sock" in controller or "CAP_NET_ADMIN" in controller:
+            raise InstallError("monitor-controller overlay grants forbidden privileges")
+        if "/run/ravencoin-bandwidth:/run/ravencoin-bandwidth:ro" not in controller:
+            raise InstallError("monitor-controller overlay lacks read-only narrow socket mount")
         return metadata
 
 
 def extract_bundle(data: bytes, destination: Path) -> None:
-    """Extract only regular files/directories after ``validate_bundle`` passed."""
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
         for member in archive.getmembers():
             path = _safe_member_name(member.name)
@@ -495,20 +559,26 @@ def extract_bundle(data: bytes, destination: Path) -> None:
             source = archive.extractfile(member)
             if source is None:
                 raise InstallError(f"cannot extract {member.name!r}")
-            with target.open("xb") as output:
-                shutil.copyfileobj(source, output, length=1024 * 1024)
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                with os.fdopen(fd, "wb") as output:
+                    shutil.copyfileobj(source, output, length=1024 * 1024)
+            except BaseException:
+                target.unlink(missing_ok=True)
+                raise
             os.chmod(target, 0o755 if member.mode & 0o111 else 0o644)
 
 
-def fetch_and_verify_bundle(body: dict, fetch: Callable[[str], bytes] = None) -> tuple[bytes, dict]:
+def fetch_and_verify_bundle(body: dict, fetch: Callable[[str], bytes] = None,
+                            public_key_hex: str = RELEASE_PUBLIC_KEY_HEX) -> tuple[bytes, dict]:
     data = (fetch(BUNDLE_URL) if fetch is not None
             else fetch_bytes(BUNDLE_URL, max_bytes=MAX_BUNDLE_BYTES, timeout=180))
-    metadata = validate_bundle(data, body)
+    metadata = validate_bundle(data, body, public_key_hex=public_key_hex)
     return data, metadata
 
 
 # ---------------------------------------------------------------------------
-# Installation choices / deployment
+# Operator choices / generated configuration
 # ---------------------------------------------------------------------------
 
 def choose_bootstrap(args, interactive: bool, prompt: Callable[[str], str] = input) -> str:
@@ -520,7 +590,7 @@ def choose_bootstrap(args, interactive: bool, prompt: Callable[[str], str] = inp
         return "chainstrap"
     answer = prompt(
         "Blockchain bootstrap method:\n"
-        "  1. ChainStrap Fast Verified Bootstrap [default]\n"
+        "  1. Fast Verified Bootstrap using ChainStrap [recommended, default]\n"
         "  2. Traditional Ravencoin P2P synchronization\n"
         "Choice [1]: ").strip()
     if answer in ("", "1"):
@@ -531,6 +601,8 @@ def choose_bootstrap(args, interactive: bool, prompt: Callable[[str], str] = inp
 
 
 def choose_monitor(args, interactive: bool, prompt: Callable[[str], str] = input) -> bool:
+    if args.with_monitor_controller:
+        return True
     if args.with_monitor:
         return True
     if args.without_monitor:
@@ -538,12 +610,35 @@ def choose_monitor(args, interactive: bool, prompt: Callable[[str], str] = input
     if not interactive:
         return True
     answer = prompt(
-        "Install the pinned Ravencoin Node Monitor too? [Y/n]: ").strip().lower()
+        "Install Ravencoin Node Monitor?\n"
+        "  Y. Yes [recommended, default]\n"
+        "  N. No\n"
+        "Choice [Y]: ").strip().lower()
     if answer in ("", "y", "yes"):
         return True
     if answer in ("n", "no"):
         return False
     raise InstallError(f"unrecognized monitor choice {answer!r}")
+
+
+def choose_monitor_controller(args, monitor: bool, interactive: bool,
+                              prompt: Callable[[str], str] = input) -> bool:
+    if not monitor:
+        return False
+    if args.with_monitor_controller:
+        return True
+    if not interactive:
+        return False
+    answer = prompt(
+        "Enable advanced host controls (bandwidth / connection limits)?\n"
+        "  y. Yes\n"
+        "  N. No [default]\n"
+        "Choice [N]: ").strip().lower()
+    if answer in ("", "n", "no"):
+        return False
+    if answer in ("y", "yes"):
+        return True
+    raise InstallError(f"unrecognized advanced-control choice {answer!r}")
 
 
 def write_monitor_env(root: Path) -> None:
@@ -554,40 +649,38 @@ def write_monitor_env(root: Path) -> None:
     content = (
         "# Generated by the verified ElectrumX-Ravencoin installer.\n"
         "NODE_NAME=ElectrumX-Ravencoin bundled node\n"
-        "BIND_HOST=0.0.0.0\n"
-        "BIND_PORT=8899\n"
+        "BIND_HOST=0.0.0.0\nBIND_PORT=8899\n"
         "MONITOR_USER=monitor\n"
         f"MONITOR_PASSWORD={password}\n"
-        "CORE_RPC_HOST=ravencoin-core\n"
-        "CORE_RPC_PORT=8766\n"
+        "CORE_RPC_HOST=ravencoin-core\nCORE_RPC_PORT=8766\n"
         "CORE_RPC_USER_FILE=/run/raven-secrets/raven_rpc_user\n"
         "CORE_RPC_PASSWORD_FILE=/run/raven-secrets/raven_rpc_password\n"
-        "ELECTRUMX_ENABLED=true\n"
-        "ELECTRUMX_RPC_HOST=127.0.0.1\n"
-        "ELECTRUMX_RPC_PORT=8000\n"
-        "ELECTRUMX_SSL_HOST=127.0.0.1\n"
-        "ELECTRUMX_SSL_PORT=50002\n"
-        "ELECTRUMX_SSL_VERIFY=false\n"
-        "HISTORY_ENABLED=true\n"
-        "HISTORY_STORAGE=memory\n"
-        "PRICE_FEED_ENABLED=true\n"
-        "PRICE_FEED_SYMBOL=RVNUSDT\n"
-        "PROMETHEUS_ENABLED=true\n"
-        "MIN_SAFE_CORE_VERSION=4.8.0\n"
+        "ELECTRUMX_ENABLED=true\nELECTRUMX_RPC_HOST=127.0.0.1\n"
+        "ELECTRUMX_RPC_PORT=8000\nELECTRUMX_SSL_HOST=127.0.0.1\n"
+        "ELECTRUMX_SSL_PORT=50002\nELECTRUMX_SSL_VERIFY=false\n"
+        "HISTORY_ENABLED=true\nHISTORY_STORAGE=memory\n"
+        "PRICE_FEED_ENABLED=true\nPRICE_FEED_SYMBOL=RVNUSDT\n"
+        "PROMETHEUS_ENABLED=true\nMIN_SAFE_CORE_VERSION=4.8.0\n"
+        "BANDWIDTH_CONTROL_ENABLED=false\n"
+        "BANDWIDTH_CONTROL_SOCKET=/run/ravencoin-bandwidth/control.sock\n"
     )
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(content)
 
 
-def run_checked(argv: Sequence[str], *, cwd: Path) -> None:
-    completed = subprocess.run(list(argv), cwd=cwd, check=False)
+def run_checked(argv: Sequence[str], *, cwd: Optional[Path] = None,
+                quiet: bool = False) -> None:
+    completed = subprocess.run(
+        list(argv), cwd=cwd, check=False,
+        stdout=subprocess.DEVNULL if quiet else None,
+        stderr=subprocess.DEVNULL if quiet else None)
     if completed.returncode != 0:
         raise InstallError(
             f"command failed with exit code {completed.returncode}: {' '.join(argv)}")
 
 
-def compose_files(bootstrap: str, monitor: bool) -> list[str]:
+def compose_files(bootstrap: str, monitor: bool, controller: bool = False) -> list[str]:
     files = [BASE_COMPOSE]
     if bootstrap == "chainstrap":
         files.append(CHAINSTRAP_OVERLAY)
@@ -595,24 +688,140 @@ def compose_files(bootstrap: str, monitor: bool) -> list[str]:
         raise InstallError(f"unknown bootstrap choice {bootstrap!r}")
     if monitor:
         files.append(MONITOR_OVERLAY)
+    if controller:
+        if not monitor:
+            raise InstallError("advanced controller cannot be enabled without monitor")
+        files.append(MONITOR_CONTROLLER_OVERLAY)
     return files
 
 
-def deploy(root: Path, *, bootstrap: str, monitor: bool) -> None:
-    run_checked(["sh", "./setup.sh", "--bundled-core"], cwd=root)
-    if monitor:
-        write_monitor_env(root)
-
-    files = compose_files(bootstrap, monitor)
-    base = ["docker", "compose"]
+def _compose_prefix(files: Sequence[str]) -> list[str]:
+    result = ["docker", "compose"]
     for filename in files:
-        base += ["-f", filename]
-    run_checked(base + ["config", "--quiet"], cwd=root)
-    run_checked(base + ["up", "-d", "--build"], cwd=root)
+        result += ["-f", filename]
+    return result
+
+
+def _sudo_prefix() -> list[str]:
+    return [] if os.geteuid() == 0 else [require_command("sudo")]
+
+
+def controller_unit_body(root: Path) -> str:
+    root_text = str(root.resolve())
+    if not SAFE_CONTROLLER_ROOT_RE.fullmatch(root_text):
+        raise InstallError(
+            "advanced controller requires an install path containing only letters, "
+            "digits, '.', '_', '/', or '-' to keep the root systemd unit unambiguous")
+    script = root / CONTROLLER_SCRIPT
+    return "\n".join((
+        "[Unit]",
+        "Description=Ravencoin Node Monitor host controller",
+        "After=docker.service",
+        "Wants=docker.service",
+        "",
+        "[Service]",
+        "Type=simple",
+        "User=root",
+        "Group=root",
+        f"ExecStart=/usr/bin/python3 {script}",
+        "Restart=on-failure",
+        "RestartSec=3",
+        "Environment=BANDWIDTH_SOCKET_PATH=/run/ravencoin-bandwidth/control.sock",
+        "Environment=BANDWIDTH_STATE_FILE=/var/lib/ravencoin-bandwidth/limits.json",
+        "Environment=BANDWIDTH_SOCKET_GID=10001",
+        "Environment=RAVENCOIN_CORE_CONTAINER=electrumx-ravencoin-ravencoin-core-1",
+        "Environment=ELECTRUMX_CONTAINER=electrumx-ravencoin-electrumx-1",
+        "Environment=CONNECTION_RECONCILE_INTERVAL=30",
+        "Environment=CONNECTION_COMPOSE_TIMEOUT=120",
+        "RuntimeDirectory=ravencoin-bandwidth",
+        "RuntimeDirectoryMode=0750",
+        "RuntimeDirectoryPreserve=yes",
+        "StateDirectory=ravencoin-bandwidth",
+        "StateDirectoryMode=0700",
+        "NoNewPrivileges=true",
+        "PrivateTmp=true",
+        "ProtectHome=read-only",
+        "ProtectKernelTunables=true",
+        "ProtectKernelModules=true",
+        "ProtectControlGroups=true",
+        "RestrictSUIDSGID=true",
+        "RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6",
+        "",
+        "[Install]",
+        "WantedBy=multi-user.target",
+        "",
+    ))
+
+
+def install_controller(root: Path) -> None:
+    controller_prerequisites(require_sudo=True)
+    unit = controller_unit_body(root)
+    with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", prefix="electrumx-controller-",
+            delete=False) as handle:
+        handle.write(unit)
+        temporary = Path(handle.name)
+    try:
+        prefix = _sudo_prefix()
+        run_checked(prefix + ["install", "-o", "root", "-g", "root", "-m", "0644",
+                              str(temporary), f"/etc/systemd/system/{CONTROLLER_UNIT}"])
+        run_checked(prefix + ["systemctl", "daemon-reload"])
+        run_checked(prefix + ["systemctl", "enable", "--now", CONTROLLER_UNIT])
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def uninstall_controller_best_effort() -> None:
+    try:
+        prefix = _sudo_prefix()
+        subprocess.run(prefix + ["systemctl", "disable", "--now", CONTROLLER_UNIT],
+                       check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(prefix + ["rm", "-f", f"/etc/systemd/system/{CONTROLLER_UNIT}"],
+                       check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(prefix + ["systemctl", "daemon-reload"], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+def _private_atomic_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    temporary = path.with_name(path.name + f".new.{os.getpid()}")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def state_dir_for(target: Path) -> Path:
+    return target.parent / f".{target.name}.state"
+
+
+def write_initial_update_state(target: Path, body: dict) -> None:
+    state_dir = state_dir_for(target)
+    path = state_dir / "update-state.json"
+    if path.exists():
+        raise InstallError(f"refusing to overwrite existing updater state {path}")
+    _private_atomic_json(path, {
+        "schemaVersion": 2,
+        "currentRelease": body,
+        "lastKnownGoodRelease": None,
+        "pendingCandidate": None,
+        "updateTimestamp": datetime.datetime.now(datetime.timezone.utc)
+            .replace(microsecond=0).isoformat(),
+        "failureReason": None,
+        "minimumCorePolicyVersion": body["safeCorePolicyVersion"],
+    })
 
 
 def write_install_marker(root: Path, *, body: dict, metadata: dict,
-                         bootstrap: str, monitor: bool) -> None:
+                         bootstrap: str, monitor: bool, controller: bool) -> None:
     marker = {
         "schemaVersion": 1,
         "electrumxVersion": body["electrumxVersion"],
@@ -621,56 +830,84 @@ def write_install_marker(root: Path, *, body: dict, metadata: dict,
         "coreVersion": body["coreVersion"],
         "coreCommit": body["coreCommit"],
         "safeCorePolicyVersion": body["safeCorePolicyVersion"],
+        "dbSchemaVersion": body["dbCompatibility"]["schemaVersion"],
         "sourceCommit": metadata["sourceCommit"],
         "bootstrapChoice": bootstrap,
         "nodeMonitorEnabled": monitor,
+        "monitorControllerEnabled": controller,
         "nodeMonitorCommit": metadata["nodeMonitor"]["commit"] if monitor else None,
         "installerVersion": VERSION,
     }
-    path = root / INSTALL_MARKER
-    temporary = root / f"{INSTALL_MARKER}.new.{os.getpid()}"
-    temporary.write_text(json.dumps(marker, indent=2, sort_keys=True) + "\n",
-                         encoding="utf-8")
-    os.chmod(temporary, 0o600)
-    os.replace(temporary, path)
+    _private_atomic_json(root / INSTALL_MARKER, marker)
 
 
 def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
-                  bootstrap: str, monitor: bool) -> None:
+                  bootstrap: str, monitor: bool, controller: bool) -> None:
     if target.exists():
         marker = target / INSTALL_MARKER
         if marker.is_file():
             raise InstallError(
                 f"{target} is already installed; use electrumx-update check/status/show/apply")
         raise InstallError(f"refusing to overwrite existing path {target}")
+    state_dir = state_dir_for(target)
+    if state_dir.exists():
+        raise InstallError(
+            f"refusing fresh install because updater state path already exists: {state_dir}")
+    if controller:
+        controller_prerequisites(require_sudo=True)
+        controller_unit_body(target)
 
     parent = target.parent.resolve()
     parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".electrumx-ravencoin-install-", dir=parent))
     moved = False
+    controller_installed = False
+    files = compose_files(bootstrap, monitor, controller)
+    base = _compose_prefix(files)
     try:
         extract_bundle(data, staging)
-        # Generate secrets/config in staging so an installation that fails
-        # before activation leaves the requested destination untouched.
         run_checked(["sh", "./setup.sh", "--bundled-core"], cwd=staging)
         if monitor:
             write_monitor_env(staging)
-        files = compose_files(bootstrap, monitor)
-        base = ["docker", "compose"]
-        for filename in files:
-            base += ["-f", filename]
         run_checked(base + ["config", "--quiet"], cwd=staging)
+
+        # Build before activation; target still does not exist and the old host
+        # state is untouched. This also catches architecture/toolchain failures.
+        run_checked(base + ["build"], cwd=staging)
 
         os.replace(staging, target)
         moved = True
-        run_checked(base + ["up", "-d", "--build"], cwd=target)
+        if controller:
+            install_controller(target)
+            controller_installed = True
+        run_checked(base + ["up", "-d", "--no-build"], cwd=target)
+
+        # Marker/state are commit records and are written only after Compose
+        # accepted the final release directory and the optional controller was
+        # successfully installed.
         write_install_marker(
-            target, body=body, metadata=metadata,
-            bootstrap=bootstrap, monitor=monitor)
+            target, body=body, metadata=metadata, bootstrap=bootstrap,
+            monitor=monitor, controller=controller)
+        write_initial_update_state(target, body)
+    except BaseException:
+        if moved and target.exists():
+            subprocess.run(base + ["down"], cwd=target, check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if controller_installed:
+            uninstall_controller_best_effort()
+        if state_dir.exists():
+            shutil.rmtree(state_dir, ignore_errors=True)
+        if moved and target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+        raise
     finally:
         if not moved and staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
 
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
@@ -691,25 +928,34 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             f"official Core {body['coreVersion']} @ {body['coreCommit'][:12]}; "
             f"Node Monitor @ {metadata['nodeMonitor']['commit'][:12]}")
 
+        interactive = sys.stdin.isatty()
+        # Resolve choices even in --check-only so explicit unsupported controller
+        # requests also have their prerequisites checked without changing state.
+        bootstrap = choose_bootstrap(args, interactive)
+        monitor = choose_monitor(args, interactive)
+        controller = choose_monitor_controller(args, monitor, interactive)
+        if controller:
+            controller_prerequisites(require_sudo=False if args.check_only else True)
+
         if args.check_only:
+            compose_command()
             print("check-only complete: no persistent changes were made")
             return 0
 
         compose_command()
-        interactive = sys.stdin.isatty()
-        bootstrap = choose_bootstrap(args, interactive)
-        monitor = choose_monitor(args, interactive)
         target = Path(args.install_dir).expanduser().resolve()
         install_fresh(
             target, bundle, body=body, metadata=metadata,
-            bootstrap=bootstrap, monitor=monitor)
+            bootstrap=bootstrap, monitor=monitor, controller=controller)
 
         print(f"installation complete in {target}")
         print(f"bootstrap: {bootstrap}")
         if monitor:
             print("Node Monitor: enabled at http://127.0.0.1:8899")
-            print(f"Node Monitor credentials: {target / MONITOR_ENV}")
-        print("updates are never applied by silence/restart: operator approval remains required")
+            print(f"Node Monitor credentials are stored privately in {target / MONITOR_ENV}")
+        if controller:
+            print("advanced host controls: enabled through the root-owned narrow Unix-socket helper")
+        print("updates are never installed by silence/restart; explicit operator approval remains required")
         return 0
     except InstallError as exc:
         print(f"error: {exc}", file=sys.stderr)
