@@ -48,7 +48,6 @@ jobs:
           set -euo pipefail
           python3 tools/apply_monitor_network_resilience.py
           python3 tools/fix_monitor_resilience_regressions.py
-          # Normalize the one-shot documentation append to exactly one EOF LF.
           python3 - <<'PY'
           from pathlib import Path
           p = Path('docs/crash-consistency.md')
@@ -62,8 +61,6 @@ jobs:
       - name: Materialize clean final candidate tree
         run: |
           set -euo pipefail
-          # The full-tree bundle tests intentionally reject a dirty checkout,
-          # so test the exact tree that will be published, not an uncommitted patch.
           git checkout "$TARGET_SHA" -- .github/workflows/apply-crash-consistency-hardening.yml
           git rm tools/apply_monitor_network_resilience.py tools/fix_monitor_resilience_regressions.py
           git config user.name 'github-actions[bot]'
@@ -95,8 +92,10 @@ jobs:
           git -C /tmp/ravencoin-node-monitor-ci checkout --quiet --detach "$MONITOR_SHA"
           test "$(git -C /tmp/ravencoin-node-monitor-ci rev-parse HEAD)" = "$MONITOR_SHA"
           python3 -m py_compile /tmp/ravencoin-node-monitor-ci/contrib/verify-published-port.py
-          python3 -m unittest \
-            /tmp/ravencoin-node-monitor-ci/tests/test_verify_published_port.py -v
+          (
+            cd /tmp/ravencoin-node-monitor-ci
+            python3 tests/test_verify_published_port.py -v
+          )
 
       - name: Validate collision-safe Compose models
         run: |
