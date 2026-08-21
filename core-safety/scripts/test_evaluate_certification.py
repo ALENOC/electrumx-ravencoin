@@ -253,18 +253,23 @@ def test_required_list_divergence_is_refused(tmp_path):
 def test_inconclusive_build_stays_retryable(tmp_path):
     """A trusted-code BUILD_FAILED record is accepted as evidence but never
     becomes terminal state or a signable report."""
-    entry = _candidate_entry()
+    # Use an identity that is not already present in the signed production
+    # baseline.  After policy v3 promotion the canonical RavenProject v4.8.0
+    # identity is intentionally seeded into processed state before candidate
+    # evaluation, so it cannot demonstrate retryability for a new build.
+    entry = _candidate_entry(commit=OTHER_COMMIT)
+    commit12 = OTHER_COMMIT[:12]
     completed, reports_dir, state_dir = _run_evaluator(
         tmp_path, [entry],
-        {f"evidence-{COMMIT12}.json": _evidence(None, buildFailed=True)},
+        {f"evidence-{commit12}.json": _evidence(None, buildFailed=True)},
         expect_success=True)
-    assert not (reports_dir / f"report-{COMMIT12}.json").exists()
+    assert not (reports_dir / f"report-{commit12}.json").exists()
     summary = json.loads((reports_dir / "evaluation-summary.json")
                          .read_text(encoding="utf-8"))
     assert summary["candidates"][0]["overall"] == "BUILD_FAILED"
     assert summary["candidates"][0]["canonicalDigest"] is None
     processed = json.loads((state_dir / "processed.json").read_text(encoding="utf-8"))
-    assert f"RavenProject/Ravencoin@{COMMIT}" not in processed["processed"]
+    assert f"RavenProject/Ravencoin@{OTHER_COMMIT}" not in processed["processed"]
 
 
 def test_unavailable_results_never_derive_a_pass(tmp_path):
