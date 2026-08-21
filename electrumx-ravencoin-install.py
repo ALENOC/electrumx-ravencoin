@@ -657,6 +657,43 @@ def _archive_text(archive: tarfile.TarFile, name: str) -> str:
         raise InstallError(f"bundle member {name!r} is not UTF-8") from exc
 
 
+def _bundle_member_sha256(data: bytes, name: str) -> str:
+    """Derive a member digest from the already signature-bound bundle bytes.
+
+    This expected digest is computed before extracted files enter the
+    operator-writable install tree, so it remains an independent reference for
+    privileged controller installation (REAUDIT-002).
+    """
+    try:
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+            member = archive.getmember(name)
+            normalized = _safe_member_name(member.name).as_posix()
+            if normalized != name or not member.isfile():
+                raise InstallError(
+                    f"bundle member {name!r} is not the expected regular file")
+            source = archive.extractfile(member)
+            if source is None:
+                raise InstallError(f"cannot read bundle member {name!r}")
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+            return digest.hexdigest()
+    except (tarfile.TarError, KeyError) as exc:
+        raise InstallError(
+            f"cannot derive trusted digest for bundle member {name!r}") from exc
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        raise InstallError(f"cannot hash trusted controller copy {path}: {exc}") from exc
+    return digest.hexdigest()
+
+
 def _validate_metadata(metadata: dict, body: dict) -> None:
     if not isinstance(metadata, dict) or metadata.get("schemaVersion") != 1:
         raise InstallError("bundle installation metadata is malformed")
@@ -1482,33 +1519,47 @@ def controller_unit_body(root: Path) -> str:
     ))
 
 
-def install_trusted_controller(source: Path) -> None:
-    """Copy the bundle-verified controller to a root-owned trusted path.
+def install_trusted_controller(source: Path, expected_sha256: str) -> None:
+    """Install the controller only if the privileged copy matches the signed bundle.
 
-    The copy is written to a root-owned staging name inside a root-owned
-    directory and then renamed, so there is no user-writable intermediate
-    state, and the installing user can never modify what the root unit
-    executes (GLM53-RVN-002).
+    ``expected_sha256`` is derived from the already signature-bound bundle bytes,
+    before extraction into an operator-writable tree.  The source may therefore
+    change concurrently without being able to cross into root execution: the
+    root-owned staged copy is hashed before atomic placement and the final copy is
+    checked again before systemd can be enabled (REAUDIT-002).
     """
     controller_prerequisites(require_sudo=True)
+    if not RAW_SHA256_RE.fullmatch(expected_sha256 or ""):
+        raise InstallError("trusted controller expected SHA-256 is malformed")
     if not source.is_file():
         raise InstallError(
             f"bundle did not contain the monitor controller script at {source}")
     prefix = _sudo_prefix()
-    staged = TRUSTED_CONTROLLER_PATH.with_name(TRUSTED_CONTROLLER_PATH.name + ".new")
+    staged = TRUSTED_CONTROLLER_PATH.with_name(
+        TRUSTED_CONTROLLER_PATH.name + f".new.{secrets.token_hex(8)}")
     run_checked(prefix + ["mkdir", "-p", "-o", "root", "-g", "root", "-m", "0755",
                           str(TRUSTED_CONTROLLER_DIR)])
-    run_checked(prefix + ["install", "-o", "root", "-g", "root", "-m", "0755",
-                          str(source), str(staged)])
-    # Same-filesystem rename under a root-owned 0755 directory: atomic, and
-    # the destination is never absent-then-user-controlled.
-    run_checked(prefix + ["mv", "-fT", str(staged), str(TRUSTED_CONTROLLER_PATH)])
-    verify_trusted_controller()
+    try:
+        run_checked(prefix + ["install", "-o", "root", "-g", "root", "-m", "0755",
+                              str(source), str(staged)])
+        staged_digest = _file_sha256(staged)
+        if staged_digest != expected_sha256:
+            raise InstallError(
+                "trusted controller SHA-256 mismatch after privileged copy; "
+                "refusing root execution")
+        # Same-filesystem rename under a root-owned 0755 directory: atomic, and
+        # after hashing the staged object the normal user cannot modify it.
+        run_checked(prefix + ["mv", "-fT", str(staged),
+                              str(TRUSTED_CONTROLLER_PATH)])
+    except BaseException:
+        subprocess.run(prefix + ["rm", "-f", str(staged)], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        raise
+    verify_trusted_controller(expected_sha256)
 
 
-def verify_trusted_controller() -> None:
-    """Fail unless the trusted controller copy is root-owned and not
-    writable by group or other (or by the invoking user)."""
+def verify_trusted_controller(expected_sha256: Optional[str] = None) -> None:
+    """Fail unless the trusted controller has safe ownership and expected bytes."""
     try:
         stat_result = TRUSTED_CONTROLLER_PATH.stat()
     except OSError as exc:
@@ -1522,6 +1573,12 @@ def verify_trusted_controller() -> None:
         raise InstallError(
             f"trusted controller {TRUSTED_CONTROLLER_PATH} must not be group- or "
             f"world-writable (mode {stat_result.st_mode & 0o777:o})")
+    if expected_sha256 is not None:
+        if not RAW_SHA256_RE.fullmatch(expected_sha256 or ""):
+            raise InstallError("trusted controller expected SHA-256 is malformed")
+        if _file_sha256(TRUSTED_CONTROLLER_PATH) != expected_sha256:
+            raise InstallError(
+                "installed trusted controller SHA-256 does not match signed bundle")
     if os.geteuid() != 0:
         # The invoking user must not be able to replace the file: the
         # containing directory must be root-owned and not user-writable.
@@ -1532,10 +1589,10 @@ def verify_trusted_controller() -> None:
                 "root-owned and not group- or world-writable")
 
 
-def install_controller(root: Path) -> None:
+def install_controller(root: Path, expected_sha256: str) -> None:
     controller_prerequisites(require_sudo=True)
-    install_trusted_controller(root / CONTROLLER_SCRIPT)
-    verify_trusted_controller()
+    install_trusted_controller(root / CONTROLLER_SCRIPT, expected_sha256)
+    verify_trusted_controller(expected_sha256)
     unit = controller_unit_body(root)
     with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", prefix="electrumx-controller-",
@@ -1644,6 +1701,10 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
     if controller:
         controller_prerequisites(require_sudo=True)
         controller_unit_body(target)
+    # Derive the expected controller digest from the immutable, signed bundle
+    # bytes before anything is extracted into the operator-writable tree.
+    trusted_controller_sha256 = (
+        _bundle_member_sha256(data, CONTROLLER_SCRIPT) if controller else None)
 
     # compose.yaml intentionally has a fixed project name because monitor and
     # controller isolation reference deterministic container names. Therefore a
@@ -1678,7 +1739,9 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
         os.replace(staging, target)
         moved = True
         if controller:
-            install_controller(target)
+            if trusted_controller_sha256 is None:
+                raise InstallError("trusted controller digest was not established")
+            install_controller(target, trusted_controller_sha256)
             controller_installed = True
         try:
             activate_compose(target, base, bootstrap)
