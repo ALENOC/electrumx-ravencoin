@@ -47,6 +47,10 @@ from update_decision import HealthGateResult
 
 REPOSITORY = "ALENOC/electrumx-ravencoin"
 CORE_REPOSITORY = "RavenProject/Ravencoin"
+#: Pinned explicitly on every Compose invocation (GLM53-RVN-008): an exported
+#: COMPOSE_PROJECT_NAME in the operator environment must not detach the
+#: updater from the project namespace it validates and switches.
+COMPOSE_PROJECT_NAME = "electrumx-ravencoin"
 INSTALL_MARKER = ".electrumx-ravencoin-installed.json"
 BASE_COMPOSE = "compose.yaml"
 MONITOR_OVERLAY = "compose.monitor.yaml"
@@ -490,7 +494,7 @@ def _run(argv: Sequence[str], *, cwd: Path, timeout: int = 1800,
 
 
 def _compose_prefix(root: Path, files: Sequence[str]) -> list[str]:
-    args = ["docker", "compose"]
+    args = ["docker", "compose", "-p", COMPOSE_PROJECT_NAME]
     for filename in files:
         args += ["-f", filename]
     return args
