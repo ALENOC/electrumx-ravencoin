@@ -118,6 +118,12 @@ Start with whichever describes your goal:
 Quick start
 ===========
 
+For a published production release, the recommended beginner path is the
+`single-link verified installer`_ below. It avoids cloning the repository and
+downloads one inspectable Python bootstrap file from a stable ``releases/latest``
+URL. The traditional ``git clone`` path remains available for operators who want
+to work directly from the repository.
+
 The bundled Core artifact is qualified for **Linux x86-64/amd64**, backed by a
 persisted certification report. **Linux ARM64/aarch64** (including Raspberry
 Pi 5 and Orange Pi 5-class boards) builds from the same pinned source commit
@@ -158,52 +164,87 @@ The script does not print credentials or delete existing data. ``--enable-reboot
 is optional and installs a user service for reboot recovery. Read `Getting
 started`_ before using an existing Core instead of the bundled mode.
 
-Single-file installer (alternative to git clone)
---------------------------------------------------
+Single-link verified installer
+------------------------------
 
-Instead of cloning the repository, a host can fetch and run one signed,
-self-contained Python file:
+For a **published production release**, installation starts from one stable URL:
+
+`Download the latest verified installer <https://github.com/ALENOC/electrumx-ravencoin/releases/latest/download/electrumx-ravencoin-install.py>`_
+
+Download that single file and execute it locally:
 
 .. code-block:: sh
 
-   curl -fL -O https://github.com/ALENOC/electrumx-ravencoin/releases/latest/download/electrumx-ravencoin-install.py
+   curl --fail --location --remote-name \
+     https://github.com/ALENOC/electrumx-ravencoin/releases/latest/download/electrumx-ravencoin-install.py
    python3 electrumx-ravencoin-install.py
 
-Never pipe the download straight into an interpreter (``curl ... | python3``
-or ``curl ... | bash``). Fetch the file, read it if you want to, then run it.
+The URL does not need to change between releases: GitHub's ``releases/latest``
+endpoint resolves to the installer belonging to the current published release.
+This is intentionally a **download-then-run** flow rather than a pipe-to-shell
+one-liner. Never use ``curl ... | python3`` or ``curl ... | bash``: keeping the
+bootstrap file on disk makes the initial trust anchor inspectable before it is
+executed.
 
-The installer verifies a signed release manifest against a pinned ElectrumX
-release public key before installing anything; this key is a separate trust
-root from the Core certification signing key used elsewhere in this
-repository, and the installer never has access to either private key. Run
-``python3 electrumx-ravencoin-install.py --check-only`` to detect the host and
-validate release trust metadata without making any persistent change.
+To verify the host and all available signed release metadata without making a
+persistent installation, use:
 
-On a fresh, empty bundled-Core install the installer defaults to the ChainStrap
-Fast Verified Bootstrap described in the `August 2026 incident guide`_; press
-Enter to accept it, or pass ``--p2p-bootstrap`` for traditional Ravencoin P2P
-synchronization instead.
-ChainStrap is transport only: Ravencoin Core independently validates every
-downloaded block before ElectrumX ever reads it. The installer never
-re-triggers ChainStrap against an existing Core or ChainStrap datadir, and a
-normal ElectrumX upgrade never re-triggers it either.
+.. code-block:: sh
 
-The installer also offers the optional
-`ravencoin-node-monitor <https://github.com/ALENOC/ravencoin-node-monitor>`_
-dashboard (a separate project from this repository's own
-`Electrum monitor`_), enabled by default on a fresh interactive install
-(``--without-monitor`` to skip, ``--with-monitor`` to force it
-non-interactively). The installer configures its dashboard to bind to
-``127.0.0.1:8899`` and run unprivileged, with no Docker socket access. Its
-optional privileged host controller (bandwidth and connection management)
-is disabled by default and only turns on with the explicit
-``--with-monitor-controller`` flag.
+   python3 electrumx-ravencoin-install.py --check-only
 
-If the installer detects an existing installation, it does not reinstall or
-re-bootstrap anything; it hands off to ``electrumx-update check`` /
-``status`` / ``show`` / ``apply``. Applying an update always requires an
-explicit operator command, and a release marked as a consensus-affecting
-change is never installed by an ordinary ``electrumx-update apply``.
+On a fresh install, running the installer with no extra flags starts the guided
+setup. It selects a project-data location, defaults to ChainStrap Fast Verified
+Bootstrap, enables the Ravencoin Node Monitor by default, and keeps the advanced
+root-owned bandwidth/connection controller disabled unless the operator explicitly
+opts in.
+
+Useful non-interactive choices include:
+
+.. code-block:: sh
+
+   # Traditional P2P synchronization instead of ChainStrap
+   python3 electrumx-ravencoin-install.py --p2p-bootstrap --storage-root /path/to/data
+
+   # Skip the optional Node Monitor
+   python3 electrumx-ravencoin-install.py --without-monitor --storage-root /path/to/data
+
+   # Explicitly enable the privileged host controller
+   python3 electrumx-ravencoin-install.py --with-monitor-controller --storage-root /path/to/data
+
+The installer first verifies its signed release manifest against the pinned
+ElectrumX release/update public key, verifies the downloaded bundle digest, and
+independently verifies the signed safe-Core policy against its separate pinned
+Core-policy trust root. The optional root controller is additionally bound to the
+exact controller bytes authenticated inside that signed bundle before systemd is
+allowed to execute them.
+
+On a fresh, empty bundled-Core install, ChainStrap is transport only: Ravencoin
+Core independently reindexes and validates the downloaded blocks offline before
+ElectrumX is allowed to consume them. Automatic fallback from a failed ChainStrap
+run to P2P is deliberately disabled; changing bootstrap method requires an explicit
+operator choice.
+
+The bundled `ravencoin-node-monitor <https://github.com/ALENOC/ravencoin-node-monitor>`_
+dashboard is separate from this repository's `Electrum monitor`_. It is published
+only on ``127.0.0.1:8899`` by default and runs without the Docker socket or
+``CAP_NET_ADMIN``. The optional privileged controller is a separate security domain
+and remains disabled by default.
+
+If the installer detects an existing installation, it does not silently reinstall,
+re-bootstrap or replace it. Normal maintenance is handed to ``electrumx-update
+check`` / ``status`` / ``show`` / ``apply`` and an update still requires an explicit
+operator action.
+
+.. important::
+
+   The stable URL above is the **production installation interface**, not evidence
+   that a production release is already ready. Until the release/update signing-key
+   ceremony, RavenProject-only signed safe-Core policy promotion, final fresh-install
+   qualification and final release audit are complete, this repository remains
+   mergeable development code rather than a production-published installer. The
+   source-tree installer deliberately fails closed when the production release key
+   has not been provisioned.
 
 Installing Docker when it is missing
 ------------------------------------
@@ -1032,16 +1073,23 @@ is in `Security model`_.
 Current project status
 ======================
 
-The authoritative status distinction is:
+Keep **merge readiness** and **production release readiness** separate:
 
-* **Core release certification:** the maintained v4.8.0 candidate passed all
-  mandatory release tests and a signed policy exists.
-* **Live mainnet deployment validation:** still in progress. Core synchronization,
-  ElectrumX historical indexing, live asset/index checks, backend evidence,
-  public TLS and client ``SAFE_CORE_VERIFIED`` remain deployment gates.
+* **Integration / merge:** the exact RavenProject Core candidate and the surrounding
+  ElectrumX integration can be reviewed, tested and merged once the repository's
+  pre-merge security and CI gates pass.
+* **Production release:** remains a later gate. The RavenProject-only safe-Core
+  policy must be promoted through the protected signing path, the dedicated
+  ElectrumX release/update signing key must complete its ceremony, a clean
+  interactive fresh-install qualification must pass, and the final production
+  commit/tree must satisfy the release audit gate.
+* **Live deployment validation:** synchronization, ElectrumX historical indexing,
+  live asset/index checks, backend evidence, public TLS and client
+  ``SAFE_CORE_VERIFIED`` are deployment evidence, not substitutes for release
+  signing or source review.
 
-Do not call the live deployment fully validated or publish a wallet release
-until the gates in `Validation status`_ are complete.
+Do not describe a production installer, wallet release or live deployment as fully
+validated until the corresponding gates in `Validation status`_ are complete.
 
 Contributing and credits
 ========================
@@ -1052,6 +1100,7 @@ notices remain in ``LICENCE``. See `Upstream and credits`_ and ``NOTICE.md``.
 Security reports should use the maintained repository's security advisory
 channel described in ``SECURITY.md``.
 
+.. _single-link verified installer: `Single-link verified installer`_
 .. _Documentation index: docs/README.md
 .. _Getting started: docs/getting-started.md
 .. _Hardware: docs/hardware.md
