@@ -150,6 +150,10 @@ def verify_policy(document: dict, trusted_keys: dict, *,
     if signature.get("algorithm") != SIGNATURE_ALGORITHM:
         raise PolicyError(f"unsupported signature algorithm {signature.get('algorithm')!r}")
     key_id = signature.get("keyId")
+    # A malformed type (list, dict, null, oversized string) must be a clean
+    # verification failure, never an uncaught TypeError (GLM53-RVN-020).
+    if not isinstance(key_id, str) or len(key_id) > 128:
+        raise PolicyError(f"malformed signature key id {key_id!r}")
     if key_id not in trusted_keys:
         raise PolicyError(f"policy signed by unknown key id {key_id!r}")
     try:
@@ -158,9 +162,13 @@ def verify_policy(document: dict, trusted_keys: dict, *,
         raise PolicyError("signature is not valid base64") from exc
 
     public_key = Ed25519PublicKey.from_public_bytes(trusted_keys[key_id])
+    if len(raw_signature) != 64:
+        raise PolicyError("Ed25519 signature must be exactly 64 bytes")
     try:
         public_key.verify(raw_signature, canonical_bytes(body))
-    except InvalidSignature as exc:
+    except (InvalidSignature, ValueError) as exc:
+        # Some cryptography releases raise ValueError for malformed-length
+        # Ed25519 signatures; both must fail closed as PolicyError.
         raise PolicyError("policy signature does not verify") from exc
 
     validate_body(body)
