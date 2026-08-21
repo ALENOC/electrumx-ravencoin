@@ -95,19 +95,47 @@ def _run_certification_container(image_tag: str, commit: str,
     ]
     completed = subprocess.run(argv, check=False, capture_output=True,
                                text=True, timeout=7200)
-    report = None
-    for line in completed.stdout.splitlines():
-        if line.startswith(REPORT_STDOUT_PREFIX):
-            report = json.loads(line[len(REPORT_STDOUT_PREFIX):])
     if completed.returncode not in (0, 1):
         raise RuntimeError(
             f"certification infrastructure failure (exit {completed.returncode}) "
             f"for {commit}: {completed.stderr[-1500:]}")
-    if report is None:
+
+    # The harness contract is deliberately one report frame per container run.
+    # Accepting the last of several prefixed lines would leave ambiguity at the
+    # trust boundary and make stdout-channel injection harder to reason about.
+    report_lines = [
+        line[len(REPORT_STDOUT_PREFIX):]
+        for line in completed.stdout.splitlines()
+        if line.startswith(REPORT_STDOUT_PREFIX)
+    ]
+    if len(report_lines) != 1:
         raise RuntimeError(
-            f"certification container produced no report on stdout for {commit}")
-    if report.get("overall") not in ALLOWED_OUTCOMES:
-        raise RuntimeError(f"invalid certification outcome: {report.get('overall')!r}")
+            f"certification container produced {len(report_lines)} report frames "
+            f"for {commit}; exactly one is required")
+    try:
+        report = json.loads(report_lines[0])
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"certification container produced malformed report JSON for {commit}") from exc
+    if not isinstance(report, dict):
+        raise RuntimeError(
+            f"certification container report must be a JSON object for {commit}")
+
+    overall = report.get("overall")
+    if overall not in ALLOWED_OUTCOMES:
+        raise RuntimeError(f"invalid certification outcome: {overall!r}")
+
+    # certify_core.py has a security-relevant process contract: only a genuine
+    # CERTIFICATION_PASSED result exits 0; every non-PASS result exits 1.  Bind
+    # both channels here rather than accepting either 0/1 independently.  A
+    # disagreement is an infrastructure/provenance failure, never evidence.
+    expected_exit = 0 if overall == "CERTIFICATION_PASSED" else 1
+    if completed.returncode != expected_exit:
+        raise RuntimeError(
+            f"certification exit/verdict mismatch for {commit}: "
+            f"exit={completed.returncode}, overall={overall!r}, "
+            f"expected_exit={expected_exit}")
+
     return {
         "schemaVersion": EVIDENCE_SCHEMA_VERSION,
         "capture": {
