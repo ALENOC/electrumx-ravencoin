@@ -25,13 +25,12 @@ historically tested commits are not interchangeable with this identity.
 |---|---|
 | RavenProject v4.8.0 candidate | **CERTIFICATION PASS** for exact commit `22549129888d02e0e08fcdb9f96f3c699167e774`; evidence is under `core-safety/production/certifications/` |
 | Reviewed RavenProject-only policy body | `safe-core-policy-v3.unsigned.json`: `RavenProject/Ravencoin@225491...` is `KNOWN_SAFE`; historical `2miners/Ravencoin@b60f50...` is `REVOKED` |
-| Current signed `safe-core-policy.json` in this branch | **v2 historical policy**, still carrying the old 2miners identity; it is deliberately not relabelled or edited because that would invalidate its signature |
-| v2 -> v3 signing | **RELEASE GATE** until the protected `core-safety-signing` workflow signs the reviewed v3 body with the existing policy key and the resulting signature verifies |
+| Current signed `safe-core-policy.json` in this branch | **v3 production policy**, signed and verified under the pinned policy public key |
+| v2 -> v3 signing | **PASS** in the protected `core-safety-signing` environment; the one-shot workflow published the signed artifacts and removed itself |
 | Candidate discovery going forward | RavenProject-only; a repository/version name alone never grants trust |
 
-A production release for the current RavenProject Core pin must therefore fail
-closed until signed policy v3 is promoted. The unsigned v3 file is review
-material, not a trust anchor.
+The unsigned v3 file remains review material, not a trust anchor. Production
+trust comes only from the signed current policy.
 
 ## Single-file installer trust status
 
@@ -46,9 +45,9 @@ the release manifest's exact Core repository, commit, tag, version, policy
 version and certification report digest all match one `KNOWN_SAFE` policy
 entry with passing certification evidence.
 
-The source-tree installer intentionally has no production ElectrumX
-release/update key yet. Until the dedicated release-key ceremony is completed,
-the normal production path fails closed before making persistent changes.
+The ElectrumX release/update public key was provisioned through its recorded
+ceremony and is pinned independently. The private key is available only inside
+the protected `electrumx-release-signing` environment.
 
 For pre-release end-to-end testing only,
 `core-safety/scripts/build_local_release_validation_bundle.py` creates an
@@ -151,10 +150,10 @@ The branch is not production-release-ready until all of these are true on the
 exact final commit:
 
 1. full CI matrix: all required jobs PASS;
-2. protected signing promotes the reviewed RavenProject-only safe-Core policy
-   v3 and its signature verifies under the already pinned policy public key;
-3. the separate ElectrumX release/update signing-key ceremony is completed and
-   only its public key is incorporated into the reviewed release bootstrap;
+2. the promoted RavenProject-only safe-Core policy v3 verifies under the pinned
+   policy public key;
+3. the release artifacts and manifest are generated and signed only by the
+   protected ElectrumX release publication workflow;
 4. a fresh host validation starts with no previous `electrumx-ravencoin`
    containers/networks/volumes or installer state;
 5. the real interactive single-file installer is traversed from its menu,

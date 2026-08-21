@@ -47,13 +47,11 @@ incident-era v4.8.0 work and previously validated in this project, is not the
 official tag target and must not be substituted for `225491...` merely because
 the trees were observed to be equivalent.
 
-## Historical signed v2 versus pending v3
+## Historical signed v2 and current signed v3
 
 Policy v1 and v2 are immutable historical signed evidence. The currently
-tracked `core-safety/production/safe-core-policy.json` remains signed policy
-v2 until the protected migration is complete. That v2 document contains the
-historical `2miners/Ravencoin` identity and therefore is **not** the final
-RavenProject-only production policy for the current branch.
+tracked `core-safety/production/safe-core-policy.json` is signed policy v3 and
+is the RavenProject-only production policy for this release line.
 
 The reviewed `safe-core-policy-v3.unsigned.json` candidate performs one atomic
 transition:
@@ -61,15 +59,12 @@ transition:
 - `2miners/Ravencoin@b60f50...` -> `REVOKED`;
 - `RavenProject/Ravencoin@225491...` -> `KNOWN_SAFE`.
 
-The unsigned file is review material, not a trust anchor. It must not be copied
-over `safe-core-policy.json`, relabelled as signed or accepted by production.
-The dedicated `.github/workflows/ravenproject-trust-migration.yml` workflow
-first regenerates the migration from the signed v2 baseline plus the persisted
-RavenProject certification report and compares that result with the reviewed
-candidate. Only after that gate passes does the protected
-`core-safety-signing` environment expose `POLICY_SIGNING_KEY`. The workflow then
-signs v3, verifies the signature again with the published public key, and
-publishes the resulting signed artifacts to the migration branch.
+The unsigned file remains review evidence, not a trust anchor. The one-shot
+protected migration regenerated it from signed v2 plus the persisted
+RavenProject certification report, compared it with the reviewed candidate,
+signed v3 inside `core-safety-signing`, verified it with the published public
+key, and published the signed artifacts. The workflow removed itself after
+that atomic promotion.
 
 This preserves both audit history and the RavenProject-only trust boundary.
 
