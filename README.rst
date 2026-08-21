@@ -1,5 +1,5 @@
 ============================================
-ElectrumX for Ravencoin — 1.13.1
+ElectrumX for Ravencoin 1.13.1
 ============================================
 
 Community-maintained ElectrumX server for Ravencoin, with Ravencoin-specific
@@ -19,7 +19,7 @@ all of the following in one maintained deployment path:
 * the Ravencoin Node Monitor integration;
 * Linux amd64 and ARM64 build/test coverage.
 
-ChainStrap — fast verified bootstrap in 1.13.1
+ChainStrap: fast verified bootstrap in 1.13.1
 ==============================================
 
 `ChainStrap <https://chainstrap.com>`_ support is available in ElectrumX-RVN
@@ -102,7 +102,7 @@ investigating the August 2026 incident, but they are **not** the production
 Core trust root for 1.13.1. Current production trust is designed around the
 exact official ``RavenProject/Ravencoin`` identity above.
 
-Installation — one stable link
+Installation: one stable link
 ==============================
 
 For a published production release, the recommended installation entry point
@@ -395,20 +395,20 @@ Documentation
 
 Start with the guide that matches the task:
 
-* `Getting started`_ — concepts and deployment paths;
-* `Fast bootstrap`_ — ChainStrap staging and mandatory Core validation;
-* `Hardware`_ — SBC/x86 sizing, storage and cooling;
-* `Storage selection`_ — placement and disk-safety guidance;
-* `Operations`_ — lifecycle, progress, backups and updates;
-* `Public node`_ — DNS, CGNAT, TLS and exposure;
-* `Security model`_ — trust boundaries and fail-closed behavior;
-* `Core certification`_ — exact Core identity and policy evidence;
-* `Crash consistency`_ — database recovery model;
-* `Electrum monitor`_ — peer discovery and backend/operator evidence;
-* `August 2026 incident guide`_ — incident and recovery background;
-* `Validation status`_ — current test, architecture and release evidence;
-* `Troubleshooting`_ — operational diagnosis;
-* `Documentation index`_ — full documentation map.
+* `Getting started`_: concepts and deployment paths;
+* `Fast bootstrap`_: ChainStrap staging and mandatory Core validation;
+* `Hardware`_: SBC/x86 sizing, storage and cooling;
+* `Storage selection`_: placement and disk-safety guidance;
+* `Operations`_: lifecycle, progress, backups and updates;
+* `Public node`_: DNS, CGNAT, TLS and exposure;
+* `Security model`_: trust boundaries and fail-closed behavior;
+* `Core certification`_: exact Core identity and policy evidence;
+* `Crash consistency`_: database recovery model;
+* `Electrum monitor`_: peer discovery and backend/operator evidence;
+* `August 2026 incident guide`_: incident and recovery background;
+* `Validation status`_: current test, architecture and release evidence;
+* `Troubleshooting`_: operational diagnosis;
+* `Documentation index`_: full documentation map.
 
 Credits
 =======
