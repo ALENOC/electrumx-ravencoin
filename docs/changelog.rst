@@ -12,6 +12,11 @@ Version 1.13.1 RVN (21 Aug 2026)
 * Migrates the bundled Core trust identity to the exact official
   ``RavenProject/Ravencoin`` v4.8.0 commit
   ``22549129888d02e0e08fcdb9f96f3c699167e774``.
+* Publishes signed safe-Core policy v3, revoking the historical 2miners build
+  identity and certifying the official RavenProject build identity.
+* Accepts the official v4.8.0 ``getblockchaininfo`` response, which omits
+  ``initialblockdownload``, while retaining height, peer and fresh-tip
+  readiness gates and still rejecting an explicit in-progress IBD state.
 * Adds fail-closed Core certification/evaluation/signing separation and
   digest-bound evidence handling.
 * Adds global transaction-hash extent consistency checks and crash-recovery

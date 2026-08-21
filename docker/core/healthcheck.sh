@@ -34,7 +34,11 @@ ibd=$(printf '%s\n' "$info" | sed -n \
 
 case "$blocks" in ''|*[!0-9]*) fail "missing/invalid blocks field" ;; esac
 case "$headers" in ''|*[!0-9]*) fail "missing/invalid headers field" ;; esac
-[ "$ibd" = "false" ] || fail "initial block download is not complete (initialblockdownload=$ibd)"
+case "$ibd" in
+    true) fail "initial block download is not complete (initialblockdownload=true)" ;;
+    false|'') ;;
+    *) fail "invalid initialblockdownload field: $ibd" ;;
+esac
 
 [ "$headers" -ge "$blocks" ] || fail "header height $headers is below block height $blocks"
 lag=$((headers - blocks))

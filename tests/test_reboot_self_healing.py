@@ -13,6 +13,10 @@ def _run_healthcheck(tmp_path, *, blocks=5000, headers=5000, ibd=False,
     """Run the production POSIX healthcheck against a deterministic fake CLI."""
     fake_cli = tmp_path / "raven-cli"
     tip_time = int(time.time()) - tip_age
+    ibd_line = (
+        f',\n  "initialblockdownload": {str(ibd).lower()}\n'
+        if ibd is not None else "\n"
+    )
     fake_cli.write_text(
         "#!/bin/sh\n"
         "set -eu\n"
@@ -25,8 +29,7 @@ def _run_healthcheck(tmp_path, *, blocks=5000, headers=5000, ibd=False,
         "    cat <<'EOF'\n"
         "{\n"
         f"  \"blocks\": {blocks},\n"
-        f"  \"headers\": {headers},\n"
-        f"  \"initialblockdownload\": {str(ibd).lower()}\n"
+        f"  \"headers\": {headers}{ibd_line}"
         "}\n"
         "EOF\n"
         "    ;;\n"
@@ -60,6 +63,11 @@ def _run_healthcheck(tmp_path, *, blocks=5000, headers=5000, ibd=False,
 
 def test_core_readiness_accepts_synced_fresh_connected_node(tmp_path):
     result = _run_healthcheck(tmp_path)
+    assert result.returncode == 0, result.stderr
+
+
+def test_core_readiness_accepts_official_v4_8_response_without_ibd_field(tmp_path):
+    result = _run_healthcheck(tmp_path, ibd=None)
     assert result.returncode == 0, result.stderr
 
 
