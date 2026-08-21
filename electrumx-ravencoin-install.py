@@ -1128,7 +1128,7 @@ def initialize_storage_permissions(storage_root: Path, monitor: bool) -> None:
     run_checked([
         "docker", "run", "--rm", "--network", "none", "--user", "0:0",
         "--entrypoint", "/bin/sh", "-v", f"{electrumx_dir}:/storage/electrumx-data",
-        "alenoc/electrumx-ravencoin:1.13.0", "-ec",
+        "alenoc/electrumx-ravencoin:1.13.1", "-ec",
         "uid=$(id -u electrumx); gid=$(id -g electrumx); "
         "chown -R \"$uid:$gid\" /storage/electrumx-data; chmod 0750 /storage/electrumx-data",
     ])
