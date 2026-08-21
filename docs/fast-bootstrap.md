@@ -23,6 +23,22 @@ A malicious or broken snapshot can therefore waste bandwidth or fail bootstrap, 
 accepted as validated chain state. Consensus validation remains the responsibility of the local
 Core binary qualified by this repository.
 
+## Failure semantics are deliberately fail-closed
+
+Selecting ChainStrap is an explicit bootstrap choice. If the downloader, digest checks or the
+offline Core reindex fail, the single-file installer **does not silently switch to P2P**. Changing
+bootstrap mode behind the operator's back would hide the failure that was actually selected and
+make validation results ambiguous.
+
+For a failed *fresh* single-file install, the installer prints the recent ChainStrap bootstrap
+log, tears down the just-created Compose project including its named volumes, removes the partial
+install directory, and returns an error. Because a fresh install first refuses any pre-existing
+Compose-labelled resources for the fixed `electrumx-ravencoin` project name, this cleanup cannot
+silently delete an older node that existed before the attempt.
+
+After reviewing the failure, an operator who wants traditional synchronization can start a new
+clean attempt explicitly with `--p2p-bootstrap`. No automatic fallback is treated as success.
+
 ## Use it only for a fresh bundled-Core deployment
 
 Do not enable fast bootstrap on a data volume that already contains Core data without a matching

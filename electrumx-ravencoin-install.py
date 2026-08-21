@@ -50,12 +50,14 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import textwrap
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path, PurePosixPath
 from typing import Callable, Optional, Sequence
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 SIGNATURE_DOMAIN = b"ALENOC-RVN-ELECTRUMX-UPDATE-MANIFEST-v1\x00"
 CORE_POLICY_SIGNATURE_DOMAIN = b"ALENOC-RVN-CORE-POLICY-v1\x00"
 SIGNATURE_ALGORITHM = "ed25519"
@@ -95,9 +97,20 @@ MONITOR_ENV = f"{MONITOR_PATH}/.env"
 MONITOR_OVERLAY = "compose.monitor.yaml"
 MONITOR_CONTROLLER_OVERLAY = "compose.monitor-controller.yaml"
 CONTROLLER_SCRIPT = f"{MONITOR_PATH}/contrib/ravencoin-bandwidth-controller.py"
+MONITOR_PORT_VERIFY = f"{MONITOR_PATH}/contrib/verify-published-port.py"
+NETWORK_CONFIG_HELPER = "core-safety/scripts/configure_monitor_admin_network.py"
 CONTROLLER_UNIT = "electrumx-ravencoin-monitor-controller.service"
+# The root systemd unit must never execute anything from the operator-owned
+# install tree.  The controller script is copied, root-owned and unwritable by
+# the installing user, into this fixed trusted location (GLM53-RVN-002).
+TRUSTED_CONTROLLER_DIR = Path("/usr/local/lib/electrumx-ravencoin")
+TRUSTED_CONTROLLER_PATH = TRUSTED_CONTROLLER_DIR / "ravencoin-bandwidth-controller.py"
 CHAINSTRAP_OVERLAY = "compose.chainstrap.yaml"
+STORAGE_OVERLAY = "compose.storage.yaml"
 BASE_COMPOSE = "compose.yaml"
+STORAGE_ROOT_DIRNAME = "electrumx-ravencoin-storage"
+STORAGE_SUBDIRS = ("ravencoin-data", "ravencoin-config", "electrumx-data", "monitor-data")
+SAFE_STORAGE_PATH_RE = re.compile(r"^[A-Za-z0-9_./ +@-]+$")
 UPDATE_PUBLIC_KEY_PATH = "core-safety/production/update-signing-public-key.hex"
 CORE_POLICY_PATH = "core-safety/production/safe-core-policy.json"
 CORE_POLICY_PUBLIC_KEY_PATH = "core-safety/production/core-policy-signing-public-key.hex"
@@ -120,6 +133,7 @@ SAFE_CONTROLLER_ROOT_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
 
 REQUIRED_BUNDLE_PATHS = frozenset({
     BASE_COMPOSE,
+    STORAGE_OVERLAY,
     CHAINSTRAP_OVERLAY,
     MONITOR_OVERLAY,
     MONITOR_CONTROLLER_OVERLAY,
@@ -133,11 +147,63 @@ REQUIRED_BUNDLE_PATHS = frozenset({
     f"{MONITOR_PATH}/Dockerfile",
     f"{MONITOR_PATH}/.env.example",
     CONTROLLER_SCRIPT,
+    MONITOR_PORT_VERIFY,
+    NETWORK_CONFIG_HELPER,
 })
 
 
 class InstallError(RuntimeError):
     """Fatal fail-closed installation error."""
+
+
+def _ui_width() -> int:
+    """Return a bounded width that stays readable on narrow and wide terminals."""
+    columns = shutil.get_terminal_size(fallback=(88, 24)).columns
+    return max(56, min(columns, 100))
+
+
+def _ui_wrap(text: str, *, initial: str = "", subsequent: str = "") -> str:
+    return textwrap.fill(
+        text, width=_ui_width(), initial_indent=initial, subsequent_indent=subsequent,
+        break_long_words=False, break_on_hyphens=False)
+
+
+def print_installer_banner() -> None:
+    width = _ui_width()
+    print()
+    print("=" * width)
+    print("ELECTRUMX RAVENCOIN".center(width))
+    print("Verified Node Installer".center(width))
+    print("=" * width)
+    print()
+
+
+def ui_section(title: str, subtitle: Optional[str] = None) -> None:
+    print()
+    print(f"[ {title} ]")
+    print("-" * _ui_width())
+    if subtitle:
+        print(_ui_wrap(subtitle))
+    print()
+
+
+def print_installation_summary(storage_root: Optional[Path], bootstrap: str,
+                               monitor: bool, controller: bool) -> None:
+    ui_section(
+        "Installation summary",
+        "The selections below are the exact configuration the installer will activate.")
+    rows = (
+        ("Project data", str(storage_root) if storage_root else "not selected (--check-only)"),
+        ("Docker images", "existing Docker data-root (unchanged)"),
+        ("Bootstrap", "ChainStrap Fast Verified Bootstrap" if bootstrap == "chainstrap" else "Traditional Ravencoin P2P"),
+        ("Node Monitor", "enabled" if monitor else "disabled"),
+        ("Advanced controls", "enabled (root-owned helper)" if controller else "disabled"),
+    )
+    label_width = max(len(label) for label, _value in rows)
+    for label, value in rows:
+        prefix = f"  {label:<{label_width}} : "
+        print(_ui_wrap(value, initial=prefix, subsequent=" " * len(prefix)))
+    print()
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +235,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
                              "core-safety/scripts/build_local_release_validation_bundle.py "
                              "instead of the real GitHub release. Never use this for a real "
                              "install; it never touches the production trust roots.")
+    parser.add_argument(
+        "--storage-root", default=None, metavar="DIR",
+        help="store Ravencoin/ChainStrap, ElectrumX and Node Monitor persistent "
+             "data under DIR; interactive installs offer mounted disks/filesystems")
     return parser
 
 
@@ -587,6 +657,43 @@ def _archive_text(archive: tarfile.TarFile, name: str) -> str:
         raise InstallError(f"bundle member {name!r} is not UTF-8") from exc
 
 
+def _bundle_member_sha256(data: bytes, name: str) -> str:
+    """Derive a member digest from the already signature-bound bundle bytes.
+
+    This expected digest is computed before extracted files enter the
+    operator-writable install tree, so it remains an independent reference for
+    privileged controller installation (REAUDIT-002).
+    """
+    try:
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+            member = archive.getmember(name)
+            normalized = _safe_member_name(member.name).as_posix()
+            if normalized != name or not member.isfile():
+                raise InstallError(
+                    f"bundle member {name!r} is not the expected regular file")
+            source = archive.extractfile(member)
+            if source is None:
+                raise InstallError(f"cannot read bundle member {name!r}")
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+            return digest.hexdigest()
+    except (tarfile.TarError, KeyError) as exc:
+        raise InstallError(
+            f"cannot derive trusted digest for bundle member {name!r}") from exc
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        raise InstallError(f"cannot hash trusted controller copy {path}: {exc}") from exc
+    return digest.hexdigest()
+
+
 def _validate_metadata(metadata: dict, body: dict) -> None:
     if not isinstance(metadata, dict) or metadata.get("schemaVersion") != 1:
         raise InstallError("bundle installation metadata is malformed")
@@ -778,6 +885,272 @@ def print_local_validation_banner(directory: Path) -> None:
     print("=" * 72, file=sys.stderr)
 
 
+
+
+def _format_storage_bytes(value: int) -> str:
+    amount = float(value)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if amount < 1024.0 or unit == "TiB":
+            return f"{amount:.1f} {unit}" if unit != "B" else f"{amount:.0f} {unit}"
+        amount /= 1024.0
+    raise AssertionError("unreachable")
+
+
+def _nearest_existing_parent(path: Path) -> Path:
+    current = path
+    while not current.exists() and current != current.parent:
+        current = current.parent
+    return current
+
+
+def validate_storage_root_path(path: Path) -> Path:
+    raw = str(path.expanduser())
+    if not raw or not SAFE_STORAGE_PATH_RE.fullmatch(raw) or any(ch in raw for ch in ":'$\n\r"):
+        raise InstallError(
+            "storage path contains unsupported characters; use letters, digits, spaces, "
+            "and common path characters only")
+    resolved = path.expanduser().resolve(strict=False)
+    home = Path.home().resolve()
+    if resolved in (Path("/"), home):
+        raise InstallError("storage root must be a dedicated child directory, not / or $HOME")
+    if resolved.exists():
+        raise InstallError(
+            f"fresh install storage root already exists: {resolved}; preserve or remove it "
+            "explicitly before retrying")
+    parent = _nearest_existing_parent(resolved.parent)
+    if not parent.is_dir() or not os.access(parent, os.W_OK | os.X_OK):
+        raise InstallError(f"storage parent is not writable by the current user: {parent}")
+    try:
+        mount = Path(subprocess.run(
+            ["findmnt", "-n", "-o", "TARGET", "--target", str(parent)],
+            check=False, capture_output=True, text=True).stdout.strip() or "/").resolve()
+    except OSError:
+        mount = Path("/")
+    if resolved == mount:
+        raise InstallError("storage root must be a child directory, not the filesystem mountpoint")
+    return resolved
+
+
+def _storage_candidate_root(mountpoint: Path) -> Optional[Path]:
+    try:
+        home = Path.home().resolve()
+        if os.stat(home).st_dev == os.stat(mountpoint).st_dev:
+            return home / STORAGE_ROOT_DIRNAME
+    except OSError:
+        pass
+    if os.access(mountpoint, os.W_OK | os.X_OK):
+        return mountpoint / STORAGE_ROOT_DIRNAME
+    return None
+
+
+def discover_storage_candidates() -> list[dict]:
+    """Return writable mounted block filesystems without changing the host."""
+    lsblk = shutil.which("lsblk")
+    candidates: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    if lsblk is not None:
+        completed = subprocess.run(
+            [lsblk, "--json", "--bytes", "--output",
+             "NAME,PATH,TYPE,FSTYPE,SIZE,MOUNTPOINTS,RO"],
+            check=False, capture_output=True, text=True)
+        if completed.returncode == 0:
+            try:
+                payload = json.loads(completed.stdout)
+            except json.JSONDecodeError:
+                payload = {}
+
+            def walk(nodes) -> None:
+                for node in nodes or []:
+                    mountpoints = node.get("mountpoints") or []
+                    if isinstance(mountpoints, str):
+                        mountpoints = [mountpoints]
+                    source = str(node.get("path") or node.get("name") or "unknown")
+                    if node.get("fstype") and not node.get("ro"):
+                        for raw_mount in mountpoints:
+                            if not raw_mount:
+                                continue
+                            mountpoint = Path(raw_mount).resolve()
+                            if not mountpoint.is_dir():
+                                continue
+                            suggested = _storage_candidate_root(mountpoint)
+                            if suggested is None:
+                                continue
+                            key = (source, str(mountpoint))
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            try:
+                                usage = shutil.disk_usage(mountpoint)
+                            except OSError:
+                                continue
+                            candidates.append({
+                                "source": source,
+                                "mountpoint": mountpoint,
+                                "fstype": str(node.get("fstype")),
+                                "size": int(node.get("size") or usage.total),
+                                "free": int(usage.free),
+                                "root": suggested,
+                            })
+                    walk(node.get("children"))
+
+            walk(payload.get("blockdevices"))
+
+    if not candidates:
+        home = Path.home().resolve()
+        usage = shutil.disk_usage(home)
+        candidates.append({
+            "source": "current-home-filesystem",
+            "mountpoint": home,
+            "fstype": "unknown",
+            "size": usage.total,
+            "free": usage.free,
+            "root": home / STORAGE_ROOT_DIRNAME,
+        })
+    return sorted(candidates, key=lambda item: (str(item["mountpoint"]) != "/", str(item["mountpoint"])))
+
+
+def choose_storage_root(args, interactive: bool,
+                        prompt: Callable[[str], str] = input) -> Path:
+    if args.storage_root:
+        selected = validate_storage_root_path(Path(args.storage_root))
+        usage = shutil.disk_usage(_nearest_existing_parent(selected.parent))
+        print(f"project data storage: {selected} ({_format_storage_bytes(usage.free)} free)")
+        return selected
+    if not interactive:
+        raise InstallError("--storage-root is required for a non-interactive fresh install")
+
+    candidates = discover_storage_candidates()
+    ui_section(
+        "1 / 4  Project data storage",
+        "Choose the mounted filesystem that will hold the Ravencoin blockchain, "
+        "ChainStrap data, ElectrumX database and Node Monitor history. Docker images "
+        "remain in Docker's existing data-root.")
+    for index, item in enumerate(candidates, 1):
+        state = ""
+        if item["root"].exists():
+            state = " [existing path - cannot use for fresh install]"
+        description = (
+            f"{index}. {item['source']} mounted at {item['mountpoint']} "
+            f"({item['fstype']}, {_format_storage_bytes(item['free'])} free / "
+            f"{_format_storage_bytes(item['size'])}){state}")
+        print(_ui_wrap(description, initial="  ", subsequent="     "))
+        print(_ui_wrap(f"data directory: {item['root']}", initial="     ", subsequent="     "))
+        print()
+    print("  C. Custom dedicated directory on another mounted filesystem")
+    print()
+
+    answer = prompt("Storage choice [1]: ").strip().lower()
+    if answer in ("c", "custom"):
+        custom = prompt("Dedicated storage directory: ").strip()
+        if not custom:
+            raise InstallError("no custom storage directory supplied")
+        selected = validate_storage_root_path(Path(custom))
+    else:
+        if answer == "":
+            answer = "1"
+        try:
+            index = int(answer)
+        except ValueError as exc:
+            raise InstallError(f"unrecognized storage choice {answer!r}") from exc
+        if index < 1 or index > len(candidates):
+            raise InstallError(f"storage choice {index} is outside the displayed range")
+        selected = validate_storage_root_path(candidates[index - 1]["root"])
+
+    usage = shutil.disk_usage(_nearest_existing_parent(selected.parent))
+    print()
+    print(_ui_wrap(
+        f"Selected project data storage: {selected} ({_format_storage_bytes(usage.free)} free)"))
+    print()
+    return selected
+
+
+def require_clean_storage_root(storage_root: Path) -> None:
+    validate_storage_root_path(storage_root)
+
+
+def prepare_storage_layout(storage_root: Path) -> None:
+    require_clean_storage_root(storage_root)
+    created = False
+    try:
+        storage_root.mkdir(mode=0o755, parents=False, exist_ok=False)
+        created = True
+        for name in STORAGE_SUBDIRS:
+            (storage_root / name).mkdir(mode=0o755)
+    except BaseException:
+        if created:
+            shutil.rmtree(storage_root, ignore_errors=True)
+        raise
+
+
+def _storage_env_value(path: Path) -> str:
+    value = str(path)
+    if not SAFE_STORAGE_PATH_RE.fullmatch(value) or any(ch in value for ch in ":'$\n\r"):
+        raise InstallError(f"storage path cannot be represented safely in Compose: {path}")
+    return value
+
+
+def write_storage_env(root: Path, storage_root: Path) -> None:
+    env_path = root / ".env"
+    if not env_path.is_file():
+        raise InstallError("setup.sh did not create .env before storage configuration")
+    mapping = {
+        "RAVENCOIN_DATA_HOST_DIR": storage_root / "ravencoin-data",
+        "RAVENCOIN_CONFIG_HOST_DIR": storage_root / "ravencoin-config",
+        "ELECTRUMX_DATA_HOST_DIR": storage_root / "electrumx-data",
+        "MONITOR_DATA_HOST_DIR": storage_root / "monitor-data",
+    }
+    existing = env_path.read_text(encoding="utf-8")
+    if any(f"{key}=" in existing for key in mapping):
+        raise InstallError("refusing to overwrite pre-existing storage path configuration")
+    with env_path.open("a", encoding="utf-8") as handle:
+        handle.write("\n# Selected by the verified installer; project data only, not Docker images.\n")
+        for key, path in mapping.items():
+            handle.write(f"{key}={_storage_env_value(path)}\n")
+
+
+def initialize_storage_permissions(storage_root: Path, monitor: bool) -> None:
+    raven_mounts = [
+        (storage_root / "ravencoin-data", "/storage/ravencoin-data"),
+        (storage_root / "ravencoin-config", "/storage/ravencoin-config"),
+    ]
+    if monitor:
+        raven_mounts.append((storage_root / "monitor-data", "/storage/monitor-data"))
+    argv = ["docker", "run", "--rm", "--network", "none", "--user", "0:0",
+            "--entrypoint", "/bin/sh"]
+    for host, container in raven_mounts:
+        argv += ["-v", f"{host}:{container}"]
+    targets = " ".join(container for _host, container in raven_mounts)
+    argv += ["alenoc/ravencoin-core:4.8.0", "-ec",
+             f"chown -R 10001:10001 {targets}; chmod 0750 {targets}"]
+    run_checked(argv)
+
+    electrumx_dir = storage_root / "electrumx-data"
+    run_checked([
+        "docker", "run", "--rm", "--network", "none", "--user", "0:0",
+        "--entrypoint", "/bin/sh", "-v", f"{electrumx_dir}:/storage/electrumx-data",
+        "alenoc/electrumx-ravencoin:1.13.1", "-ec",
+        "uid=$(id -u electrumx); gid=$(id -g electrumx); "
+        "chown -R \"$uid:$gid\" /storage/electrumx-data; chmod 0750 /storage/electrumx-data",
+    ])
+
+
+def cleanup_storage_layout_best_effort(storage_root: Path) -> None:
+    if not storage_root.exists():
+        return
+    # Container UIDs own the data subdirectories. Use the already-built Core
+    # image only to return ownership to the invoking host user before rmtree.
+    try:
+        subprocess.run([
+            "docker", "run", "--rm", "--network", "none", "--user", "0:0",
+            "--entrypoint", "/bin/sh", "-v", f"{storage_root}:/storage",
+            "alenoc/ravencoin-core:4.8.0", "-ec",
+            f"chown -R {os.getuid()}:{os.getgid()} /storage",
+        ], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+    shutil.rmtree(storage_root, ignore_errors=True)
+
+
 # ---------------------------------------------------------------------------
 # Operator choices / generated configuration
 # ---------------------------------------------------------------------------
@@ -789,11 +1162,16 @@ def choose_bootstrap(args, interactive: bool, prompt: Callable[[str], str] = inp
         return "p2p"
     if not interactive:
         return "chainstrap"
-    answer = prompt(
-        "Blockchain bootstrap method:\n"
-        "  1. Fast Verified Bootstrap using ChainStrap [recommended, default]\n"
-        "  2. Traditional Ravencoin P2P synchronization\n"
-        "Choice [1]: ").strip()
+    ui_section(
+        "2 / 4  Blockchain bootstrap",
+        "ChainStrap downloads a vetted snapshot and then Ravencoin Core reindexes and "
+        "validates it offline. Traditional P2P synchronization remains available as an "
+        "explicit alternative.")
+    print("  1. Fast Verified Bootstrap using ChainStrap  [recommended, default]")
+    print("  2. Traditional Ravencoin P2P synchronization")
+    print()
+    answer = prompt("Choice [1]: ").strip()
+    print()
     if answer in ("", "1"):
         return "chainstrap"
     if answer == "2":
@@ -810,11 +1188,15 @@ def choose_monitor(args, interactive: bool, prompt: Callable[[str], str] = input
         return False
     if not interactive:
         return True
-    answer = prompt(
-        "Install Ravencoin Node Monitor?\n"
-        "  Y. Yes [recommended, default]\n"
-        "  N. No\n"
-        "Choice [Y]: ").strip().lower()
+    ui_section(
+        "3 / 4  Ravencoin Node Monitor",
+        "The monitor is isolated from ElectrumX failure and remains available to report "
+        "Core, host and network state when ElectrumX is degraded.")
+    print("  Y. Install Node Monitor  [recommended, default]")
+    print("  N. Do not install Node Monitor")
+    print()
+    answer = prompt("Choice [Y]: ").strip().lower()
+    print()
     if answer in ("", "y", "yes"):
         return True
     if answer in ("n", "no"):
@@ -830,11 +1212,15 @@ def choose_monitor_controller(args, monitor: bool, interactive: bool,
         return True
     if not interactive:
         return False
-    answer = prompt(
-        "Enable advanced host controls (bandwidth / connection limits)?\n"
-        "  y. Yes\n"
-        "  N. No [default]\n"
-        "Choice [N]: ").strip().lower()
+    ui_section(
+        "4 / 4  Advanced host controls",
+        "Optional. Enabling this installs a separate root-owned systemd helper and may "
+        "request sudo. It is not required for normal monitoring.")
+    print("  N. Keep advanced host controls disabled  [recommended, default]")
+    print("  Y. Enable bandwidth / connection controls (requires sudo)")
+    print()
+    answer = prompt("Choice [N]: ").strip().lower()
+    print()
     if answer in ("", "n", "no"):
         return False
     if answer in ("y", "yes"):
@@ -856,10 +1242,11 @@ def write_monitor_env(root: Path) -> None:
         "CORE_RPC_HOST=ravencoin-core\nCORE_RPC_PORT=8766\n"
         "CORE_RPC_USER_FILE=/run/raven-secrets/raven_rpc_user\n"
         "CORE_RPC_PASSWORD_FILE=/run/raven-secrets/raven_rpc_password\n"
-        "ELECTRUMX_ENABLED=true\nELECTRUMX_RPC_HOST=127.0.0.1\n"
-        "ELECTRUMX_RPC_PORT=8000\nELECTRUMX_SSL_HOST=127.0.0.1\n"
-        "ELECTRUMX_SSL_PORT=50002\nELECTRUMX_SSL_VERIFY=false\n"
+        "ELECTRUMX_ENABLED=true\n"
+        "ELECTRUMX_SSL_VERIFY=false\n"
         "HISTORY_ENABLED=true\nHISTORY_STORAGE=memory\n"
+        "HISTORY_DB_PATH=/data/history.db\n"
+        "EXTRA_DISK_PATHS=Project storage=/data\n"
         "PRICE_FEED_ENABLED=true\nPRICE_FEED_SYMBOL=RVNUSDT\n"
         "PROMETHEUS_ENABLED=true\nMIN_SAFE_CORE_VERSION=4.8.0\n"
         "BANDWIDTH_CONTROL_ENABLED=false\n"
@@ -881,8 +1268,149 @@ def run_checked(argv: Sequence[str], *, cwd: Optional[Path] = None,
             f"command failed with exit code {completed.returncode}: {' '.join(argv)}")
 
 
+def _compose_output_tail(handle, limit: int = 80) -> str:
+    handle.flush()
+    handle.seek(0)
+    return "\n".join(handle.read().splitlines()[-limit:])
+
+
+def _wait_for_compose_container(root: Path, base: Sequence[str], service: str,
+                                parent, output_handle, timeout: float = 90.0) -> str:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        completed = subprocess.run(
+            list(base) + ["ps", "-a", "-q", service], cwd=root, check=False,
+            capture_output=True, text=True)
+        if completed.returncode == 0 and completed.stdout.strip():
+            return completed.stdout.strip().splitlines()[-1]
+        if parent.poll() is not None:
+            tail = _compose_output_tail(output_handle)
+            detail = f"\n{tail}" if tail else ""
+            raise InstallError(
+                f"Compose activation exited before {service} was created{detail}")
+        time.sleep(0.25)
+    raise InstallError(f"timed out waiting for Compose service {service}")
+
+
+def _compose_container_result(container_id: str) -> tuple[str, int]:
+    completed = subprocess.run(
+        ["docker", "inspect", "--format", "{{.State.Status}} {{.State.ExitCode}}",
+         container_id], check=False, capture_output=True, text=True)
+    if completed.returncode != 0:
+        raise InstallError("cannot inspect completed bootstrap container state")
+    fields = completed.stdout.strip().split()
+    if len(fields) != 2:
+        raise InstallError("Docker returned malformed bootstrap container state")
+    try:
+        exit_code = int(fields[1])
+    except ValueError as exc:
+        raise InstallError("Docker returned a malformed bootstrap exit code") from exc
+    return fields[0], exit_code
+
+
+def _stream_compose_one_shot(root: Path, base: Sequence[str], service: str,
+                             title: str, subtitle: str, parent, output_handle) -> None:
+    ui_section(title, subtitle)
+    container_id = _wait_for_compose_container(
+        root, base, service, parent, output_handle)
+    print("Live progress follows. Leave this terminal running.\n")
+    logs = subprocess.run(
+        list(base) + ["logs", "--no-color", "--follow", service],
+        cwd=root, check=False)
+    if logs.returncode != 0:
+        print(
+            "Warning: the live log follower ended unexpectedly; "
+            "the service exit status will still be verified.",
+            file=sys.stderr)
+    status, exit_code = _compose_container_result(container_id)
+    if status != "exited" or exit_code != 0:
+        raise InstallError(
+            f"{service} did not complete successfully: status={status}, exit={exit_code}")
+    print()
+    print(f"[OK] {title}")
+    print()
+
+
+def run_chainstrap_activation_with_live_logs(root: Path, base: Sequence[str]) -> None:
+    """Activate Compose while streaming the two long one-shot bootstrap phases."""
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as compose_output:
+        parent = subprocess.Popen(
+            list(base) + ["up", "-d", "--no-build"], cwd=root,
+            stdout=compose_output, stderr=subprocess.STDOUT, text=True)
+        try:
+            _stream_compose_one_shot(
+                root, base, "chainstrap-bootstrap",
+                "ChainStrap verified bootstrap",
+                "Downloading and verifying the vetted snapshot. Progress includes part and "
+                "snapshot percentage, bytes, transfer rate and ETA.",
+                parent, compose_output)
+            _stream_compose_one_shot(
+                root, base, "ravencoin-bootstrap-reindex",
+                "Offline Ravencoin Core validation",
+                "Ravencoin Core is reindexing the downloaded raw blocks with networking "
+                "disabled and will verify the exact snapshot tip and asset indexes.",
+                parent, compose_output)
+            ui_section(
+                "Starting node services",
+                "Bootstrap validation succeeded. Starting Ravencoin Core, ElectrumX and the "
+                "selected optional services.")
+            returncode = parent.wait()
+            if returncode != 0:
+                tail = _compose_output_tail(compose_output)
+                if tail:
+                    print(tail, file=sys.stderr)
+                raise InstallError(
+                    f"docker compose activation failed with exit code {returncode}")
+            print("[OK] Docker services started")
+            print()
+        except BaseException:
+            if parent.poll() is None:
+                parent.terminate()
+                try:
+                    parent.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    parent.kill()
+                    parent.wait()
+            raise
+
+
+def activate_compose(root: Path, base: Sequence[str], bootstrap: str) -> None:
+    if bootstrap == "chainstrap":
+        run_chainstrap_activation_with_live_logs(root, base)
+        return
+    if bootstrap != "p2p":
+        raise InstallError(f"unknown bootstrap choice {bootstrap!r}")
+    ui_section(
+        "Starting node services",
+        "Traditional P2P synchronization selected. Starting Ravencoin Core, ElectrumX and "
+        "the selected optional services.")
+    run_checked(list(base) + ["up", "-d", "--no-build"], cwd=root)
+
+
+def verify_monitor_host_publish(root: Path, files: Sequence[str]) -> None:
+    """Prove the Monitor is published on the host, not merely alive in-container.
+
+    The helper performs at most one monitor-only force-recreate when Docker has
+    lost the 8899 host publication after a reboot.  Failure after that single
+    repair attempt aborts the fresh install; Core and ElectrumX are never
+    recreated by this recovery path.
+    """
+    script = root / MONITOR_PORT_VERIFY
+    argv = [
+        sys.executable, str(script),
+        "--compose-dir", str(root),
+        "--container", "ravencoin-node-monitor",
+        "--host", "127.0.0.1",
+        "--port", "8899",
+        "--repair",
+    ]
+    for filename in files:
+        argv += ["--compose-file", filename]
+    run_checked(argv, cwd=root)
+
+
 def compose_files(bootstrap: str, monitor: bool, controller: bool = False) -> list[str]:
-    files = [BASE_COMPOSE]
+    files = [BASE_COMPOSE, STORAGE_OVERLAY]
     if bootstrap == "chainstrap":
         files.append(CHAINSTRAP_OVERLAY)
     elif bootstrap != "p2p":
@@ -897,7 +1425,11 @@ def compose_files(bootstrap: str, monitor: bool, controller: bool = False) -> li
 
 
 def _compose_prefix(files: Sequence[str]) -> list[str]:
-    result = ["docker", "compose"]
+    # The project name is pinned explicitly (GLM53-RVN-008): an exported
+    # COMPOSE_PROJECT_NAME in the operator's environment must not be able to
+    # detach the installer from the project namespace its preflights and the
+    # monitor/controller container names assume.
+    result = ["docker", "compose", "-p", COMPOSE_PROJECT_NAME]
     for filename in files:
         result += ["-f", filename]
     return result
@@ -944,7 +1476,6 @@ def controller_unit_body(root: Path) -> str:
         raise InstallError(
             "advanced controller requires an install path containing only letters, "
             "digits, '.', '_', '/', or '-' to keep the root systemd unit unambiguous")
-    script = root / CONTROLLER_SCRIPT
     return "\n".join((
         "[Unit]",
         "Description=Ravencoin Node Monitor host controller",
@@ -955,7 +1486,10 @@ def controller_unit_body(root: Path) -> str:
         "Type=simple",
         "User=root",
         "Group=root",
-        f"ExecStart=/usr/bin/python3 {script}",
+        # GLM53-RVN-002: execute only the root-owned verified copy in the
+        # trusted library path, never a script inside the operator-writable
+        # install tree.
+        f"ExecStart=/usr/bin/python3 {TRUSTED_CONTROLLER_PATH}",
         "Restart=on-failure",
         "RestartSec=3",
         "Environment=BANDWIDTH_SOCKET_PATH=/run/ravencoin-bandwidth/control.sock",
@@ -985,8 +1519,80 @@ def controller_unit_body(root: Path) -> str:
     ))
 
 
-def install_controller(root: Path) -> None:
+def install_trusted_controller(source: Path, expected_sha256: str) -> None:
+    """Install the controller only if the privileged copy matches the signed bundle.
+
+    ``expected_sha256`` is derived from the already signature-bound bundle bytes,
+    before extraction into an operator-writable tree.  The source may therefore
+    change concurrently without being able to cross into root execution: the
+    root-owned staged copy is hashed before atomic placement and the final copy is
+    checked again before systemd can be enabled (REAUDIT-002).
+    """
     controller_prerequisites(require_sudo=True)
+    if not RAW_SHA256_RE.fullmatch(expected_sha256 or ""):
+        raise InstallError("trusted controller expected SHA-256 is malformed")
+    if not source.is_file():
+        raise InstallError(
+            f"bundle did not contain the monitor controller script at {source}")
+    prefix = _sudo_prefix()
+    staged = TRUSTED_CONTROLLER_PATH.with_name(
+        TRUSTED_CONTROLLER_PATH.name + f".new.{secrets.token_hex(8)}")
+    run_checked(prefix + ["mkdir", "-p", "-o", "root", "-g", "root", "-m", "0755",
+                          str(TRUSTED_CONTROLLER_DIR)])
+    try:
+        run_checked(prefix + ["install", "-o", "root", "-g", "root", "-m", "0755",
+                              str(source), str(staged)])
+        staged_digest = _file_sha256(staged)
+        if staged_digest != expected_sha256:
+            raise InstallError(
+                "trusted controller SHA-256 mismatch after privileged copy; "
+                "refusing root execution")
+        # Same-filesystem rename under a root-owned 0755 directory: atomic, and
+        # after hashing the staged object the normal user cannot modify it.
+        run_checked(prefix + ["mv", "-fT", str(staged),
+                              str(TRUSTED_CONTROLLER_PATH)])
+    except BaseException:
+        subprocess.run(prefix + ["rm", "-f", str(staged)], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        raise
+    verify_trusted_controller(expected_sha256)
+
+
+def verify_trusted_controller(expected_sha256: Optional[str] = None) -> None:
+    """Fail unless the trusted controller has safe ownership and expected bytes."""
+    try:
+        stat_result = TRUSTED_CONTROLLER_PATH.stat()
+    except OSError as exc:
+        raise InstallError(
+            f"trusted controller {TRUSTED_CONTROLLER_PATH} is not installed: {exc}")
+    if stat_result.st_uid != 0 or stat_result.st_gid != 0:
+        raise InstallError(
+            f"trusted controller {TRUSTED_CONTROLLER_PATH} must be owned by "
+            f"root:root, found uid={stat_result.st_uid} gid={stat_result.st_gid}")
+    if stat_result.st_mode & 0o022:
+        raise InstallError(
+            f"trusted controller {TRUSTED_CONTROLLER_PATH} must not be group- or "
+            f"world-writable (mode {stat_result.st_mode & 0o777:o})")
+    if expected_sha256 is not None:
+        if not RAW_SHA256_RE.fullmatch(expected_sha256 or ""):
+            raise InstallError("trusted controller expected SHA-256 is malformed")
+        if _file_sha256(TRUSTED_CONTROLLER_PATH) != expected_sha256:
+            raise InstallError(
+                "installed trusted controller SHA-256 does not match signed bundle")
+    if os.geteuid() != 0:
+        # The invoking user must not be able to replace the file: the
+        # containing directory must be root-owned and not user-writable.
+        dir_stat = TRUSTED_CONTROLLER_DIR.stat()
+        if dir_stat.st_uid != 0 or dir_stat.st_mode & 0o022:
+            raise InstallError(
+                f"trusted controller directory {TRUSTED_CONTROLLER_DIR} must be "
+                "root-owned and not group- or world-writable")
+
+
+def install_controller(root: Path, expected_sha256: str) -> None:
+    controller_prerequisites(require_sudo=True)
+    install_trusted_controller(root / CONTROLLER_SCRIPT, expected_sha256)
+    verify_trusted_controller(expected_sha256)
     unit = controller_unit_body(root)
     with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", prefix="electrumx-controller-",
@@ -1009,6 +1615,10 @@ def uninstall_controller_best_effort() -> None:
         subprocess.run(prefix + ["systemctl", "disable", "--now", CONTROLLER_UNIT],
                        check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(prefix + ["rm", "-f", f"/etc/systemd/system/{CONTROLLER_UNIT}"],
+                       check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(prefix + ["rm", "-f", str(TRUSTED_CONTROLLER_PATH)],
+                       check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(prefix + ["rmdir", str(TRUSTED_CONTROLLER_DIR)],
                        check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(prefix + ["systemctl", "daemon-reload"], check=False,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1053,7 +1663,8 @@ def write_initial_update_state(target: Path, body: dict) -> None:
 
 
 def write_install_marker(root: Path, *, body: dict, metadata: dict,
-                         bootstrap: str, monitor: bool, controller: bool) -> None:
+                         bootstrap: str, monitor: bool, controller: bool,
+                         storage_root: Path) -> None:
     marker = {
         "schemaVersion": 1,
         "electrumxVersion": body["electrumxVersion"],
@@ -1069,12 +1680,14 @@ def write_install_marker(root: Path, *, body: dict, metadata: dict,
         "monitorControllerEnabled": controller,
         "nodeMonitorCommit": metadata["nodeMonitor"]["commit"] if monitor else None,
         "installerVersion": VERSION,
+        "storageRoot": str(storage_root),
     }
     _private_atomic_json(root / INSTALL_MARKER, marker)
 
 
 def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
-                  bootstrap: str, monitor: bool, controller: bool) -> None:
+                  bootstrap: str, monitor: bool, controller: bool,
+                  storage_root: Path) -> None:
     if target.exists():
         marker = target / INSTALL_MARKER
         if marker.is_file():
@@ -1088,23 +1701,30 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
     if controller:
         controller_prerequisites(require_sudo=True)
         controller_unit_body(target)
+    # Derive the expected controller digest from the immutable, signed bundle
+    # bytes before anything is extracted into the operator-writable tree.
+    trusted_controller_sha256 = (
+        _bundle_member_sha256(data, CONTROLLER_SCRIPT) if controller else None)
 
     # compose.yaml intentionally has a fixed project name because monitor and
     # controller isolation reference deterministic container names. Therefore a
     # fresh install must prove that no old project runtime exists before it can
     # create named volumes.
     require_clean_docker_project_runtime()
+    require_clean_storage_root(storage_root)
 
     parent = target.parent.resolve()
     parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".electrumx-ravencoin-install-", dir=parent))
     moved = False
     controller_installed = False
+    storage_prepared = False
     files = compose_files(bootstrap, monitor, controller)
     base = _compose_prefix(files)
     try:
         extract_bundle(data, staging)
         run_checked(["sh", "./setup.sh", "--bundled-core"], cwd=staging)
+        write_storage_env(staging, storage_root)
         if monitor:
             write_monitor_env(staging)
         run_checked(base + ["config", "--quiet"], cwd=staging)
@@ -1112,14 +1732,19 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
         # Build before activation; target still does not exist and no named
         # volumes have been created. This catches architecture/toolchain errors.
         run_checked(base + ["build"], cwd=staging)
+        prepare_storage_layout(storage_root)
+        storage_prepared = True
+        initialize_storage_permissions(storage_root, monitor)
 
         os.replace(staging, target)
         moved = True
         if controller:
-            install_controller(target)
+            if trusted_controller_sha256 is None:
+                raise InstallError("trusted controller digest was not established")
+            install_controller(target, trusted_controller_sha256)
             controller_installed = True
         try:
-            run_checked(base + ["up", "-d", "--no-build"], cwd=target)
+            activate_compose(target, base, bootstrap)
         except InstallError as exc:
             if bootstrap == "chainstrap":
                 # Preserve the useful service output before the failed run is
@@ -1135,12 +1760,15 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
                 ) from exc
             raise
 
+        if monitor:
+            verify_monitor_host_publish(target, files)
+
         # Marker/state are commit records and are written only after Compose
         # accepted the final release directory and the optional controller was
         # successfully installed.
         write_install_marker(
             target, body=body, metadata=metadata, bootstrap=bootstrap,
-            monitor=monitor, controller=controller)
+            monitor=monitor, controller=controller, storage_root=storage_root)
         write_initial_update_state(target, body)
     except BaseException:
         if moved and target.exists():
@@ -1157,6 +1785,8 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
             shutil.rmtree(state_dir, ignore_errors=True)
         if moved and target.exists():
             shutil.rmtree(target, ignore_errors=True)
+        if storage_prepared:
+            cleanup_storage_layout_best_effort(storage_root)
         raise
     finally:
         if not moved and staging.exists():
@@ -1174,6 +1804,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     try:
+        print_installer_banner()
         check_python_version()
         architecture = detect_architecture()
 
@@ -1196,12 +1827,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             body, fetch=bundle_fetch, public_key_hex=public_key_hex,
             core_policy_public_key_hex=core_policy_public_key_hex)
 
-        print(
-            f"verified ElectrumX {body['electrumxVersion']} release bundle; "
-            f"official Core {body['coreVersion']} @ {body['coreCommit'][:12]}; "
-            f"Node Monitor @ {metadata['nodeMonitor']['commit'][:12]}")
+        ui_section("Verified release", "All signed release and independent Core-policy checks passed.")
+        print(f"  ElectrumX    : {body['electrumxVersion']}")
+        print(f"  Ravencoin    : Core {body['coreVersion']} @ {body['coreCommit'][:12]}")
+        print(f"  Node Monitor : {metadata['nodeMonitor']['commit'][:12]}")
+        print()
 
         interactive = sys.stdin.isatty()
+        storage_root = None
+        if not args.check_only or args.storage_root:
+            storage_root = choose_storage_root(args, interactive)
         # Resolve choices even in --check-only so explicit unsupported controller
         # requests also have their prerequisites checked without changing state.
         bootstrap = choose_bootstrap(args, interactive)
@@ -1210,6 +1845,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if controller:
             controller_prerequisites(require_sudo=False if args.check_only else True)
 
+        print_installation_summary(storage_root, bootstrap, monitor, controller)
+
         if args.check_only:
             compose_command()
             print("check-only complete: no persistent changes were made")
@@ -1217,11 +1854,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         compose_command()
         target = Path(args.install_dir).expanduser().resolve()
+        if storage_root is None:
+            raise InstallError("fresh install requires a selected project storage root")
         install_fresh(
             target, bundle, body=body, metadata=metadata,
-            bootstrap=bootstrap, monitor=monitor, controller=controller)
+            bootstrap=bootstrap, monitor=monitor, controller=controller,
+            storage_root=storage_root)
 
         print(f"installation complete in {target}")
+        print(f"project data storage: {storage_root}")
+        print("Docker images remain in the daemon existing DockerRootDir")
         print(f"bootstrap: {bootstrap}")
         if monitor:
             print("Node Monitor: enabled at http://127.0.0.1:8899")

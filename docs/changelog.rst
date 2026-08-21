@@ -2,6 +2,29 @@
  ChangeLog
 ===========
 
+Version 1.13.1 RVN (21 Aug 2026)
+================================
+
+* Integrates ChainStrap Fast Verified Bootstrap for fresh installs. ChainStrap
+  is transport only: staged block files must pass a local Ravencoin Core
+  ``-reindex -assumevalid=0`` validation before normal startup. Special thanks
+  to Tron Black for making ChainStrap available to the Ravencoin ecosystem.
+* Migrates the bundled Core trust identity to the exact official
+  ``RavenProject/Ravencoin`` v4.8.0 commit
+  ``22549129888d02e0e08fcdb9f96f3c699167e774``.
+* Adds fail-closed Core certification/evaluation/signing separation and
+  digest-bound evidence handling.
+* Adds global transaction-hash extent consistency checks and crash-recovery
+  hardening for the ElectrumX database.
+* Adds deterministic Compose project isolation and safer fresh-install cleanup.
+* Adds the signed single-file installer/update architecture with independent
+  Core-policy and ElectrumX release/update trust domains.
+* Integrates the Ravencoin Node Monitor, with loopback-only dashboard defaults
+  and a separately privileged, explicit opt-in bandwidth/controller path.
+* Adds native ARM64 build/test coverage alongside amd64 Core artifact coverage.
+* Updates documentation and release installation around the stable
+  ``releases/latest`` single-file installer URL.
+
 .. note:: you **must** add the following line to your bitcoin.conf file::
 
       rest=1

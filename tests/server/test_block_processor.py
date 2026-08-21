@@ -146,13 +146,15 @@ async def test_confirmed_block_chain_error_is_diagnosed_distinctly_and_not_flush
     state = SimpleNamespace(height=100)
     fake = SimpleNamespace(
         env=SimpleNamespace(write_bad_vouts_to_file=False),
-        db=SimpleNamespace(open_for_sync=AsyncMock(
-            return_value=SimpleNamespace(copy=lambda: state))),
+        db=SimpleNamespace(
+            state=SimpleNamespace(copy=lambda: state),
+            open_for_sync=AsyncMock(return_value=SimpleNamespace(copy=lambda: state))),
         daemon=SimpleNamespace(),
         state=state,
         ok=False,
         caught_up=True,
         reorg_count=None,
+        _repair_trailing_fs_metadata=AsyncMock(),
         next_block_hashes=AsyncMock(side_effect=ChainError('bad asset reference')),
         flush=AsyncMock(),
     )

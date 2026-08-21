@@ -200,8 +200,13 @@ def validate_body(body: dict) -> None:
         raise ManifestError(f"invalid channel {body['channel']!r}")
     if not isinstance(body["releaseTimestamp"], str):
         raise ManifestError("releaseTimestamp must be a string")
+    stamp = body["releaseTimestamp"]
+    # Python 3.10 fromisoformat rejects the "Z" UTC designator that every
+    # release manifest uses, so normalise it to the explicit offset first.
+    if stamp.endswith(("Z", "z")):
+        stamp = stamp[:-1] + "+00:00"
     try:
-        parsed_time = datetime.datetime.fromisoformat(body["releaseTimestamp"])
+        parsed_time = datetime.datetime.fromisoformat(stamp)
     except ValueError as exc:
         raise ManifestError("releaseTimestamp is not a valid ISO-8601 timestamp") from exc
     if parsed_time.tzinfo is None:
@@ -297,6 +302,10 @@ def verify_manifest(document: dict, trusted_keys: dict) -> dict:
     if signature.get("algorithm") != SIGNATURE_ALGORITHM:
         raise ManifestError(f"unsupported signature algorithm {signature.get('algorithm')!r}")
     key_id = signature.get("keyId")
+    # A malformed type (list, dict, null, oversized string) must be a clean
+    # verification failure, never an uncaught TypeError (GLM53-RVN-020).
+    if not isinstance(key_id, str) or len(key_id) > 128:
+        raise ManifestError(f"malformed signature key id {key_id!r}")
     if key_id not in trusted_keys:
         raise ManifestError(f"manifest signed by unknown key id {key_id!r}")
     public_bytes = trusted_keys[key_id]

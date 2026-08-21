@@ -335,6 +335,8 @@ class DB:
         self.fs_h160_count = 0
         
         self.tx_counts = None
+        self.fs_metadata_issue = None
+        self.fs_zero_slot_offset = None
         
         self.asset_db: Storage = None
         self.suid_db: Storage = None
@@ -349,19 +351,114 @@ class DB:
         self.tx_counts_file = util.LogicalFile('meta/txcounts', 2, 2000000)
         self.hashes_file = util.LogicalFile('meta/hashes', 4, 16000000)
 
-    async def _read_tx_counts(self):
-        if self.tx_counts is not None:
+    async def _read_tx_counts(self, *, force=False, strict=False):
+        if self.tx_counts is not None and not force:
             return
         # tx_counts[N] has the cumulative number of txs at the end of
-        # height N.  So tx_counts[0] is 1 - the genesis coinbase
+        # height N.  So tx_counts[0] is 1 - the genesis coinbase.
         size = (self.state.height + 1) * 8
-        tx_counts = self.tx_counts_file.read(0, size)
-        assert len(tx_counts) == size
-        self.tx_counts = array('Q', tx_counts)
-        if self.tx_counts:
-            assert self.state.tx_count == self.tx_counts[-1]
-        else:
-            assert self.state.tx_count == 0
+        raw = self.tx_counts_file.read(0, size)
+        issue = None
+        if len(raw) != size:
+            issue = (f'txcounts metadata is truncated: got {len(raw):,d} bytes, '
+                     f'expected {size:,d} for height {self.state.height:,d}')
+        usable = raw[:len(raw) // 8 * 8]
+        counts = array('Q', usable)
+
+        previous = 0
+        if issue is None:
+            for height, count in enumerate(counts):
+                # Every Ravencoin block contains at least its coinbase.
+                if count <= previous:
+                    issue = (f'txcounts metadata is non-monotonic at height {height:,d}: '
+                             f'{count:,d} after {previous:,d}')
+                    break
+                previous = count
+        if issue is None:
+            if counts:
+                if self.state.tx_count != counts[-1]:
+                    issue = (f'UTXO state tx_count {self.state.tx_count:,d} does not match '
+                             f'txcounts tail {counts[-1]:,d} at height '
+                             f'{self.state.height:,d}')
+            elif self.state.tx_count != 0:
+                issue = (f'UTXO state tx_count is {self.state.tx_count:,d} but txcounts '
+                         'metadata is empty')
+
+        self.tx_counts = counts
+        self.fs_metadata_issue = issue
+        if issue:
+            self.logger.critical(
+                f'filesystem metadata crash-consistency check failed: {issue}; '
+                'bounded trailing-metadata recovery will run before indexing')
+            if strict:
+                raise self.DBError(issue)
+
+    def fs_metadata_needs_recovery(self):
+        if self.fs_metadata_issue:
+            return True
+        if self.state.height < 0:
+            return False
+        if len(self.tx_counts) != self.state.height + 1:
+            self.fs_metadata_issue = 'txcounts metadata does not cover the committed DB height'
+            return True
+
+        height = self.state.height
+        header_len = self.header_len(height)
+        header = self.headers_file.read(self.header_offset(height), header_len)
+        if len(header) != header_len:
+            self.fs_metadata_issue = f'header metadata is truncated at height {height:,d}'
+            return True
+        try:
+            if self.coin.header_hash(header) != self.state.tip:
+                self.fs_metadata_issue = f'header metadata tip mismatch at height {height:,d}'
+                return True
+        except Exception as exc:
+            self.fs_metadata_issue = f'header metadata is unreadable at height {height:,d}: {exc}'
+            return True
+
+        first_tx = self.tx_counts[height - 1] if height > 0 else 0
+        block_tx_count = self.state.tx_count - first_tx
+        if block_tx_count <= 0:
+            self.fs_metadata_issue = f'invalid transaction count for committed height {height:,d}'
+            return True
+        hashes = self.hashes_file.read(first_tx * 32, block_tx_count * 32)
+        if len(hashes) != block_tx_count * 32:
+            self.fs_metadata_issue = f'transaction-hash metadata is truncated at height {height:,d}'
+            return True
+        if any(hashes[offset:offset + 32] == bytes(32)
+               for offset in range(0, len(hashes), 32)):
+            self.fs_metadata_issue = f'zero transaction-hash slot detected at height {height:,d}'
+            return True
+
+        # Global extent check (GLM53-RVN-003): the hash file must cover
+        # exactly the committed tx_count over the whole history, not just the
+        # tip block.  Truncation older than the bounded recovery window, or
+        # unexpected extra bytes, must be detected here so the bounded repair
+        # can refuse rather than silently writing sparse zero holes.
+        expected_hash_bytes = self.state.tx_count * 32
+        hash_bytes = self.hashes_file.logical_size()
+        if hash_bytes < expected_hash_bytes:
+            self.fs_metadata_issue = (
+                f'transaction-hash metadata is truncated: {hash_bytes:,d} bytes '
+                f'present, {expected_hash_bytes:,d} expected for the committed '
+                f'tx_count {self.state.tx_count:,d}')
+            return True
+        if hash_bytes > expected_hash_bytes:
+            self.fs_metadata_issue = (
+                f'transaction-hash metadata has {hash_bytes - expected_hash_bytes:,d} '
+                f'unexpected bytes beyond the committed tx_count '
+                f'{self.state.tx_count:,d}')
+            return True
+        # Interior all-zero slots anywhere in history (e.g. a sparse hole left
+        # by writing past a truncated end of file) can never be valid tx hashes.
+        zero_slot = self.hashes_file.find_zero_slot(32)
+        self.fs_zero_slot_offset = zero_slot
+        if zero_slot is not None:
+            self.fs_metadata_issue = (
+                f'all-zero transaction-hash slot at byte offset {zero_slot:,d} '
+                f'below the committed tx_count')
+            return True
+        return False
 
     async def _open_dbs(self, for_sync, compacting) -> ChainState:
         assert self.utxo_db is None
@@ -587,14 +684,18 @@ class DB:
         # Write the headers, tx counts, and tx hashes
         height_start = self.fs_height + 1
         offset = self.header_offset(height_start)
-        self.headers_file.write(offset, b''.join(flush_data.headers))
+        # Crash-consistency barrier: flat-file metadata must be durable
+        # before History/LevelDB commits can advance the authoritative state.
+        # Without this ordering a hard power loss can leave LevelDB at H while
+        # headers/hashes/txcounts are still only in the page cache for H.
+        self.headers_file.write(offset, b''.join(flush_data.headers), sync=True)
         flush_data.headers.clear()
 
         offset = height_start * self.tx_counts.itemsize
         self.tx_counts_file.write(offset,
-                                  self.tx_counts[height_start:].tobytes())
+                                  self.tx_counts[height_start:].tobytes(), sync=True)
         offset = prior_tx_count * 32
-        self.hashes_file.write(offset, hashes)
+        self.hashes_file.write(offset, hashes, sync=True)
 
         self.fs_height = flush_data.state.height
         self.fs_tx_count = flush_data.state.tx_count
