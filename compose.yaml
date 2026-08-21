@@ -99,6 +99,18 @@ services:
       SERVICES: tcp://:50001,rpc://127.0.0.1:8000,rpc://${ELECTRUMX_MONITOR_ADMIN_IP:-172.29.81.2}:8001
       EVENT_LOOP_POLICY: uvloop
       CACHE_MB: ${ELECTRUMX_CACHE_MB:-1200}
+      # ElectrumX charges one cost unit per BANDWIDTH_UNIT_COST bytes sent and
+      # aggregates that cost per /24 client group.  At the upstream default of
+      # 500 a single large blockchain.scripthash.get_history reply (2.5 MB)
+      # costs 5,000, so two of them cross COST_SOFT_LIMIT and the server starts
+      # inserting REQUEST_SLEEP delays into ordinary wallet traffic.  Measured
+      # on the reference deployment: five consecutive 2.5 MB history queries
+      # held round-trip latency at 10 ms with this value, against 87 ms to
+      # 227 ms and no recovery at the default.  Request, subscription and
+      # merkle costs are untouched, so the CPU-side DoS ceiling is unchanged.
+      BANDWIDTH_UNIT_COST: ${ELECTRUMX_BANDWIDTH_UNIT_COST:-5000}
+      COST_SOFT_LIMIT: ${ELECTRUMX_COST_SOFT_LIMIT:-10000}
+      COST_HARD_LIMIT: ${ELECTRUMX_COST_HARD_LIMIT:-100000}
       RAVENCOIN_BACKEND_CHECK_INTERVAL: 60
       RAVENCOIN_BACKEND_INFO_MAX_AGE: 5
       RAVEN_RPC_USER_FILE: /run/raven-secrets/raven_rpc_user
