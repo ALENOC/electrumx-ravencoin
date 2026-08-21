@@ -4,11 +4,11 @@ FROM debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e
 
 ARG TARGETARCH
 ARG RAVENCOIN_VERSION=4.8.0
-ARG RAVENCOIN_SOURCE_COMMIT=b60f50e04f1fba425b28804e61be2694faaf3469
-ARG RAVENCOIN_ARCHIVE_SHA256=966cf8978af1f2e3f36e9733d011eb92f4116750af6f8e77c5a5ced525577c4c
-ARG RAVENCOIN_SOURCE_ARCHIVE_SHA256=ad6e72c18b64835e74582ad2465a72564b12310fa6159f23a67b9ecaf9b5ca71
-ARG RAVEND_SHA256=13e5c5da527888a870554acdbe0ad3de4f882ee2102d1cfc521e2868fa17b17b
-ARG RAVEN_CLI_SHA256=fcc7b88bd456e9ef21d9d5e9c9b40b26f0276b371f2108d702c6ce242bfdb109
+ARG RAVENCOIN_SOURCE_COMMIT=22549129888d02e0e08fcdb9f96f3c699167e774
+ARG RAVENCOIN_ARCHIVE_SHA256=cb359b6a5b42e47068cd655231484fcc763d2f79eae5ea318b029c704a4dc020
+ARG RAVENCOIN_SOURCE_ARCHIVE_SHA256=0fba4c8979c7ebed3457d91957f886292ea53e62857c636c70e3aa0478017d6e
+ARG RAVEND_SHA256=885f6670c819e3a48339bbc596f1a224fe41af21ae7a0db57b2ebca700d050ea
+ARG RAVEN_CLI_SHA256=8fde2465b2bd50d0db2d873fd02a6a4ce6a6be84ed03d32b094a9862febb594b
 
 RUN test "$TARGETARCH" = amd64 || test "$TARGETARCH" = arm64
 
@@ -23,14 +23,17 @@ WORKDIR /tmp/ravencoin
 RUN set -eux; \
     mkdir -p /out; \
     if [ "$TARGETARCH" = amd64 ]; then \
-        archive="ravencoin-${RAVENCOIN_VERSION}-x86_64-linux-gnu.tar.gz"; \
+        # The RavenProject v4.8.0 asset name embeds a CI build number
+        # (225491298) that is not derivable from RAVENCOIN_VERSION; it is
+        # pinned here alongside the version and re-verified by checksum.
+        archive="raven-${RAVENCOIN_VERSION}-225491298-x86_64-linux-gnu.tar.gz"; \
         curl --fail --location --proto '=https' --tlsv1.2 \
            --output "$archive" \
-           "https://github.com/2miners/Ravencoin/releases/download/v${RAVENCOIN_VERSION}/${archive}"; \
+           "https://github.com/RavenProject/Ravencoin/releases/download/v${RAVENCOIN_VERSION}/${archive}"; \
         printf '%s  %s\n' "$RAVENCOIN_ARCHIVE_SHA256" "$archive" \
            | sha256sum --check --strict; \
         tar --extract --gzip --file "$archive"; \
-        cd "ravencoin-${RAVENCOIN_VERSION}-x86_64-linux-gnu/bin"; \
+        cd "raven-${RAVENCOIN_VERSION}-225491298/bin"; \
         printf '%s  ravend\n%s  raven-cli\n' "$RAVEND_SHA256" "$RAVEN_CLI_SHA256" \
            | sha256sum --check --strict; \
         install -Dm0555 ravend raven-cli -t /out; \
@@ -38,7 +41,7 @@ RUN set -eux; \
         archive="ravencoin-${RAVENCOIN_SOURCE_COMMIT}.tar.gz"; \
         curl --fail --location --proto '=https' --tlsv1.2 \
            --output "$archive" \
-           "https://github.com/2miners/Ravencoin/archive/${RAVENCOIN_SOURCE_COMMIT}.tar.gz"; \
+           "https://github.com/RavenProject/Ravencoin/archive/${RAVENCOIN_SOURCE_COMMIT}.tar.gz"; \
         printf '%s  %s\n' "$RAVENCOIN_SOURCE_ARCHIVE_SHA256" "$archive" \
            | sha256sum --check --strict; \
         mkdir source; tar --extract --gzip --file "$archive" --strip-components=1 \
@@ -55,12 +58,12 @@ RUN set -eux; \
 FROM debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792
 
 ARG RAVENCOIN_VERSION=4.8.0
-ARG RAVENCOIN_SOURCE_COMMIT=b60f50e04f1fba425b28804e61be2694faaf3469
+ARG RAVENCOIN_SOURCE_COMMIT=22549129888d02e0e08fcdb9f96f3c699167e774
 ARG TARGETARCH
 
 LABEL org.opencontainers.image.title="Ravencoin Core" \
       org.opencontainers.image.version="${RAVENCOIN_VERSION}" \
-      org.opencontainers.image.source="https://github.com/2miners/Ravencoin" \
+      org.opencontainers.image.source="https://github.com/RavenProject/Ravencoin" \
       org.opencontainers.image.revision="${RAVENCOIN_SOURCE_COMMIT}" \
       org.opencontainers.image.architecture="${TARGETARCH}"
 
@@ -86,6 +89,7 @@ COPY --from=fetch \
     /usr/local/bin/
 COPY --chmod=0555 docker/core/entrypoint.sh /usr/local/bin/ravencoin-entrypoint
 COPY --chmod=0555 docker/core/healthcheck.sh /usr/local/bin/ravencoin-healthcheck
+COPY --chmod=0555 docker/core/bootstrap-reindex.sh /usr/local/bin/ravencoin-bootstrap-reindex
 
 USER ravencoin
 WORKDIR /var/lib/ravencoin

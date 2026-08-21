@@ -1,0 +1,57 @@
+services:
+  chainstrap-bootstrap:
+    build:
+      context: .
+      dockerfile: docker/bootstrap/Dockerfile
+    image: alenoc/ravencoin-chainstrap-bootstrap:1
+    volumes:
+      - ravencoin-data:/var/lib/ravencoin
+    restart: "no"
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - chainstrap-egress
+
+  ravencoin-bootstrap-reindex:
+    build:
+      context: .
+      dockerfile: docker/core/Dockerfile
+      args:
+        RAVENCOIN_VERSION: 4.8.0
+        RAVENCOIN_SOURCE_COMMIT: 22549129888d02e0e08fcdb9f96f3c699167e774
+        RAVENCOIN_ARCHIVE_SHA256: cb359b6a5b42e47068cd655231484fcc763d2f79eae5ea318b029c704a4dc020
+        RAVENCOIN_SOURCE_ARCHIVE_SHA256: 0fba4c8979c7ebed3457d91957f886292ea53e62857c636c70e3aa0478017d6e
+        RAVEND_SHA256: 885f6670c819e3a48339bbc596f1a224fe41af21ae7a0db57b2ebca700d050ea
+        RAVEN_CLI_SHA256: 8fde2465b2bd50d0db2d873fd02a6a4ce6a6be84ed03d32b094a9862febb594b
+    image: alenoc/ravencoin-core:4.8.0
+    entrypoint: ["ravencoin-bootstrap-reindex"]
+    depends_on:
+      chainstrap-bootstrap:
+        condition: service_completed_successfully
+    volumes:
+      - ravencoin-data:/var/lib/ravencoin
+    network_mode: none
+    restart: "no"
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  ravencoin-core:
+    depends_on:
+      ravencoin-bootstrap-reindex:
+        condition: service_completed_successfully
+
+networks:
+  chainstrap-egress:
+    driver: bridge

@@ -1,0 +1,28 @@
+# Project data lives on the operator-selected filesystem while Docker images
+# and writable image layers remain under the daemon's existing DockerRootDir.
+# setup/installer writes the four absolute host paths into .env.
+volumes:
+  ravencoin-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "${RAVENCOIN_DATA_HOST_DIR:?RAVENCOIN_DATA_HOST_DIR is required}"
+  ravencoin-config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "${RAVENCOIN_CONFIG_HOST_DIR:?RAVENCOIN_CONFIG_HOST_DIR is required}"
+  electrumx-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "${ELECTRUMX_DATA_HOST_DIR:?ELECTRUMX_DATA_HOST_DIR is required}"
+  monitor-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "${MONITOR_DATA_HOST_DIR:?MONITOR_DATA_HOST_DIR is required}"

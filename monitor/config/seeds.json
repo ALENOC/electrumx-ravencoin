@@ -1,10 +1,11 @@
 {
-  "note": "Bootstrap discovery hints only. Listing an endpoint here says nothing about whether it is safe, current, or even still operated. Every entry is probed and classified like any other candidate, and the crawler follows each server's own peer list from here.",
+  "note": "Bootstrap discovery hints only. Listing an endpoint here says nothing about whether it is safe, current, or even still operated. Every entry is probed and classified like any other candidate, and the crawler follows each server's own peer list from here. Order is a preference hint for where to try first, not a trust decision: it must never bypass the classification/trust policy applied to every candidate alike.",
   "seeds": [
+    {"hostname": "electrumx.raventag.com", "sslPort": 50002, "tcpPort": 50001, "operatorGroup": "ALENOC", "source": "reference deployment of this codebase"},
+    {"hostname": "electrum1.cipig.net", "sslPort": 20051, "tcpPort": 10051, "operatorGroup": "CIPIG", "source": "community operator, multiple endpoints"},
+    {"hostname": "electrum2.cipig.net", "sslPort": 20051, "tcpPort": 10051, "operatorGroup": "CIPIG", "source": "community operator, multiple endpoints"},
+    {"hostname": "electrum3.cipig.net", "sslPort": 20051, "tcpPort": 10051, "operatorGroup": "CIPIG", "source": "community operator, multiple endpoints"},
     {"hostname": "rvn4lyfe.com", "sslPort": 50002, "tcpPort": 50001, "operatorGroup": "RVN4LYFE", "source": "upstream Electrum-RVN default list"},
-    {"hostname": "electrum-rvn.moontree.com", "sslPort": 50002, "operatorGroup": "MOONTREE", "source": "upstream Electrum-RVN default list"},
-    {"hostname": "electrum1.cipig.net", "sslPort": 50002, "tcpPort": 50001, "operatorGroup": "CIPIG", "source": "community operator, multiple endpoints"},
-    {"hostname": "electrum2.cipig.net", "sslPort": 50002, "tcpPort": 50001, "operatorGroup": "CIPIG", "source": "community operator, multiple endpoints"},
-    {"hostname": "electrum3.cipig.net", "sslPort": 50002, "tcpPort": 50001, "operatorGroup": "CIPIG", "source": "community operator, multiple endpoints"}
+    {"hostname": "electrum-rvn.moontree.com", "sslPort": 50002, "operatorGroup": "MOONTREE", "source": "upstream Electrum-RVN default list"}
   ]
 }

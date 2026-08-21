@@ -1,0 +1,45 @@
+services:
+  monitor:
+    build:
+      context: ./vendor/ravencoin-node-monitor
+    image: electrumx-ravencoin-node-monitor:bundled
+    container_name: ravencoin-node-monitor
+    restart: unless-stopped
+    depends_on:
+      rpc-secrets-init:
+        condition: service_completed_successfully
+    # Failure-domain isolation: the monitor must remain alive when ElectrumX
+    # is unhealthy or crash-looping.  Core is reached on ravencoin-backend;
+    # ElectrumX admin RPC is reachable only over the dedicated internal
+    # monitor-admin network and is never published to the host.
+    networks:
+      ravencoin-backend: {}
+      monitor-admin:
+        ipv4_address: ${MONITOR_ADMIN_IP:-172.29.81.3}
+    env_file:
+      - ./vendor/ravencoin-node-monitor/.env
+    environment:
+      CORE_RPC_HOST: ravencoin-core
+      CORE_RPC_PORT: "8766"
+      CORE_RPC_USER_FILE: /run/raven-secrets/raven_rpc_user
+      CORE_RPC_PASSWORD_FILE: /run/raven-secrets/raven_rpc_password
+      ELECTRUMX_ENABLED: "true"
+      ELECTRUMX_RPC_HOST: ${ELECTRUMX_MONITOR_ADMIN_IP:-172.29.81.2}
+      ELECTRUMX_RPC_PORT: "8001"
+      ELECTRUMX_SSL_HOST: electrumx
+      ELECTRUMX_SSL_PORT: "50002"
+    volumes:
+      - rpc-secrets:/run/raven-secrets:ro
+      - monitor-data:/data
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    ports:
+      - "127.0.0.1:8899:8899/tcp"
+
+volumes:
+  monitor-data:

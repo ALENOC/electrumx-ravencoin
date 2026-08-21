@@ -652,31 +652,28 @@ class MemPool(object):
         hex_hashes_iter = (hash_to_hex_str(hash) for hash in hashes)
         raw_txs = await self.api.raw_transactions(hex_hashes_iter)
 
-        creates = self.asset_creates
-        tx_to_create = self.tx_to_asset_create
-
-        reissues = self.asset_reissues
-        tx_to_reissue = self.tx_to_asset_reissue
-
-        qualifier_tags = self.qualifier_tags
-        tx_to_qualifier_tags = self.tx_to_qualifier_tags
-
-        h160_tags = self.h160_tags
-        tx_to_h160_tags = self.tx_to_h160_tags
-
         broadcasts = self.broadcasts
         tx_to_broadcast = self.tx_to_broadcast
 
-        freezes = self.freezes
-        tx_to_freeze = self.tx_to_freeze
-
-        verifiers = self.verifiers
-        tx_to_verifier = self.tx_to_verifier
-
-        qualifier_associations = self.qualifier_associations
-        tx_to_qualifier_associations = self.tx_to_qualifier_associations
-
         def deserialize_txs():  # This function is pure
+            # RA-6: mutate only fresh local containers here, never self.*
+            # directly. This runs via run_in_thread while the event loop
+            # may concurrently iterate the self.* dicts from RPC getters;
+            # mutating self.* from this worker thread would race them.
+            creates = {}
+            tx_to_create = defaultdict(set)
+            reissues = {}
+            tx_to_reissue = defaultdict(set)
+            qualifier_tags = defaultdict(dict)
+            tx_to_qualifier_tags = defaultdict(set)
+            h160_tags = defaultdict(dict)
+            tx_to_h160_tags = defaultdict(set)
+            freezes = defaultdict(dict)
+            tx_to_freeze = defaultdict(set)
+            verifiers = defaultdict(dict)
+            tx_to_verifier = defaultdict(set)
+            qualifier_associations = defaultdict(dict)
+            tx_to_qualifier_associations = defaultdict(set)
             to_hashX = self.coin.hashX_from_script
             read_tx_and_size = read_tx
             # hashx -> txid -> txpos -> (data, expirey)
@@ -933,10 +930,75 @@ class MemPool(object):
                         f'dropping it from this refresh: {e}'
                     )
                     continue
-            return txs, maybe_broadcast
+            return (
+                txs,
+                maybe_broadcast,
+                creates,
+                tx_to_create,
+                reissues,
+                tx_to_reissue,
+                qualifier_tags,
+                tx_to_qualifier_tags,
+                h160_tags,
+                tx_to_h160_tags,
+                freezes,
+                tx_to_freeze,
+                verifiers,
+                tx_to_verifier,
+                qualifier_associations,
+                tx_to_qualifier_associations,
+            )
 
         # Thread this potentially slow operation so as not to block
-        tx_map, possible_broadcasts = await run_in_thread(deserialize_txs)
+        (
+            tx_map,
+            possible_broadcasts,
+            new_creates,
+            new_tx_to_create,
+            new_reissues,
+            new_tx_to_reissue,
+            new_qualifier_tags,
+            new_tx_to_qualifier_tags,
+            new_h160_tags,
+            new_tx_to_h160_tags,
+            new_freezes,
+            new_tx_to_freeze,
+            new_verifiers,
+            new_tx_to_verifier,
+            new_qualifier_associations,
+            new_tx_to_qualifier_associations,
+        ) = await run_in_thread(deserialize_txs)
+
+        # RA-6: merge the staged results into self.* synchronously (no
+        # await between merges) now that the worker thread has finished.
+        # Nested dicts (asset -> {tx: value}) are merged per-outer-key so
+        # entries from an earlier refresh for the same asset are kept.
+        self.asset_creates.update(new_creates)
+        for k, v in new_tx_to_create.items():
+            self.tx_to_asset_create[k] |= v
+        self.asset_reissues.update(new_reissues)
+        for k, v in new_tx_to_reissue.items():
+            self.tx_to_asset_reissue[k] |= v
+        for k, v in new_qualifier_tags.items():
+            self.qualifier_tags[k].update(v)
+        for k, v in new_tx_to_qualifier_tags.items():
+            self.tx_to_qualifier_tags[k] |= v
+        for k, v in new_h160_tags.items():
+            self.h160_tags[k].update(v)
+        for k, v in new_tx_to_h160_tags.items():
+            self.tx_to_h160_tags[k] |= v
+        for k, v in new_freezes.items():
+            self.freezes[k].update(v)
+        for k, v in new_tx_to_freeze.items():
+            self.tx_to_freeze[k] |= v
+        for k, v in new_verifiers.items():
+            self.verifiers[k].update(v)
+        for k, v in new_tx_to_verifier.items():
+            self.tx_to_verifier[k] |= v
+        for k, v in new_qualifier_associations.items():
+            self.qualifier_associations[k].update(v)
+        for k, v in new_tx_to_qualifier_associations.items():
+            self.tx_to_qualifier_associations[k] |= v
 
         # Determine all prevouts not in the mempool, and fetch the
         # UTXO information from the database.  Failed prevout lookups

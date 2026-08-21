@@ -11,7 +11,7 @@ The canonical beginner deployment and operations guide is the repository
 
 The bundled stack deliberately has these properties:
 
-- on amd64, Core is built from the exact 2miners v4.8.0 release artifact,
+- on amd64, Core is built from the exact RavenProject v4.8.0 release artifact,
   verifying the archive, `ravend`, and `raven-cli` SHA-256 values during the
   image build; on ARM64 there is no equivalent prebuilt release asset, so the
   image build compiles from the pinned source archive, verified by SHA-256,

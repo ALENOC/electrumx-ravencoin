@@ -3,15 +3,15 @@
 #
 # The MIT License (MIT).  See LICENCE for details.
 
-"""Discover Ravencoin Core release candidates from the two allowed repositories.
+"""Discover official stable Ravencoin Core release candidates.
 
-Discovery grants nothing.  A release found here becomes a *candidate*: something
-the certification harness is allowed to test.  Neither repository is trusted
-because of its name, and the allowlist lives in code, not in configuration a
-workflow input could change.
+Discovery grants nothing. A release found here becomes a *candidate*: something
+the certification harness is allowed to test. The source allowlist lives in
+code, not in configuration a workflow input could change.
 
-Only published releases and their tags are considered.  A branch head is never
-treated as a release.
+Only published, non-prerelease releases and their tags are considered. A draft,
+prerelease, branch head, or mutable alias is never treated as a stable Core
+candidate.
 """
 
 from __future__ import annotations
@@ -37,11 +37,11 @@ VERSION_FROM_TAG = re.compile(r"^v?(\d+(?:\.\d+){1,3})$")
 
 
 class DiscoveryError(RuntimeError):
-    """The discovery run could not complete.  Never turns into a candidate."""
+    """The discovery run could not complete. Never turns into a candidate."""
 
 
 def default_fetch(url: str, *, token: Optional[str] = None, timeout: int = 30) -> dict:
-    """Minimal GitHub API GET.  Returns parsed JSON or raises DiscoveryError."""
+    """Minimal GitHub API GET. Returns parsed JSON or raises DiscoveryError."""
     headers = {
         "Accept": "application/vnd.github+json",
         "User-Agent": "electrumx-rvn-core-safety",
@@ -77,7 +77,7 @@ def resolve_tag_commit(repository: str, tag: str, fetch: Callable, *,
                        token: Optional[str] = None) -> tuple:
     """Resolve a tag to its commit, following an annotated tag object.
 
-    Returns ``(commit, tag_object, tag_verified)``.  A tag that resolves to
+    Returns ``(commit, tag_object, tag_verified)``. A tag that resolves to
     anything other than a commit is refused rather than interpreted.
     """
     reference = _expect_mapping(
@@ -104,7 +104,7 @@ def resolve_tag_commit(repository: str, tag: str, fetch: Callable, *,
 
 def discover_repository(repository: str, fetch: Callable, *,
                         token: Optional[str] = None, limit: int = 10) -> list:
-    """Return candidates for one allowed repository."""
+    """Return stable candidates for one allowed repository."""
     if repository not in ALLOWED_SOURCE_REPOSITORIES:
         raise DiscoveryError(f"repository {repository!r} is not in the allowlist")
     releases = fetch(f"{GITHUB_API}/repos/{repository}/releases?per_page={limit}",
@@ -116,15 +116,15 @@ def discover_repository(repository: str, fetch: Callable, *,
     for release in releases:
         if not isinstance(release, dict):
             raise DiscoveryError("a release entry was not an object")
-        if release.get("draft"):
+        if release.get("draft") or release.get("prerelease"):
             continue
         tag = release.get("tag_name")
         if not isinstance(tag, str):
             continue
         match = VERSION_FROM_TAG.match(tag)
         if not match:
-            # A release whose tag is not a plain version is not silently guessed
-            # at; it is reported for human review instead.
+            # A published stable release whose tag is not a plain version is not
+            # silently guessed at; it is reported for human review instead.
             candidates.append({
                 "state": CandidateState.REVIEW_REQUIRED.value,
                 "repository": repository,
@@ -185,7 +185,7 @@ def discover_repository(repository: str, fetch: Callable, *,
         entry = record.to_dict()
         entry["state"] = (CandidateState.REVIEW_REQUIRED.value if notes
                           else CandidateState.PROVENANCE_VALIDATED.value)
-        entry["prerelease"] = bool(release.get("prerelease"))
+        entry["prerelease"] = False
         candidates.append(entry)
     return candidates
 
@@ -209,8 +209,8 @@ def discover_all(fetch: Callable, *, token: Optional[str] = None,
 def new_candidates(discovered: list, processed: dict) -> list:
     """Filter out identities already processed, and detect changed metadata.
 
-    Identity is repository plus commit.  The same version from two repositories,
-    or the same tag re-pointed at a different commit, are different candidates.
+    Identity is repository plus commit. The same tag re-pointed at a different
+    commit is a different candidate.
     """
     fresh = []
     for entry in discovered:

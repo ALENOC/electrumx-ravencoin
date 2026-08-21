@@ -181,7 +181,8 @@ async def probe_endpoint(endpoint: EndpointId, *, limits: Optional[Limits] = Non
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(
                     ipv4[0] if ipv4 else ipv6[0], endpoint.port, ssl=context,
-                    server_hostname=endpoint.hostname if context else None),
+                    server_hostname=endpoint.hostname if context else None,
+                    limit=limits.max_response_bytes),
                 timeout=limits.tls_timeout if context else limits.tcp_timeout)
     except ssl.SSLCertVerificationError as exc:
         result.error, result.error_category = str(exc), "TLS_INVALID"

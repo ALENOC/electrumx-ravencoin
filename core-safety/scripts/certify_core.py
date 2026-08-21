@@ -664,7 +664,10 @@ def certify(candidate: Candidate, profile: dict, environment: Environment) -> di
     return report
 
 
-HARNESS_VERSION = "1.0.0"
+HARNESS_VERSION = "1.1.0"
+
+#: Prefix of the stdout line carrying the report when --report - is used.
+REPORT_STDOUT_PREFIX = "CERTIFICATION_REPORT_JSON="
 
 
 def main(argv=None) -> int:
@@ -681,7 +684,10 @@ def main(argv=None) -> int:
                         help="test-only binary linked to exact candidate validation objects")
     parser.add_argument("--candidate-test-binary", default=None,
                         help="candidate's normal test_raven binary")
-    parser.add_argument("--report", required=True)
+    parser.add_argument("--report", required=True,
+                        help="output path, or '-' to emit the report on stdout as a "
+                             "single prefixed line for capture by a trusted "
+                             "orchestrator outside the execution container")
     arguments = parser.parse_args(argv)
 
     candidate = Candidate.from_dict(
@@ -704,8 +710,14 @@ def main(argv=None) -> int:
         fixtures=fixtures,
     )
     report = certify(candidate, profile, environment)
-    pathlib.Path(arguments.report).write_text(
-        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if arguments.report == "-":
+        # Single prefixed line: the orchestrator that captured this container's
+        # stdout scans for the prefix, so human-readable logging above cannot
+        # be mistaken for the report.
+        print(REPORT_STDOUT_PREFIX + json.dumps(report, sort_keys=True))
+    else:
+        pathlib.Path(arguments.report).write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"{candidate.identity} -> {report['overall']}")
     for test_id, entry in sorted(report["results"].items()):
         print(f"  {entry['result']:<12} {test_id} ({entry['scope']})")

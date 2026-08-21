@@ -34,11 +34,13 @@ jobs:
         run: pytest -q
       - name: Static safety checks
         run: |
-          python -m compileall -q electrumx
+          python -m compileall -q electrumx contrib/bootstrap
           flake8 electrumx/server/ravencoin_backend.py setup.py \
+            contrib/bootstrap/chainstrap_bootstrap.py \
             tests/lib/test_ravencoin_headers.py \
             tests/server/test_ravencoin_backend.py \
-            tests/server/test_ravencoin_session.py
+            tests/server/test_ravencoin_session.py \
+            tests/test_chainstrap_bootstrap.py
 
   container:
     runs-on: ubuntu-24.04
@@ -46,16 +48,40 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Validate Compose deployment model
         run: |
+          set -euo pipefail
           mkdir -p .secrets
           printf 'ci-user\n' > .secrets/raven_rpc_user
           printf 'ci-password-not-for-production\n' > .secrets/raven_rpc_password
           cp .env.example .env
           cp contrib/electrumx.env.example contrib/electrumx.env
-          bash -n setup.sh docker/core/entrypoint.sh docker/core/healthcheck.sh \
+          bash -n setup.sh fast-bootstrap.sh fast-bootstrap-status.sh docker/core/entrypoint.sh \
+            docker/core/healthcheck.sh docker/core/bootstrap-reindex.sh \
             contrib/docker/electrumx-entrypoint.sh
           docker compose config --quiet
           docker compose -f compose.yaml -f compose.tls.yaml config --quiet
+          docker compose -f compose.yaml -f compose.chainstrap.yaml config --quiet
           docker compose -f compose.existing-core.yaml config --quiet
+
+          # The production release bundle supplies the pinned Node Monitor tree.
+          # Source-tree CI only needs an env stub to validate the merged Compose
+          # model and selected-disk volume contract.
+          STORAGE_TEST_ROOT="$RUNNER_TEMP/electrumx-storage"
+          mkdir -p "$STORAGE_TEST_ROOT"/{ravencoin-data,ravencoin-config,electrumx-data,monitor-data}
+          mkdir -p vendor/ravencoin-node-monitor
+          : > vendor/ravencoin-node-monitor/.env
+          cat >> .env <<EOF
+          RAVENCOIN_DATA_HOST_DIR=$STORAGE_TEST_ROOT/ravencoin-data
+          RAVENCOIN_CONFIG_HOST_DIR=$STORAGE_TEST_ROOT/ravencoin-config
+          ELECTRUMX_DATA_HOST_DIR=$STORAGE_TEST_ROOT/electrumx-data
+          MONITOR_DATA_HOST_DIR=$STORAGE_TEST_ROOT/monitor-data
+          EOF
+          docker compose -f compose.yaml -f compose.storage.yaml config --quiet
+          docker compose \
+            -f compose.yaml \
+            -f compose.storage.yaml \
+            -f compose.chainstrap.yaml \
+            -f compose.monitor.yaml \
+            config --quiet
       - uses: docker/setup-qemu-action@53851d14592bedcffcf25ea515637cff71ef929a  # v3.3.0
       - uses: docker/setup-buildx-action@6524bf65af31da8d45b59e8c27de4bd072b392f5  # v3.8.0
       - name: Build amd64 and arm64 images without publishing
@@ -92,11 +118,11 @@ jobs:
           tags: rvn-core-qualification:${{ matrix.architecture }}
           build-args: |
             RAVENCOIN_VERSION=4.8.0
-            RAVENCOIN_SOURCE_COMMIT=b60f50e04f1fba425b28804e61be2694faaf3469
-            RAVENCOIN_ARCHIVE_SHA256=966cf8978af1f2e3f36e9733d011eb92f4116750af6f8e77c5a5ced525577c4c
-            RAVENCOIN_SOURCE_ARCHIVE_SHA256=ad6e72c18b64835e74582ad2465a72564b12310fa6159f23a67b9ecaf9b5ca71
-            RAVEND_SHA256=13e5c5da527888a870554acdbe0ad3de4f882ee2102d1cfc521e2868fa17b17b
-            RAVEN_CLI_SHA256=fcc7b88bd456e9ef21d9d5e9c9b40b26f0276b371f2108d702c6ce242bfdb109
+            RAVENCOIN_SOURCE_COMMIT=22549129888d02e0e08fcdb9f96f3c699167e774
+            RAVENCOIN_ARCHIVE_SHA256=cb359b6a5b42e47068cd655231484fcc763d2f79eae5ea318b029c704a4dc020
+            RAVENCOIN_SOURCE_ARCHIVE_SHA256=0fba4c8979c7ebed3457d91957f886292ea53e62857c636c70e3aa0478017d6e
+            RAVEND_SHA256=885f6670c819e3a48339bbc596f1a224fe41af21ae7a0db57b2ebca700d050ea
+            RAVEN_CLI_SHA256=8fde2465b2bd50d0db2d873fd02a6a4ce6a6be84ed03d32b094a9862febb594b
           cache-from: type=gha,scope=core-${{ matrix.architecture }}
           cache-to: type=gha,mode=max,scope=core-${{ matrix.architecture }}
       - name: Verify architecture selection and Compose model
@@ -110,8 +136,8 @@ jobs:
           ./ci/core-artifact-smoke.sh \
             "rvn-core-qualification:${{ matrix.architecture }}" \
             "${{ matrix.architecture }}" \
-            "b60f50e04f1fba425b28804e61be2694faaf3469" \
-            "ad6e72c18b64835e74582ad2465a72564b12310fa6159f23a67b9ecaf9b5ca71"
+            "22549129888d02e0e08fcdb9f96f3c699167e774" \
+            "0fba4c8979c7ebed3457d91957f886292ea53e62857c636c70e3aa0478017d6e"
       - name: Upload artifact qualification manifest
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
         with:

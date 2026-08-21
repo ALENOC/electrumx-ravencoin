@@ -111,13 +111,22 @@ def compact_history(history):
     assert write_size != 0
 
 async def run_test(db_dir):
-    environ.clear()
-    environ['DB_DIRECTORY'] = db_dir
-    environ['DAEMON_URL'] = ''
-    environ['COIN'] = 'Ravencoin'
-    db = DB(Env())
-    await db.open_for_serving()
-    history = db.history
+    saved_environ = dict(environ)
+    try:
+        environ.clear()
+        environ['DB_DIRECTORY'] = db_dir
+        environ['DAEMON_URL'] = ''
+        environ['COIN'] = 'Ravencoin'
+        db = DB(Env())
+        await db.open_for_serving()
+        history = db.history
+        await _run_compaction_checks(history)
+    finally:
+        environ.clear()
+        environ.update(saved_environ)
+
+
+async def _run_compaction_checks(history):
 
     # Test abstract compaction
     check_hashX_compaction(history)

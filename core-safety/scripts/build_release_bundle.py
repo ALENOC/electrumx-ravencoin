@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026, the ElectrumX-RVN community maintainers
+# The MIT License (MIT). See LICENCE for details.
+
+"""Build the deterministic source bundle consumed by the single-file installer.
+
+The bundle is not trusted by itself. Its SHA-256 becomes ``artifactDigest`` in
+our separately signed ElectrumX release manifest. The optional Node Monitor is
+vendored at one exact reviewed commit so installation never executes the head
+of a mutable branch.
+"""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import hashlib
+import json
+import os
+import pathlib
+import stat
+import subprocess
+import tarfile
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+PIN_FILE = ROOT / "release" / "install-sources.json"
+MAX_FILE_BYTES = 256 * 1024 * 1024
+
+
+class BundleError(RuntimeError):
+    pass
+
+
+def run_git(cwd: pathlib.Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", *args], cwd=cwd, check=False, capture_output=True, text=True)
+    if completed.returncode != 0:
+        raise BundleError(
+            f"git {' '.join(args)} failed in {cwd}: {completed.stderr.strip()}")
+    return completed.stdout.strip()
+
+
+def tracked_files(cwd: pathlib.Path) -> list[pathlib.Path]:
+    raw = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=cwd, check=False, capture_output=True)
+    if raw.returncode != 0:
+        raise BundleError(f"git ls-files failed in {cwd}")
+    result = []
+    for item in raw.stdout.split(b"\0"):
+        if not item:
+            continue
+        relative = pathlib.Path(os.fsdecode(item))
+        source = cwd / relative
+        if source.is_symlink():
+            raise BundleError(f"refusing tracked symlink in release bundle: {relative}")
+        if not source.is_file():
+            raise BundleError(f"tracked path is not a regular file: {relative}")
+        result.append(relative)
+    return sorted(result, key=lambda path: path.as_posix())
+
+
+def normalized_mode(path: pathlib.Path) -> int:
+    mode = path.stat().st_mode
+    return 0o755 if mode & stat.S_IXUSR else 0o644
+
+
+def add_bytes(archive: tarfile.TarFile, name: str, data: bytes, mode: int = 0o644) -> None:
+    if len(data) > MAX_FILE_BYTES:
+        raise BundleError(f"release-bundle file is too large: {name}")
+    info = tarfile.TarInfo(name=name)
+    info.size = len(data)
+    info.mode = mode
+    info.uid = 0
+    info.gid = 0
+    info.uname = ""
+    info.gname = ""
+    info.mtime = 0
+    info.type = tarfile.REGTYPE
+    import io
+    archive.addfile(info, io.BytesIO(data))
+
+
+def load_pin() -> dict:
+    try:
+        payload = json.loads(PIN_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BundleError(f"cannot read {PIN_FILE}: {exc}") from exc
+    monitor = payload.get("nodeMonitor") or {}
+    if payload.get("schemaVersion") != 1:
+        raise BundleError("unsupported install-sources schema")
+    if monitor.get("repository") != "ALENOC/ravencoin-node-monitor":
+        raise BundleError("Node Monitor repository pin is not the approved repository")
+    commit = monitor.get("commit")
+    if not isinstance(commit, str) or len(commit) != 40 or \
+            any(char not in "0123456789abcdef" for char in commit):
+        raise BundleError("Node Monitor commit pin is malformed")
+    if monitor.get("bundledPath") != "vendor/ravencoin-node-monitor":
+        raise BundleError("unexpected Node Monitor bundle path")
+    return payload
+
+
+def build_bundle(*, monitor_dir: pathlib.Path, output: pathlib.Path,
+                 version: str) -> tuple[str, dict]:
+    pin = load_pin()
+    monitor = pin["nodeMonitor"]
+
+    repo_head = run_git(ROOT, "rev-parse", "HEAD")
+    monitor_head = run_git(monitor_dir, "rev-parse", "HEAD")
+    if monitor_head != monitor["commit"]:
+        raise BundleError(
+            f"Node Monitor checkout is {monitor_head}, expected {monitor['commit']}")
+
+    # A dirty tracked tree would make the bundle bytes differ from the commit
+    # identity recorded below. Untracked files are excluded by git ls-files.
+    if run_git(ROOT, "status", "--porcelain", "--untracked-files=no"):
+        raise BundleError("ElectrumX tracked worktree is dirty")
+    if run_git(monitor_dir, "status", "--porcelain", "--untracked-files=no"):
+        raise BundleError("Node Monitor tracked worktree is dirty")
+
+    metadata = {
+        "schemaVersion": 1,
+        "electrumxVersion": version,
+        "sourceRepository": "ALENOC/electrumx-ravencoin",
+        "sourceCommit": repo_head,
+        "nodeMonitor": dict(monitor),
+    }
+    metadata_bytes = (json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+    repo_files = tracked_files(ROOT)
+    monitor_files = tracked_files(monitor_dir)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_name(output.name + ".tmp")
+
+    with temporary.open("wb") as raw:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as zipped:
+            with tarfile.open(fileobj=zipped, mode="w", format=tarfile.PAX_FORMAT) as archive:
+                for relative in repo_files:
+                    # The bundle receives generated metadata with the final
+                    # source/monitor identities; do not allow a tracked file to
+                    # shadow that synthetic trust record.
+                    if relative.as_posix() == "release-install-metadata.json":
+                        raise BundleError("tracked file shadows generated release metadata")
+                    source = ROOT / relative
+                    add_bytes(
+                        archive, relative.as_posix(), source.read_bytes(),
+                        mode=normalized_mode(source))
+
+                prefix = monitor["bundledPath"].rstrip("/")
+                for relative in monitor_files:
+                    source = monitor_dir / relative
+                    add_bytes(
+                        archive, f"{prefix}/{relative.as_posix()}",
+                        source.read_bytes(), mode=normalized_mode(source))
+
+                add_bytes(
+                    archive, "release-install-metadata.json", metadata_bytes,
+                    mode=0o644)
+
+    temporary.replace(output)
+    digest = hashlib.sha256(output.read_bytes()).hexdigest()
+    return digest, metadata
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--monitor-dir", required=True, type=pathlib.Path)
+    parser.add_argument("--output", required=True, type=pathlib.Path)
+    parser.add_argument("--version", required=True)
+    args = parser.parse_args()
+
+    digest, metadata = build_bundle(
+        monitor_dir=args.monitor_dir.resolve(), output=args.output.resolve(),
+        version=args.version)
+    print(f"bundle={args.output}")
+    print(f"sha256={digest}")
+    print(f"sourceCommit={metadata['sourceCommit']}")
+    print(f"nodeMonitorCommit={metadata['nodeMonitor']['commit']}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

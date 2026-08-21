@@ -1,0 +1,11 @@
+services:
+  monitor:
+    environment:
+      # The dashboard remains unprivileged. It receives only the controller's
+      # narrow root-owned Unix socket, never the Docker socket and never
+      # CAP_NET_ADMIN. The host helper validates a fixed protocol for bandwidth
+      # and connection-limit operations.
+      BANDWIDTH_CONTROL_ENABLED: "true"
+      BANDWIDTH_CONTROL_SOCKET: /run/ravencoin-bandwidth/control.sock
+    volumes:
+      - /run/ravencoin-bandwidth:/run/ravencoin-bandwidth:ro
