@@ -22,7 +22,10 @@ services:
         source: ${ELECTRUMX_TLS_DIRECTORY:?set ELECTRUMX_TLS_DIRECTORY in .env}
         target: /run/electrumx/tls
         read_only: true
-    restart: on-failure:5
+    # Existing-Core deployments cannot rely on Compose to gate an external
+    # daemon.  Keep retrying across host restarts and transient backend lag
+    # instead of exhausting a five-start budget.
+    restart: unless-stopped
     stop_grace_period: 15m
     init: true
     read_only: true
