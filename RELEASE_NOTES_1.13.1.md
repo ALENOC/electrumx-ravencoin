@@ -8,6 +8,8 @@ ElectrumX-RVN 1.13.1 is the first maintained release line that combines the offi
 - **Special thanks to Tron Black** for making ChainStrap available to the Ravencoin ecosystem. ChainStrap support is available in ElectrumX-RVN starting with version 1.13.1.
 - ChainStrap is treated as transport only: Ravencoin Core performs a local `-reindex -assumevalid=0` validation before normal operation, with digest-bound marker state preventing accidental bypass.
 - Bundled Core trust is pinned to the exact official `RavenProject/Ravencoin` v4.8.0 commit `22549129888d02e0e08fcdb9f96f3c699167e774`.
+- Signed safe-Core policy v3 certifies that exact official commit and revokes the historical 2miners build identity.
+- Core readiness supports the official v4.8.0 response that omits `initialblockdownload`, while still requiring synchronized heights, peers and a fresh tip and rejecting explicit IBD.
 - Candidate Core execution, trusted evaluation and protected policy signing are separated into distinct trust domains.
 - ElectrumX database startup now validates the transaction-hash extent globally and fails closed on unsafe historical corruption.
 - Docker Compose uses a deterministic project identity and safer fresh-install cleanup semantics.
