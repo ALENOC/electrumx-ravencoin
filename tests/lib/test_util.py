@@ -107,6 +107,19 @@ def test_LogicalFile(tmpdir):
     L.write(0, b'957' * 6)
     assert L.read(0, -1) == b'957' * 6
 
+
+def test_LogicalFile_durable_write_fsyncs_data_and_new_segment_directory(tmpdir, monkeypatch):
+    prefix = os.path.join(tmpdir, 'durable')
+    logical = util.LogicalFile(prefix, 2, 6)
+    fsync_calls = []
+    monkeypatch.setattr(util.os, 'fsync', lambda fd: fsync_calls.append(fd))
+
+    logical.write(0, b'0123456789', sync=True)
+
+    # Two segment files plus at least one directory durability barrier.
+    assert len(fsync_calls) >= 3
+    assert logical.read(0, -1) == b'0123456789'
+
 def test_open_fns(tmpdir):
     tmpfile = os.path.join(tmpdir, 'file1')
     with pytest.raises(FileNotFoundError):

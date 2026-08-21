@@ -120,6 +120,13 @@ def bundle_files(*, core_policy_document=None,
             f"RAVENCOIN_SOURCE_COMMIT: {CORE_COMMIT}\n"
             "RAVENCOIN_SOURCE_REPOSITORY: RavenProject/Ravencoin\n"
         ).encode(),
+        "compose.storage.yaml": (
+            b"volumes:\n"
+            b"  ravencoin-data:\n    driver: local\n"
+            b"  ravencoin-config:\n    driver: local\n"
+            b"  electrumx-data:\n    driver: local\n"
+            b"  monitor-data:\n    driver: local\n"
+        ),
         "compose.chainstrap.yaml": b"network_mode: none\n",
         "compose.monitor.yaml": (
             b"services:\n  monitor:\n"
@@ -140,6 +147,8 @@ def bundle_files(*, core_policy_document=None,
         "vendor/ravencoin-node-monitor/Dockerfile": b"FROM scratch\n",
         "vendor/ravencoin-node-monitor/.env.example": b"BIND_PORT=8899\n",
         "vendor/ravencoin-node-monitor/contrib/ravencoin-bandwidth-controller.py": b"#!/usr/bin/env python3\n",
+        "vendor/ravencoin-node-monitor/contrib/verify-published-port.py": b"#!/usr/bin/env python3\n",
+        "core-safety/scripts/configure_monitor_admin_network.py": b"#!/usr/bin/env python3\n",
         "compose.monitor-controller.yaml": (
             b"services:\n  controller:\n"
             b"    volumes:\n"
@@ -352,13 +361,15 @@ def test_fresh_defaults_are_chainstrap_and_monitor():
 
 def test_p2p_opt_out_drops_only_chainstrap_overlay():
     assert installer.compose_files("chainstrap", False) == [
-        "compose.yaml", "compose.chainstrap.yaml"]
-    assert installer.compose_files("p2p", False) == ["compose.yaml"]
+        "compose.yaml", "compose.storage.yaml", "compose.chainstrap.yaml"]
+    assert installer.compose_files("p2p", False) == [
+        "compose.yaml", "compose.storage.yaml"]
 
 
 def test_monitor_choice_adds_hardened_overlay():
     assert installer.compose_files("chainstrap", True) == [
-        "compose.yaml", "compose.chainstrap.yaml", "compose.monitor.yaml"]
+        "compose.yaml", "compose.storage.yaml",
+        "compose.chainstrap.yaml", "compose.monitor.yaml"]
 
 
 def test_monitor_password_file_is_created_0600(tmp_path):
@@ -380,7 +391,8 @@ def test_existing_destination_is_never_overwritten(tmp_path):
     with pytest.raises(installer.InstallError, match="refusing to overwrite"):
         installer.install_fresh(
             target, b"not-used", body={}, metadata={},
-            bootstrap="chainstrap", monitor=False, controller=False)
+            bootstrap="chainstrap", monitor=False, controller=False,
+            storage_root=tmp_path / "storage")
 
 
 def test_fresh_install_refuses_preexisting_project_runtime(monkeypatch):
@@ -408,10 +420,15 @@ def test_failed_chainstrap_run_is_torn_down_with_volumes(monkeypatch, tmp_path):
 
     monkeypatch.setattr(installer, "require_clean_docker_project_runtime", lambda: None)
     monkeypatch.setattr(installer, "extract_bundle", lambda _data, _dest: None)
+    # This test isolates activation/rollback. Storage-path parsing and
+    # layout have dedicated tests in tests/test_installer_storage.py.
+    monkeypatch.setattr(installer, "write_storage_env", lambda _root, _storage: None)
 
     def fake_run_checked(argv, *, cwd=None, quiet=False):
-        if "up" in argv:
-            raise installer.InstallError("simulated chainstrap failure")
+        return None
+
+    def fake_activate(_root, _base, _bootstrap):
+        raise installer.InstallError("simulated chainstrap failure")
 
     class Completed:
         returncode = 0
@@ -423,14 +440,17 @@ def test_failed_chainstrap_run_is_torn_down_with_volumes(monkeypatch, tmp_path):
         return Completed()
 
     monkeypatch.setattr(installer, "run_checked", fake_run_checked)
+    monkeypatch.setattr(installer, "activate_compose", fake_activate)
     monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
 
     with pytest.raises(installer.InstallError, match="automatic P2P fallback is intentionally disabled"):
         installer.install_fresh(
             target, b"unused", body={}, metadata={},
-            bootstrap="chainstrap", monitor=False, controller=False)
+            bootstrap="chainstrap", monitor=False, controller=False,
+            storage_root=tmp_path / "storage")
 
     assert not target.exists()
+    assert not (tmp_path / "storage").exists()
     assert any(
         "down" in command and "--volumes" in command and "--remove-orphans" in command
         for command in recorded_subprocess
@@ -579,3 +599,56 @@ def test_monitor_controller_real_docker_socket_grant_is_still_refused():
     body = manifest_for_bundle(data)
     with pytest.raises(installer.InstallError, match="forbidden privileges"):
         installer.validate_bundle(data, body, public_key_hex="a" * 64)
+
+
+
+def test_installer_banner_is_terminal_width_aware(monkeypatch, capsys):
+    monkeypatch.setattr(
+        installer.shutil, "get_terminal_size",
+        lambda fallback=(88, 24): os.terminal_size((64, 24)))
+    installer.print_installer_banner()
+    lines = [line for line in capsys.readouterr().out.splitlines() if line]
+    assert any(line.strip() == "ELECTRUMX RAVENCOIN" for line in lines)
+    assert any(line.strip() == "Verified Node Installer" for line in lines)
+    assert max(len(line) for line in lines) <= 64
+
+
+def test_interactive_choices_have_distinct_spaced_sections(capsys):
+    args = installer.parse_args([])
+    assert installer.choose_bootstrap(args, True, prompt=lambda _message: "1") == "chainstrap"
+    assert installer.choose_monitor(args, True, prompt=lambda _message: "y") is True
+    assert installer.choose_monitor_controller(
+        args, True, True, prompt=lambda _message: "n") is False
+    output = capsys.readouterr().out
+    assert "[ 2 / 4  Blockchain bootstrap ]" in output
+    assert "[ 3 / 4  Ravencoin Node Monitor ]" in output
+    assert "[ 4 / 4  Advanced host controls ]" in output
+    assert "requires sudo" in output
+
+
+def test_installation_summary_makes_advanced_controller_explicit(capsys, tmp_path):
+    installer.print_installation_summary(tmp_path / "storage", "chainstrap", True, False)
+    output = capsys.readouterr().out
+    assert "Installation summary" in output
+    assert "ChainStrap Fast Verified Bootstrap" in output
+    assert "Node Monitor" in output and "enabled" in output
+    assert "Advanced controls" in output and "disabled" in output
+    assert "Docker images" in output and "unchanged" in output
+
+
+def test_chainstrap_activation_dispatches_live_progress(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        installer, "run_chainstrap_activation_with_live_logs",
+        lambda root, base: calls.append((root, list(base))))
+    installer.activate_compose(tmp_path, ["docker", "compose"], "chainstrap")
+    assert calls == [(tmp_path, ["docker", "compose"])]
+
+
+def test_p2p_activation_keeps_normal_detached_start(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        installer, "run_checked",
+        lambda argv, **kwargs: calls.append((list(argv), kwargs.get("cwd"))))
+    installer.activate_compose(tmp_path, ["docker", "compose"], "p2p")
+    assert calls == [(["docker", "compose", "up", "-d", "--no-build"], tmp_path)]

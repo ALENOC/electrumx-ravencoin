@@ -16,6 +16,7 @@ import logging
 import os
 import pylru
 import traceback
+from array import array
 from collections import defaultdict
 from datetime import datetime
 from asyncio import sleep
@@ -335,6 +336,9 @@ class OnDiskBlock:
 
 class ChainError(Exception):
     '''Raised on error processing blocks.'''
+
+
+FS_METADATA_RECOVERY_MAX_BLOCKS = 64
 
 
 class BlockProcessor:
@@ -1635,7 +1639,16 @@ class BlockProcessor:
                 tx_num, = unpack_le_uint64(tx_num_packed + bytes(3))
                 fs_hash, _height = self.db.fs_tx_hash(tx_num)
                 if fs_hash != tx_hash:
-                    assert fs_hash is not None  # Should always be found
+                    if fs_hash is None:
+                        # Short read: hashes metadata has not caught up with
+                        # the UTXO table.  A reachable assert here would kill
+                        # the whole block-processing task; fail this UTXO
+                        # lookup loudly instead (GLM53-RVN-009).
+                        raise ChainError(
+                            f'UTXO {hash_to_hex_str(tx_hash)} / {tx_idx:,d} '
+                            f'references tx_num {tx_num:,d} beyond the '
+                            'transaction-hash metadata; database state is '
+                            'inconsistent, reindex required')
                     continue
 
             # Key: b'u' + address_hashX + tx_idx + tx_num
@@ -1707,6 +1720,153 @@ class BlockProcessor:
                 # is a one-time startup concern, not an ongoing one.
                 await self.db.open_for_serving()
 
+    async def _repair_trailing_fs_metadata(self):
+        '''Repair only a bounded, daemon-verified trailing metadata window.
+
+        This is intentionally conservative.  We trust the LevelDB state only
+        after its tip is proven to match the daemon, and we anchor the repair
+        to the cumulative tx count immediately before the recovery window.  If
+        either check fails, automatic repair is refused.
+        '''
+        if not self.db.fs_metadata_needs_recovery():
+            return False
+
+        state = self.db.state
+        if state.height < 0:
+            raise self.db.DBError('filesystem metadata recovery requested for an empty DB')
+
+        count = min(FS_METADATA_RECOVERY_MAX_BLOCKS, state.height + 1)
+        start = state.height - count + 1
+        hex_hashes = await self.daemon.block_hex_hashes(start, count)
+        if len(hex_hashes) != count:
+            raise self.db.DBError('daemon did not return the complete metadata recovery window')
+        if hex_hashes[-1] != hash_to_hex_str(state.tip):
+            raise self.db.DBError(
+                'refusing filesystem metadata repair: committed LevelDB tip does not match daemon tip')
+
+        os.makedirs(OnDiskBlock.path, exist_ok=True)
+        await OnDiskBlock.prefetch_many(
+            self.daemon, enumerate(hex_hashes, start=start), 'metadata-recovery')
+
+        expected_headers = []
+        expected_hashes = []
+        txs_per_block = []
+        if start > 0:
+            prior_len = self.coin.static_header_len(start - 1)
+            prior = self.db.headers_file.read(self.db.header_offset(start - 1), prior_len)
+            if len(prior) != prior_len:
+                raise self.db.DBError(
+                    'refusing filesystem metadata repair: recovery boundary header is missing')
+            expected_prev = self.coin.header_hash(prior)
+        else:
+            expected_prev = None
+
+        try:
+            for height, hex_hash in enumerate(hex_hashes, start=start):
+                block = await OnDiskBlock.streamed_block(self.coin, hex_hash)
+                if block is None:
+                    raise self.db.DBError(
+                        f'daemon raw block unavailable for metadata recovery at height {height:,d}')
+                with block:
+                    self.coin.validate_header(block.header, height)
+                    if expected_prev is not None and self.coin.header_prevhash(block.header) != expected_prev:
+                        raise self.db.DBError(
+                            f'refusing filesystem metadata repair: chain boundary mismatch at '
+                            f'height {height:,d}')
+                    expected_prev = self.coin.header_hash(block.header)
+                    block_hashes = [tx_hash for _tx, tx_hash in block.iter_txs()]
+                    if not block_hashes:
+                        raise self.db.DBError(
+                            f'daemon raw block has no transactions at height {height:,d}')
+                    expected_headers.append(block.header)
+                    expected_hashes.extend(block_hashes)
+                    txs_per_block.append(len(block_hashes))
+        finally:
+            # Recovery downloads are scratch data, never part of the durable DB.
+            await OnDiskBlock.delete_stale(hex_hashes, False)
+
+        if expected_prev != state.tip:
+            raise self.db.DBError(
+                'refusing filesystem metadata repair: reconstructed tail does not end at LevelDB tip')
+
+        tail_tx_count = sum(txs_per_block)
+        base_tx_count = state.tx_count - tail_tx_count
+        if base_tx_count < 0:
+            raise self.db.DBError('refusing filesystem metadata repair: invalid committed tx_count')
+        if start > 0:
+            raw_prior_count = self.db.tx_counts_file.read((start - 1) * 8, 8)
+            if len(raw_prior_count) != 8:
+                raise self.db.DBError(
+                    'refusing filesystem metadata repair: recovery boundary txcount is missing')
+            prior_count = array('Q', raw_prior_count)[0]
+            if prior_count != base_tx_count:
+                raise self.db.DBError(
+                    'refusing automatic metadata repair: corruption extends beyond the bounded '
+                    f'{count}-block recovery window')
+        elif base_tx_count != 0:
+            raise self.db.DBError('refusing filesystem metadata repair: genesis boundary mismatch')
+
+        # Global hash-extent gate (GLM53-RVN-003): the bounded repair may only
+        # rewrite the trailing window.  If hash data is missing below the
+        # window, extends beyond the committed tx_count, or contains an
+        # all-zero slot below the window (a sparse hole from a past
+        # past-EOF write), rewriting the tail would leave a valid-looking but
+        # incorrect index, so refuse and require a full reindex.
+        hash_extent = self.db.hashes_file.logical_size()
+        if hash_extent < base_tx_count * 32:
+            raise self.db.DBError(
+                'refusing filesystem metadata repair: transaction-hash metadata '
+                'is missing below the bounded recovery window; a full reindex is '
+                'required, refusing to write sparse holes')
+        if hash_extent > state.tx_count * 32:
+            raise self.db.DBError(
+                'refusing filesystem metadata repair: transaction-hash metadata '
+                'extends beyond the committed tx_count; a full reindex is required')
+        zero_offset = self.db.fs_zero_slot_offset
+        if zero_offset is not None and zero_offset < base_tx_count * 32:
+            raise self.db.DBError(
+                'refusing filesystem metadata repair: all-zero transaction-hash '
+                'slot below the bounded recovery window; a full reindex is required')
+        if base_tx_count > 0:
+            boundary = self.db.hashes_file.read((base_tx_count - 1) * 32, 32)
+            if len(boundary) != 32 or boundary == bytes(32):
+                raise self.db.DBError(
+                    'refusing filesystem metadata repair: transaction-hash slot '
+                    'at the recovery boundary is missing or zero')
+
+        cumulative = []
+        running = base_tx_count
+        for block_tx_count in txs_per_block:
+            running += block_tx_count
+            cumulative.append(running)
+        if running != state.tx_count:
+            raise self.db.DBError('refusing filesystem metadata repair: reconstructed tx_count mismatch')
+
+        headers_blob = b''.join(expected_headers)
+        counts_blob = array('Q', cumulative).tobytes()
+        hashes_blob = b''.join(expected_hashes)
+
+        self.db.logger.warning(
+            f'repairing trailing filesystem metadata at heights {start:,d}-{state.height:,d} '
+            f'after crash-consistency failure: {self.db.fs_metadata_issue}')
+        self.db.headers_file.write(self.db.header_offset(start), headers_blob, sync=True)
+        self.db.tx_counts_file.write(start * 8, counts_blob, sync=True)
+        self.db.hashes_file.write(base_tx_count * 32, hashes_blob, sync=True)
+        if self.db.hashes_file.logical_size() != state.tx_count * 32:
+            raise self.db.DBError(
+                'filesystem metadata repair left the transaction-hash extent '
+                'inconsistent; refusing to continue on this database')
+
+        await self.db._read_tx_counts(force=True, strict=True)
+        self.db.fs_height = state.height
+        self.db.fs_tx_count = state.tx_count
+        self.db.fs_asset_count = state.asset_count
+        self.db.fs_h160_count = state.h160_count
+        self.db.logger.warning(
+            f'filesystem metadata self-heal completed through height {state.height:,d}; '
+            'normal chain verification will run before indexing resumes')
+        return True
+
     # --- External API
 
     async def fetch_and_process_blocks(self, caught_up_event, shutdown_event):
@@ -1725,7 +1885,12 @@ class BlockProcessor:
         if self.env.write_bad_vouts_to_file and not os.path.isdir(self.bad_vouts_path):
             os.mkdir(self.bad_vouts_path)
         
-        self.state = OnDiskBlock.state = (await self.db.open_for_sync()).copy()
+        await self.db.open_for_sync()
+        # Detect/recover the narrow trailing flat-file failure mode before any
+        # query or block-processing path is allowed to consume tx_counts/hash
+        # metadata.  Repair is bounded and anchored to the daemon + LevelDB tip.
+        await self._repair_trailing_fs_metadata()
+        self.state = OnDiskBlock.state = self.db.state.copy()
         # Refuse a stale or forked index before extending or serving it.  This
         # requires the open database above, so it cannot run any earlier.
         await verify_database_chain(self.db, self.daemon)

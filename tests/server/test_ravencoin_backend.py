@@ -175,6 +175,9 @@ async def test_block_processor_verifies_chain_only_after_opening_database(monkey
     class StopTest(Exception):
         pass
 
+    async def stub_repair_trailing_fs_metadata():
+        calls.append("repair_trailing_fs_metadata")
+
     async def stub_next_block_hashes():
         raise StopTest
 
@@ -187,6 +190,7 @@ async def test_block_processor_verifies_chain_only_after_opening_database(monkey
         db=StubDB(),
         daemon=object(),
         state=None,
+        _repair_trailing_fs_metadata=stub_repair_trailing_fs_metadata,
         next_block_hashes=stub_next_block_hashes,
     )
 
@@ -195,7 +199,12 @@ async def test_block_processor_verifies_chain_only_after_opening_database(monkey
             processor, None, None
         )
 
-    assert calls == ["open_for_sync", "verify_database_chain", "scan_files"]
+    assert calls == [
+        "open_for_sync",
+        "repair_trailing_fs_metadata",
+        "verify_database_chain",
+        "scan_files",
+    ]
 
 
 def test_abnormal_startup_failure_exits_non_zero():

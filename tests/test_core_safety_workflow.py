@@ -12,43 +12,90 @@ def _text():
     return WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_watcher_builds_exact_candidate_before_certification():
+def _section(start, end=None):
     text = _text()
-    assert "core-safety/scripts/build_candidate.sh" in text
-    assert '"--source-dir", str(build_dir / "source")' in text
-    assert '"--bin-dir", str(build_dir / "bin")' in text
-    assert 'candidate_test = build_dir / "bin" / "test_raven"' in text
-    assert '"--candidate-probe", str(candidate_test)' in text
-    assert '"--candidate-test-binary", str(candidate_test)' in text
-    assert 'repository != "RavenProject/Ravencoin"' in text
-    assert 'state != "PROVENANCE_VALIDATED"' in text
-    assert "source_sha256" in text
+    part = text.split(start, 1)[1]
+    return part.split(end, 1)[0] if end else part
+
+
+def test_watcher_builds_and_certifies_candidates_in_containers():
+    text = _text()
+    # The untrusted stage drives builds and certification only through the
+    # orchestrator, which itself executes no candidate code.
+    assert "core-safety/scripts/run_candidate_certification.py" in text
+    orchestrator = (ROOT / "core-safety/scripts/run_candidate_certification.py"
+                    ).read_text(encoding="utf-8")
+    assert "build_candidate.sh" in orchestrator
+
+
+def test_certification_reports_carry_a_container_confinement_record():
+    orchestrator = (ROOT / "core-safety/scripts/run_candidate_certification.py"
+                    ).read_text(encoding="utf-8")
+    assert '"--network", "none"' in orchestrator
+    assert '"--cap-drop", "ALL"' in orchestrator
+    assert '"no-new-privileges"' in orchestrator
+    assert ":ro" in orchestrator
+    assert "REPORT_STDOUT_PREFIX" in orchestrator
+
+
+def test_authoritative_decision_comes_from_the_trusted_evaluator():
+    text = _text()
+    evaluate_section = _section("  evaluate:", "  propose_policy:")
+    assert "core-safety/scripts/evaluate_certification.py" in evaluate_section
+    # The evaluator job must not build or execute candidate code.
+    assert "build_candidate.sh" not in evaluate_section
+    assert "run_candidate_certification.py" not in evaluate_section
+    assert "docker build" not in evaluate_section
+    # Watcher state is authored by the trusted job only.
+    assert "core-safety-state-" in evaluate_section
+    certify_section = _section("  certify:", "  evaluate:")
+    assert "core-safety-state-" not in certify_section
+
+
+def test_signing_consumes_only_evaluator_bound_reports():
+    text = _text()
+    signing_section = _section("  propose_policy:")
+    assert "evaluation-summary.json" in signing_section
+    assert "canonicalDigest" in signing_section
+    assert "derivedOverall" in signing_section
+
+
+def test_missing_evidence_artifacts_fail_closed():
+    text = _text()
+    # Evidence and canonical-report artifacts are security evidence: their
+    # absence must fail the run.  (The optional policy-proposal upload may
+    # legitimately be absent when no candidate was conclusively certified.)
+    evidence_uploads = text.split("Upload raw certification evidence", 1)[1] \
+        .split("  evaluate:", 1)[0]
+    assert "if-no-files-found: error" in evidence_uploads
+    canonical_uploads = text.split("Upload canonical certification reports", 1)[1] \
+        .split("  propose_policy:", 1)[0]
+    assert "if-no-files-found: error" in canonical_uploads
 
 
 def test_watcher_never_signs_in_candidate_build_job():
     text = _text()
-    certify_section = text.split("  certify:", 1)[1].split("  propose_policy:", 1)[0]
-    assert "POLICY_SIGNING_KEY" not in certify_section
-    assert "core-safety-signing" not in certify_section
+    untrusted = _section("  certify:", "  evaluate:")
+    assert "POLICY_SIGNING_KEY" not in untrusted
+    assert "core-safety-signing" not in untrusted
+    evaluator = _section("  evaluate:", "  propose_policy:")
+    assert "POLICY_SIGNING_KEY" not in evaluator
+    assert "core-safety-signing" not in evaluator
 
 
 def test_inconclusive_candidate_is_not_marked_processed():
-    text = _text()
-    certify_section = text.split("  certify:", 1)[1].split("  propose_policy:", 1)[0]
-    assert 'terminal = {"CERTIFICATION_PASSED", "CERTIFICATION_FAILED", "KNOWN_UNSAFE"}' \
-        in certify_section
-    assert 'if report.get("overall") not in terminal:' in certify_section
-    assert "BUILD_FAILED" not in certify_section.split(
-        "Record only terminal candidate identities", 1)[1].split(
-            "Save watcher state", 1)[0]
-    assert "REVIEW_REQUIRED" not in certify_section.split(
-        "Record only terminal candidate identities", 1)[1].split(
-            "Save watcher state", 1)[0]
+    # The evaluator marks only terminal derived verdicts; BUILD_FAILED and
+    # REVIEW_REQUIRED never enter processed state (asserted functionally in
+    # core-safety/scripts/test_evaluate_certification.py).
+    evaluator = (ROOT / "core-safety/scripts/evaluate_certification.py"
+                 ).read_text(encoding="utf-8")
+    assert 'TERMINAL_STATES = {"CERTIFICATION_PASSED", "CERTIFICATION_FAILED", "KNOWN_UNSAFE"}' \
+        in evaluator
+    assert 'if item["overall"] in TERMINAL_STATES:' in evaluator
 
 
 def test_signing_stays_in_protected_job_and_uses_signed_baseline():
-    text = _text()
-    signing_section = text.split("  propose_policy:", 1)[1]
+    signing_section = _section("  propose_policy:")
     assert "environment: core-safety-signing" in signing_section
     assert "POLICY_SIGNING_KEY" in signing_section
     assert "minimum_policy_version=3" in signing_section

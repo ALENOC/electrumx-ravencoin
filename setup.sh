@@ -48,9 +48,12 @@ set_env_value() {
     setting_value=$2
     if grep -q "^${setting_key}=" .env; then
         sed_script="s|^${setting_key}=.*|${setting_key}=${setting_value}|"
-        temporary_env=".env.new.$$"
-        sed "$sed_script" .env > "$temporary_env"
+        # Unpredictable private temporary (GLM53-RVN-014): a predictable
+        # .env.new.$$ name lets a local attacker pre-plant a symlink that the
+        # redirect follows into an arbitrary file.
+        temporary_env=$(mktemp .env.new.XXXXXXXXXX)
         chmod 600 "$temporary_env"
+        sed "$sed_script" .env > "$temporary_env"
         mv "$temporary_env" .env
     else
         printf '%s=%s\n' "$setting_key" "$setting_value" >> .env
@@ -224,6 +227,11 @@ configure_duckdns() {
 if [ ! -e .env ]; then
     cp .env.example .env
     chmod 600 .env
+fi
+
+if [ "$mode" = bundled ]; then
+    command -v python3 >/dev/null 2>&1         || fail 'python3 is required to select the internal monitor-admin network'
+    python3 core-safety/scripts/configure_monitor_admin_network.py --env-file .env         || fail 'could not select a collision-free internal monitor-admin network'
 fi
 
 if [ "$configure_ddns" = true ]; then

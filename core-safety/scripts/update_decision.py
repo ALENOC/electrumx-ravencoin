@@ -221,7 +221,17 @@ def evaluate_verification(*, manifest: Optional[dict], signature_valid: bool,
     if not downloaded_artifact_digest or \
             downloaded_artifact_digest != manifest.get("artifactDigest"):
         return Decision(VerificationVerdict.REFUSED_ARTIFACT_DIGEST_MISMATCH)
-    if manifest.get("architecture") != host.architecture:
+    architecture = manifest.get("architecture")
+    # Signed manifests may declare a multi-architecture target set such as
+    # "linux/amd64,linux/arm64" (the same canonical form the manifest
+    # builder validates).  Accept it only when this host's platform is one
+    # of the declared targets; anything else remains a mismatch refusal.
+    if isinstance(architecture, str):
+        targets = tuple(item.strip() for item in architecture.split(",")
+                        if item.strip())
+    else:
+        targets = ()
+    if host.architecture not in targets:
         return Decision(VerificationVerdict.REFUSED_ARCHITECTURE_MISMATCH)
 
     if not _updater_version_compatible(host, manifest):

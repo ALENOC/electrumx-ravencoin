@@ -14,6 +14,14 @@ The blockchain, ElectrumX DB and prepared Core RPC secrets live in named Docker
 volumes and are never copied into a release bundle. Operator configuration and
 host-side secrets are copied only from a small allowlist of known mutable paths.
 ChainStrap is deliberately *not* re-run during a software update.
+
+A normal software update is also forbidden from rotating either production
+trust root. The candidate bundle must carry the same ElectrumX release/update
+public key and the same safe-Core policy public key as the currently installed
+release. The bundled safe-Core policy is re-verified under that already trusted
+Core-policy key and must certify the exact manifest Core identity/report. Key
+rotation therefore needs a separate, explicitly reviewed mechanism rather than
+being smuggled inside an otherwise ordinary signed software update.
 """
 
 from __future__ import annotations
@@ -34,10 +42,15 @@ import urllib.request
 from pathlib import Path, PurePosixPath
 from typing import Callable, Optional, Sequence
 
+import policy as core_policy
 from update_decision import HealthGateResult
 
 REPOSITORY = "ALENOC/electrumx-ravencoin"
 CORE_REPOSITORY = "RavenProject/Ravencoin"
+#: Pinned explicitly on every Compose invocation (GLM53-RVN-008): an exported
+#: COMPOSE_PROJECT_NAME in the operator environment must not detach the
+#: updater from the project namespace it validates and switches.
+COMPOSE_PROJECT_NAME = "electrumx-ravencoin"
 INSTALL_MARKER = ".electrumx-ravencoin-installed.json"
 BASE_COMPOSE = "compose.yaml"
 MONITOR_OVERLAY = "compose.monitor.yaml"
@@ -45,6 +58,9 @@ MONITOR_CONTROLLER_OVERLAY = "compose.monitor-controller.yaml"
 CHAINSTRAP_OVERLAY = "compose.chainstrap.yaml"
 BUNDLE_METADATA = "release-install-metadata.json"
 MONITOR_PATH = "vendor/ravencoin-node-monitor"
+UPDATE_PUBLIC_KEY_PATH = "core-safety/production/update-signing-public-key.hex"
+CORE_POLICY_PATH = "core-safety/production/safe-core-policy.json"
+CORE_POLICY_PUBLIC_KEY_PATH = "core-safety/production/core-policy-signing-public-key.hex"
 
 CHECKPOINT_HEIGHT = 4_487_775
 CHECKPOINT_HASH = "000000000002d64509e06e76ddbbe418c725291687ec62b41ecfc40386a091fd"
@@ -54,6 +70,7 @@ MAX_BUNDLE_FILES = 8192
 MAX_BUNDLE_FILE_BYTES = 256 * 1024 * 1024
 MAX_BUNDLE_EXTRACTED_BYTES = 768 * 1024 * 1024
 SHA256_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
+RAW_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 
 REQUIRED_BUNDLE_PATHS = frozenset({
@@ -64,6 +81,9 @@ REQUIRED_BUNDLE_PATHS = frozenset({
     ".env.example",
     "docker/core/bootstrap-reindex.sh",
     BUNDLE_METADATA,
+    UPDATE_PUBLIC_KEY_PATH,
+    CORE_POLICY_PATH,
+    CORE_POLICY_PUBLIC_KEY_PATH,
     f"{MONITOR_PATH}/Dockerfile",
     f"{MONITOR_PATH}/.env.example",
 })
@@ -213,7 +233,75 @@ def _read_tar_text(archive: tarfile.TarFile, name: str) -> str:
         raise UpdateRuntimeError(f"bundle file {name!r} is not UTF-8") from exc
 
 
-def validate_bundle_file(path: Path, manifest: dict) -> dict:
+def _read_installed_key(path: Path, label: str) -> str:
+    try:
+        value = path.read_text(encoding="ascii").strip().lower()
+    except OSError as exc:
+        raise UpdateRuntimeError(
+            f"cannot read installed {label} trust root {path}: {exc}") from exc
+    if not RAW_SHA256_RE.fullmatch(value):
+        raise UpdateRuntimeError(f"installed {label} trust root is malformed")
+    return value
+
+
+def _verify_bundle_trust_continuity(
+        archive: tarfile.TarFile, manifest: dict, *,
+        trusted_update_public_key_hex: str,
+        trusted_core_policy_public_key_hex: str) -> None:
+    """Keep both trust roots stable across ordinary software updates."""
+    update_key = (trusted_update_public_key_hex or "").strip().lower()
+    core_key = (trusted_core_policy_public_key_hex or "").strip().lower()
+    if not RAW_SHA256_RE.fullmatch(update_key):
+        raise UpdateRuntimeError("trusted ElectrumX update public key is malformed")
+    if not RAW_SHA256_RE.fullmatch(core_key):
+        raise UpdateRuntimeError("trusted safe-Core policy public key is malformed")
+
+    bundled_update_key = _read_tar_text(archive, UPDATE_PUBLIC_KEY_PATH).strip().lower()
+    bundled_core_key = _read_tar_text(archive, CORE_POLICY_PUBLIC_KEY_PATH).strip().lower()
+    if bundled_update_key != update_key:
+        raise UpdateRuntimeError(
+            "ordinary software update attempted to rotate the ElectrumX release/update trust root")
+    if bundled_core_key != core_key:
+        raise UpdateRuntimeError(
+            "ordinary software update attempted to rotate the safe-Core policy trust root")
+
+    try:
+        document = json.loads(_read_tar_text(archive, CORE_POLICY_PATH))
+    except json.JSONDecodeError as exc:
+        raise UpdateRuntimeError("bundle safe-Core policy is invalid JSON") from exc
+    public_bytes = bytes.fromhex(core_key)
+    trusted = {core_policy.key_id_for(public_bytes): public_bytes}
+    try:
+        body = core_policy.verify_policy(
+            document, trusted,
+            minimum_policy_version=int(manifest.get("safeCorePolicyVersion", 0)))
+    except (core_policy.PolicyError, TypeError, ValueError) as exc:
+        raise UpdateRuntimeError(f"bundle safe-Core policy does not verify: {exc}") from exc
+
+    if body.get("policyVersion") != manifest.get("safeCorePolicyVersion"):
+        raise UpdateRuntimeError(
+            "bundle safe-Core policy version disagrees with signed release manifest")
+    entry = core_policy.lookup_release(
+        body, str(manifest.get("coreRepository", "")), str(manifest.get("coreCommit", "")))
+    if entry is None or entry.get("status") != "KNOWN_SAFE":
+        raise UpdateRuntimeError(
+            "bundle safe-Core policy does not certify the exact manifest Core identity")
+    if entry.get("version") != manifest.get("coreVersion") or \
+            entry.get("tag") != manifest.get("coreTag"):
+        raise UpdateRuntimeError(
+            "bundle safe-Core policy Core version/tag disagrees with signed release manifest")
+    if entry.get("reportDigest") != manifest.get("certificationReportDigest"):
+        raise UpdateRuntimeError(
+            "bundle safe-Core certification report digest disagrees with signed release manifest")
+    if (entry.get("certification") or {}).get("result") != "PASS":
+        raise UpdateRuntimeError(
+            "bundle safe-Core policy entry lacks passing certification evidence")
+
+
+def validate_bundle_file(
+        path: Path, manifest: dict, *,
+        trusted_update_public_key_hex: Optional[str] = None,
+        trusted_core_policy_public_key_hex: Optional[str] = None) -> dict:
     expected = manifest.get("artifactDigest")
     match = SHA256_RE.fullmatch(expected or "")
     if match is None or _sha256_file(path) != match.group(1):
@@ -295,6 +383,16 @@ def validate_bundle_file(path: Path, manifest: dict) -> dict:
             if required not in monitor_compose:
                 raise UpdateRuntimeError(
                     f"Node Monitor isolation lost required invariant {required!r}")
+
+        if (trusted_update_public_key_hex is None) != \
+                (trusted_core_policy_public_key_hex is None):
+            raise UpdateRuntimeError(
+                "both updater trust roots must be supplied together for continuity validation")
+        if trusted_update_public_key_hex is not None:
+            _verify_bundle_trust_continuity(
+                archive, manifest,
+                trusted_update_public_key_hex=trusted_update_public_key_hex,
+                trusted_core_policy_public_key_hex=trusted_core_policy_public_key_hex)
         return metadata
 
 
@@ -396,7 +494,7 @@ def _run(argv: Sequence[str], *, cwd: Path, timeout: int = 1800,
 
 
 def _compose_prefix(root: Path, files: Sequence[str]) -> list[str]:
-    args = ["docker", "compose"]
+    args = ["docker", "compose", "-p", COMPOSE_PROJECT_NAME]
     for filename in files:
         args += ["-f", filename]
     return args
@@ -429,6 +527,10 @@ class TransactionalComposeSwitch:
         self.health_timeout = health_timeout
         self.marker = read_install_marker(self.root)
         self.old_files = update_compose_files(self.marker, self.root)
+        self.trusted_update_public_key_hex = _read_installed_key(
+            self.root / UPDATE_PUBLIC_KEY_PATH, "ElectrumX release/update")
+        self.trusted_core_policy_public_key_hex = _read_installed_key(
+            self.root / CORE_POLICY_PUBLIC_KEY_PATH, "safe-Core policy")
         self.staging: Optional[Path] = None
         self.backup: Optional[Path] = None
         self.failed: Optional[Path] = None
@@ -453,7 +555,10 @@ class TransactionalComposeSwitch:
     def prepare(self) -> None:
         if self.staging is not None:
             return
-        validate_bundle_file(self.artifact_path, self.manifest)
+        validate_bundle_file(
+            self.artifact_path, self.manifest,
+            trusted_update_public_key_hex=self.trusted_update_public_key_hex,
+            trusted_core_policy_public_key_hex=self.trusted_core_policy_public_key_hex)
         staging = Path(tempfile.mkdtemp(
             prefix=f".{self.root.name}.release-staging-", dir=self.parent))
         self.staging = staging
