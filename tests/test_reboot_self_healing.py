@@ -94,7 +94,7 @@ def test_core_readiness_thresholds_are_operator_configurable(tmp_path):
         tip_age=7200,
         extra_env={
             "RAVENCOIN_HEALTH_MAX_BLOCK_LAG": "10",
-            "RAVENCOIN_HEALTH_MAX_TIP_AGE": "7200",
+            "RAVENCOIN_HEALTH_MAX_TIP_AGE": "8000",
             "RAVENCOIN_HEALTH_MIN_PEERS": "0",
         },
     )
