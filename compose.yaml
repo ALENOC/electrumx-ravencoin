@@ -49,6 +49,12 @@ services:
     environment:
       RAVEN_RPC_USER_FILE: /run/raven-secrets/raven_rpc_user
       RAVEN_RPC_PASSWORD_FILE: /run/raven-secrets/raven_rpc_password
+      # This healthcheck is a readiness gate for ElectrumX, not merely an RPC
+      # liveness probe.  Defaults keep ElectrumX stopped/retrying until Core
+      # has peers, a fresh tip, and is within two blocks of its best headers.
+      RAVENCOIN_HEALTH_MAX_BLOCK_LAG: ${RAVENCOIN_HEALTH_MAX_BLOCK_LAG:-2}
+      RAVENCOIN_HEALTH_MAX_TIP_AGE: ${RAVENCOIN_HEALTH_MAX_TIP_AGE:-1800}
+      RAVENCOIN_HEALTH_MIN_PEERS: ${RAVENCOIN_HEALTH_MIN_PEERS:-1}
     networks:
       ravencoin-backend:
         ipv4_address: 172.29.80.10
@@ -58,7 +64,9 @@ services:
       - ravencoin-data:/var/lib/ravencoin
       - ravencoin-config:/var/lib/ravencoin-config
       - rpc-secrets:/run/raven-secrets:ro
-    restart: on-failure:5
+    # Reboot resilience: unlike on-failure:N, this survives daemon/host
+    # restarts and does not exhaust a finite retry budget after a blackout.
+    restart: unless-stopped
     stop_grace_period: 30m
     init: true
     read_only: true
@@ -117,7 +125,10 @@ services:
     volumes:
       - electrumx-data:/var/lib/electrumx/db
       - rpc-secrets:/run/raven-secrets:ro
-    restart: on-failure:5
+    # ElectrumX can legitimately exit while Core catches up after an abrupt
+    # reboot.  Retry indefinitely with Docker's backoff instead of giving up
+    # after five starts; the Core readiness gate prevents this on normal up.
+    restart: unless-stopped
     stop_grace_period: 15m
     init: true
     read_only: true
