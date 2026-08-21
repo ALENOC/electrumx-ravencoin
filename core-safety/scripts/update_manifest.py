@@ -200,8 +200,13 @@ def validate_body(body: dict) -> None:
         raise ManifestError(f"invalid channel {body['channel']!r}")
     if not isinstance(body["releaseTimestamp"], str):
         raise ManifestError("releaseTimestamp must be a string")
+    stamp = body["releaseTimestamp"]
+    # Python 3.10 fromisoformat rejects the "Z" UTC designator that every
+    # release manifest uses, so normalise it to the explicit offset first.
+    if stamp.endswith(("Z", "z")):
+        stamp = stamp[:-1] + "+00:00"
     try:
-        parsed_time = datetime.datetime.fromisoformat(body["releaseTimestamp"])
+        parsed_time = datetime.datetime.fromisoformat(stamp)
     except ValueError as exc:
         raise ManifestError("releaseTimestamp is not a valid ISO-8601 timestamp") from exc
     if parsed_time.tzinfo is None:

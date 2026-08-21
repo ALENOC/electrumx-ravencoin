@@ -100,10 +100,8 @@ def test_attestation_signature_is_domain_bound():
             bytes.fromhex(document["signature"]["value"]), undomained)
 
 
-def test_manifest_signed_by_a_foreign_key_is_rejected():
-    trusted = update_manifest.load_trusted_key(str(PUBLIC_KEY_PATH))
-    foreign_private, foreign_public = update_manifest.generate_keypair()
-    body = {
+def _sample_body():
+    return {
         "schemaVersion": update_manifest.SCHEMA_VERSION,
         "electrumxVersion": "1.13.1",
         "channel": "stable",
@@ -125,8 +123,30 @@ def test_manifest_signed_by_a_foreign_key_is_rejected():
         "installerFilename": "electrumx-ravencoin-install.py",
         "installerDigest": "sha256:" + "c" * 64,
     }
+
+
+def test_manifest_signed_by_a_foreign_key_is_rejected():
+    trusted = update_manifest.load_trusted_key(str(PUBLIC_KEY_PATH))
+    foreign_private, foreign_public = update_manifest.generate_keypair()
+    body = _sample_body()
     document = update_manifest.sign_manifest(
         body, foreign_private,
         key_id=update_manifest.key_id_for(foreign_public))
     with pytest.raises(update_manifest.ManifestError):
         update_manifest.verify_manifest(document, trusted)
+
+
+def test_release_timestamp_accepts_the_utc_designator():
+    """Manifests stamp times with "Z"; Python 3.10 needs it normalised."""
+    for stamp in ("2026-08-21T00:00:00Z", "2026-08-21T00:00:00+00:00",
+                  "2026-08-21T02:00:00+02:00"):
+        body = _sample_body()
+        body["releaseTimestamp"] = stamp
+        update_manifest.validate_body(body)
+
+
+def test_release_timestamp_without_a_timezone_is_rejected():
+    body = _sample_body()
+    body["releaseTimestamp"] = "2026-08-21T00:00:00"
+    with pytest.raises(update_manifest.ManifestError):
+        update_manifest.validate_body(body)
