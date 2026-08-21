@@ -1,20 +1,19 @@
 {
   "schemaVersion": 1,
   "profileId": "rvn-consensus-2026-08-v1",
-  "profileRevision": 1,
-  "profileSha256": "1342d079f2eef7ae0803a247d2908c4b031ee4a542b0f837210f92ba36ae27b2",
+  "profileRevision": 2,
+  "profileSha256": "8606d330e917414d75bfd0225804faa1ca3a3593f6886e0ac5347fc7444ebd40",
   "title": "Ravencoin consensus safety profile, August 2026 incident baseline",
   "createdAt": "2026-08-15",
   "description": "Behaviour a Ravencoin Core release must demonstrate before this project treats it as safe to sit behind an Electrum server. A release is certified against a profile, never against a version number: a numerically newer release proves nothing until it passes this suite.",
   "candidateSources": {
-    "note": "Allowlist of repositories a candidate may be discovered from. Being listed here grants a release the right to be TESTED, never the right to be TRUSTED. Both entries are treated identically.",
+    "note": "Only official RavenProject GitHub releases may enter certification. Discovery grants only the right to be TESTED; trust still requires a full PASS.",
     "allowed": [
-      "2miners/Ravencoin",
       "RavenProject/Ravencoin"
     ]
   },
   "identity": {
-    "note": "The certified identity key is repository plus commit. Version and tag are metadata only. Two repositories publishing the same version are two different candidates.",
+    "note": "The certified identity key is repository plus commit. Version and tag are metadata only. Only RavenProject/Ravencoin is an eligible source repository.",
     "keyFields": [
       "repository",
       "commit"

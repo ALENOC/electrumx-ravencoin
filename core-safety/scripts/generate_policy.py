@@ -28,7 +28,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 
-from candidate import CandidateState, KNOWN_UNSAFE_VERSIONS  # noqa: E402
+from candidate import (  # noqa: E402
+    ALLOWED_SOURCE_REPOSITORIES, CandidateState, KNOWN_UNSAFE_VERSIONS,
+)
 from policy import (  # noqa: E402
     PolicyError, build_policy, key_id_for, sign_policy, validate_body, verify_policy,
 )
@@ -65,6 +67,8 @@ def load_private_key(source: str) -> Ed25519PrivateKey:
 def entry_from_report(report: dict) -> dict:
     """Build one policy release entry from a certification report."""
     candidate = report["candidate"]
+    if candidate.get("repository") not in ALLOWED_SOURCE_REPOSITORIES:
+        raise PolicyError("candidate repository is not an approved Core source")
     overall = report["overall"]
     status = STATUS_FROM_REPORT.get(overall)
     if status is None:

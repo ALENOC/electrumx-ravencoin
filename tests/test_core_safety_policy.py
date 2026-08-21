@@ -38,7 +38,8 @@ def keys():
     return private_key, {key_id: public_bytes}, key_id
 
 
-def safe_entry(commit=CERTIFIED_COMMIT, repository="2miners/Ravencoin", version="4.8.0"):
+def safe_entry(commit=CERTIFIED_COMMIT, repository="RavenProject/Ravencoin",
+               version="4.8.0"):
     return {
         "repository": repository,
         "tag": f"v{version}",
@@ -64,7 +65,7 @@ def test_valid_signature_verifies(keys):
     private_key, trusted, key_id = keys
     body = policy.verify_policy(signed(private_key, key_id), trusted)
     assert body["policyVersion"] == 1
-    assert policy.lookup_release(body, "2miners/Ravencoin", CERTIFIED_COMMIT)
+    assert policy.lookup_release(body, "RavenProject/Ravencoin", CERTIFIED_COMMIT)
 
 
 def test_tampered_body_fails_verification(keys):
@@ -140,6 +141,27 @@ def test_known_safe_without_passing_certification_is_refused():
         policy.build_policy(policy_version=1, safety_profile="p", releases=[entry])
 
 
+def test_non_ravenproject_known_safe_is_refused():
+    with pytest.raises(policy.PolicyError, match="approved Core trust source"):
+        policy.build_policy(
+            policy_version=1,
+            safety_profile="p",
+            releases=[safe_entry(repository="2miners/Ravencoin")],
+        )
+
+
+def test_historical_2miners_entry_is_never_resolved_as_trusted():
+    historical = {
+        "schemaVersion": 1,
+        "policyVersion": 2,
+        "generatedAt": "2026-08-15T00:00:00+00:00",
+        "safetyProfile": "rvn-consensus-2026-08-v1",
+        "releases": [safe_entry(repository="2miners/Ravencoin")],
+    }
+    policy.validate_body(historical)
+    assert policy.lookup_release(historical, "2miners/Ravencoin", CERTIFIED_COMMIT) is None
+
+
 def test_revoked_entry_requires_a_reason():
     entry = safe_entry()
     entry["status"] = "REVOKED"
@@ -180,7 +202,7 @@ def test_replaying_a_pre_revocation_policy_is_refused(keys):
     after = signed(private_key, key_id, version=6, releases=[revoked])
 
     body = policy.verify_policy(after, trusted, minimum_policy_version=5)
-    assert policy.lookup_release(body, "2miners/Ravencoin",
+    assert policy.lookup_release(body, "RavenProject/Ravencoin",
                                  CERTIFIED_COMMIT)["status"] == "REVOKED"
     with pytest.raises(policy.PolicyError, match="rollback"):
         policy.verify_policy(before, trusted,
@@ -221,7 +243,7 @@ def test_policy_cannot_introduce_its_own_signing_root(keys):
     body = policy.build_policy(policy_version=2, safety_profile="p",
                                releases=[safe_entry()])
     body["trustedKeys"] = {policy.key_id_for(rogue_public):
-                           rogue_public.hex()}  # ignored by the verifier
+                           rogue_public.hex()}
     document = policy.sign_policy(body, rogue_private,
                                   key_id=policy.key_id_for(rogue_public))
     with pytest.raises(policy.PolicyError, match="unknown key id"):
@@ -263,10 +285,23 @@ def test_remote_policy_cannot_rehabilitate_a_baseline_refusal():
     assert merged["releases"][0]["status"] == "KNOWN_UNSAFE"
 
 
+def test_merge_drops_historical_untrusted_known_safe_entry():
+    baseline = {
+        "schemaVersion": 1,
+        "policyVersion": 1,
+        "generatedAt": "2026-08-15T00:00:00+00:00",
+        "safetyProfile": "p",
+        "releases": [safe_entry(repository="2miners/Ravencoin")],
+    }
+    remote = policy.build_policy(policy_version=2, safety_profile="p", releases=[])
+    merged = policy.merge_baseline(baseline, remote)
+    assert merged["releases"] == []
+
+
 # ------------------------------------------------------------ generation rules
-def report_for(overall):
+def report_for(overall, repository="RavenProject/Ravencoin"):
     return {
-        "candidate": {"repository": "2miners/Ravencoin", "tag": "v4.8.0",
+        "candidate": {"repository": repository, "tag": "v4.8.0",
                       "version": "4.8.0", "commit": CERTIFIED_COMMIT,
                       "published_at": "2026-08-11T08:16:45Z"},
         "profile": "rvn-consensus-2026-08-v1",
@@ -281,6 +316,13 @@ def test_passed_report_becomes_known_safe():
     entry = generate.entry_from_report(report_for("CERTIFICATION_PASSED"))
     assert entry["status"] == "KNOWN_SAFE"
     assert entry["certification"]["result"] == "PASS"
+
+
+def test_2miners_report_cannot_enter_policy_generation():
+    with pytest.raises(policy.PolicyError, match="approved Core source"):
+        generate.entry_from_report(
+            report_for("CERTIFICATION_PASSED", repository="2miners/Ravencoin")
+        )
 
 
 def test_failed_report_becomes_known_unsafe():
@@ -327,8 +369,8 @@ def test_generation_with_a_key_produces_a_verifiable_policy(tmp_path, keys):
     document = json.loads(output.read_text(encoding="utf-8"))
     body = policy.verify_policy(document, trusted)
     assert body["policyVersion"] == 1
-    assert policy.lookup_release(body, "2miners/Ravencoin", CERTIFIED_COMMIT)["status"] \
-        == "KNOWN_SAFE"
+    assert policy.lookup_release(body, "RavenProject/Ravencoin",
+                                 CERTIFIED_COMMIT)["status"] == "KNOWN_SAFE"
     assert "signing" not in json.dumps(document).lower() or True
     assert private_key.private_bytes_raw().hex() not in json.dumps(document)
 
@@ -345,7 +387,7 @@ def test_revocation_bumps_the_policy_version(tmp_path, keys):
     generate.main(["--report", str(report_path), "--profile", profile,
                    "--output", str(first), "--signing-key", str(key_path)])
     second = tmp_path / "policy2.json"
-    revocation = json.dumps({"repository": "2miners/Ravencoin",
+    revocation = json.dumps({"repository": "RavenProject/Ravencoin",
                              "commit": CERTIFIED_COMMIT,
                              "reason": "consensus regression found"})
     generate.main(["--previous-policy", str(first), "--revoke", revocation,
@@ -353,6 +395,6 @@ def test_revocation_bumps_the_policy_version(tmp_path, keys):
                    "--signing-key", str(key_path)])
     body = policy.verify_policy(json.loads(second.read_text(encoding="utf-8")), trusted)
     assert body["policyVersion"] == 2
-    entry = policy.lookup_release(body, "2miners/Ravencoin", CERTIFIED_COMMIT)
+    entry = policy.lookup_release(body, "RavenProject/Ravencoin", CERTIFIED_COMMIT)
     assert entry["status"] == "REVOKED"
     assert entry["revocationReason"] == "consensus regression found"

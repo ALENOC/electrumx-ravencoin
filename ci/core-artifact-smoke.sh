@@ -99,7 +99,7 @@ import sys
 
 manifest = {
     "schema": "rvn-core-artifact-qualification-v1",
-    "sourceRepository": "2miners/Ravencoin",
+    "sourceRepository": "RavenProject/Ravencoin",
     "sourceTag": "v4.8.0",
     "sourceCommit": sys.argv[3],
     "sourceArchiveSha256": sys.argv[4],

@@ -1,0 +1,14 @@
+{
+  "artifact_name": "raven-4.8.0-225491298-aarch64-linux-gnu.tar.gz",
+  "artifact_sha256": null,
+  "commit": "22549129888d02e0e08fcdb9f96f3c699167e774",
+  "commit_verified": true,
+  "notes": [],
+  "published_at": "2026-08-19T00:16:44Z",
+  "release_url": "https://github.com/RavenProject/Ravencoin/releases/tag/v4.8.0",
+  "repository": "RavenProject/Ravencoin",
+  "tag": "v4.8.0",
+  "tag_object": null,
+  "tag_verified": false,
+  "version": "4.8.0"
+}

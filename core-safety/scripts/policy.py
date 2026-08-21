@@ -16,7 +16,9 @@ Design rules encoded here:
 * a release can be revoked by a later policy, and revocation is sticky in the
   sense that a verifier must refuse to go backwards to a policy that predates it;
 * signing keys can be rotated by listing more than one trusted key, but a policy
-  can never introduce a new trust root by itself.
+  can never introduce a new trust root by itself;
+* only official ``RavenProject/Ravencoin`` release identities may ever resolve
+  as trusted Core releases.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ SCHEMA_VERSION = 1
 SIGNATURE_ALGORITHM = "ed25519"
 SIGNATURE_DOMAIN = b"ALENOC-RVN-CORE-POLICY-v1\x00"
 VALID_RELEASE_STATUSES = ("KNOWN_SAFE", "KNOWN_UNSAFE", "REVOKED")
+TRUSTED_RELEASE_REPOSITORIES = ("RavenProject/Ravencoin",)
 
 
 class PolicyError(ValueError):
@@ -63,6 +66,14 @@ def build_policy(*, policy_version: int, safety_profile: str, releases: Sequence
     if not safety_profile:
         raise PolicyError("a safety profile id is required")
 
+    normalized_releases = [_normalize_release(entry) for entry in releases]
+    for entry in normalized_releases:
+        if entry["status"] == "KNOWN_SAFE" and \
+                entry["repository"] not in TRUSTED_RELEASE_REPOSITORIES:
+            raise PolicyError(
+                f"repository {entry['repository']!r} is not an approved Core trust source"
+            )
+
     now = datetime.datetime.now(datetime.timezone.utc)
     generated = generated_at or now.replace(microsecond=0).isoformat()
     body = {
@@ -70,7 +81,7 @@ def build_policy(*, policy_version: int, safety_profile: str, releases: Sequence
         "policyVersion": policy_version,
         "generatedAt": generated,
         "safetyProfile": safety_profile,
-        "releases": [_normalize_release(entry) for entry in releases],
+        "releases": normalized_releases,
     }
     if valid_for_days is not None:
         expiry = (now + datetime.timedelta(days=valid_for_days)).replace(microsecond=0)
@@ -125,6 +136,9 @@ def verify_policy(document: dict, trusted_keys: dict, *,
     ``trusted_keys`` maps key id to raw 32-byte Ed25519 public key material.
     More than one entry is how key rotation works: an old and a new key are both
     accepted during the overlap, and a policy can never add a key to this map.
+    Historical policies may still verify cryptographically even if they contain
+    an identity from a repository that is no longer trusted; ``lookup_release``
+    enforces the current repository trust root.
     """
     if not isinstance(document, dict):
         raise PolicyError("policy document must be an object")
@@ -136,6 +150,10 @@ def verify_policy(document: dict, trusted_keys: dict, *,
     if signature.get("algorithm") != SIGNATURE_ALGORITHM:
         raise PolicyError(f"unsupported signature algorithm {signature.get('algorithm')!r}")
     key_id = signature.get("keyId")
+    # A malformed type (list, dict, null, oversized string) must be a clean
+    # verification failure, never an uncaught TypeError (GLM53-RVN-020).
+    if not isinstance(key_id, str) or len(key_id) > 128:
+        raise PolicyError(f"malformed signature key id {key_id!r}")
     if key_id not in trusted_keys:
         raise PolicyError(f"policy signed by unknown key id {key_id!r}")
     try:
@@ -144,9 +162,13 @@ def verify_policy(document: dict, trusted_keys: dict, *,
         raise PolicyError("signature is not valid base64") from exc
 
     public_key = Ed25519PublicKey.from_public_bytes(trusted_keys[key_id])
+    if len(raw_signature) != 64:
+        raise PolicyError("Ed25519 signature must be exactly 64 bytes")
     try:
         public_key.verify(raw_signature, canonical_bytes(body))
-    except InvalidSignature as exc:
+    except (InvalidSignature, ValueError) as exc:
+        # Some cryptography releases raise ValueError for malformed-length
+        # Ed25519 signatures; both must fail closed as PolicyError.
         raise PolicyError("policy signature does not verify") from exc
 
     validate_body(body)
@@ -202,7 +224,9 @@ def validate_body(body: dict) -> None:
 
 
 def lookup_release(body: dict, repository: str, commit: str) -> Optional[dict]:
-    """Find a release by its identity.  Never matches on version alone."""
+    """Find a trusted release by its identity. Never matches on version alone."""
+    if repository not in TRUSTED_RELEASE_REPOSITORIES:
+        return None
     for entry in body.get("releases", []):
         if entry["repository"] == repository and entry["commit"] == commit:
             return entry
@@ -214,7 +238,9 @@ def merge_baseline(baseline_body: dict, remote_body: dict) -> dict:
 
     The remote policy may add releases and may restrict or revoke anything,
     including a baseline entry.  It may never relax a baseline restriction: a
-    release the baseline calls unsafe or revoked stays that way.
+    release the baseline calls unsafe or revoked stays that way. A historical
+    KNOWN_SAFE entry from a repository outside the current trust root is omitted
+    from the effective merged policy.
     """
     validate_body(baseline_body)
     validate_body(remote_body)
@@ -229,8 +255,13 @@ def merge_baseline(baseline_body: dict, remote_body: dict) -> dict:
             # baseline already refuses.
             continue
         merged[key] = dict(entry)
+    effective = [
+        entry for entry in merged.values()
+        if not (entry["status"] == "KNOWN_SAFE" and
+                entry["repository"] not in TRUSTED_RELEASE_REPOSITORIES)
+    ]
     body = dict(remote_body)
-    body["releases"] = sorted(merged.values(),
+    body["releases"] = sorted(effective,
                               key=lambda item: (item["repository"], item["commit"]))
     return body
 

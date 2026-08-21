@@ -39,11 +39,11 @@ def fake_session(status):
             ravencoin_backend_info_max_age=5,
             allow_unsafe_ravencoin_core=False,
             ravencoin_backend_identity=BackendIdentity.from_config(
-                repository="2miners/Ravencoin",
+                repository="RavenProject/Ravencoin",
                 tag="v4.8.0",
-                commit="b60f50e04f1fba425b28804e61be2694faaf3469",
+                commit="22549129888d02e0e08fcdb9f96f3c699167e774",
                 artifact_sha256=(
-                    "966cf8978af1f2e3f36e9733d011eb92f4116750af6f8e77c5a5ced525577c4c"
+                    "cb359b6a5b42e47068cd655231484fcc763d2f79eae5ea318b029c704a4dc020"
                 ),
                 evidence="BUILD_IDENTITY_VERIFIED",
             ),
@@ -82,11 +82,11 @@ async def test_backend_rpc_returns_sanitized_fresh_evidence():
     identity = result['backend']['identity']
     assert identity == {
         'evidence': 'BUILD_IDENTITY_VERIFIED',
-        'sourceRepository': '2miners/Ravencoin',
+        'sourceRepository': 'RavenProject/Ravencoin',
         'sourceTag': 'v4.8.0',
-        'sourceCommit': 'b60f50e04f1fba425b28804e61be2694faaf3469',
+        'sourceCommit': '22549129888d02e0e08fcdb9f96f3c699167e774',
         'artifactSha256':
-            '966cf8978af1f2e3f36e9733d011eb92f4116750af6f8e77c5a5ced525577c4c',
+            'cb359b6a5b42e47068cd655231484fcc763d2f79eae5ea318b029c704a4dc020',
     }
     assert result['compatibility']['safetyProfile'] == 'rvn-consensus-2026-08-v1'
     assert result['compatibility']['identityEvidence'] == 'BUILD_IDENTITY_VERIFIED'

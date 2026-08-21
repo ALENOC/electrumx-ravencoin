@@ -5,115 +5,141 @@ Documentation: [Home](../README.rst) · [Docs index](README.md) ·
 
 ## Pipeline
 
-The watcher observes both `2miners/Ravencoin` and `RavenProject/Ravencoin`.
-Repository names grant permission to test, never permission to trust:
+The watcher considers only official `RavenProject/Ravencoin` releases from
+GitHub. Repository membership grants permission to test, never permission to
+trust:
 
 ```text
-candidate -> exact commit -> reproducible build -> behavioural tests
-          -> PASS / FAIL / REVIEW_REQUIRED -> signed safe-Core policy
+candidate
+  -> exact repository + commit
+  -> reproducible/controlled candidate build
+  -> behavioural profile + mandatory probes
+  -> PASS / FAIL / REVIEW_REQUIRED
+  -> reviewed policy proposal
+  -> protected policy signing
 ```
 
-`BUILD_FAILED` means the candidate did not build. `CERTIFICATION_FAILED` means
-candidate behavior violated a mandatory property. `REVIEW_REQUIRED` means a
-mandatory property was inconclusive. None of these states becomes safe by
-version comparison.
+`BUILD_FAILED`, `CERTIFICATION_FAILED` and `REVIEW_REQUIRED` never become safe
+because of a semantic version number. A release is eligible only after its
+exact repository/commit identity appears as `KNOWN_SAFE` in a valid signed
+policy.
 
-## Certified baseline
+## Current v4.8.0 identity
 
-The current release certification has 12 mandatory release tests: 12 PASS, no
-FAIL, no REVIEW_REQUIRED and no mandatory skips. The exact report and signed
-policy are under `core-safety/production/`. Profile revision 1 has digest
-`1342d079f2eef7ae0803a247d2908c4b031ee4a542b0f837210f92ba36ae27b2`.
+The current integration branch pins the official RavenProject v4.8.0 tag
+target:
 
-Policy v1 is retained as historical evidence. Policy v2 includes the immutable
-profile metadata. The detached signature and public key are published beside
-the current policy; private signing keys remain outside Git.
+```text
+repository: RavenProject/Ravencoin
+version:    4.8.0
+tag:        v4.8.0
+commit:     22549129888d02e0e08fcdb9f96f3c699167e774
+```
 
-## Release versus live validation
+The exact candidate has persisted certification evidence under
+`core-safety/production/certifications/` and the reviewed policy candidate
+`safe-core-policy-v3.unsigned.json` records it as `KNOWN_SAFE` with passing
+certification evidence.
 
-Release certification is bounded, deterministic and does not require a full
-mainnet sync, ElectrumX database or production wallet. Live node validation is
-separate: it checks the actual canonical chain, checkpoint presence,
-`transfer_overflow` activation, txindex, assetindex, REST, asset RPC, ElectrumX
-historical index, backend evidence and client `SAFE_CORE_VERIFIED`.
+Repository + commit is the identity key. The historical commit
+`b60f50e04f1fba425b28804e61be2694faaf3469`, although associated with the same
+incident-era v4.8.0 work and previously validated in this project, is not the
+official tag target and must not be substituted for `225491...` merely because
+the trees were observed to be equivalent.
 
-In particular, profile revision 1's release evidence must not be described as
-a complete HTTP REST test against a synchronized deployment. Whether the real
-Core REST endpoint serves blocks correctly is proved by the live-node gate.
+## Historical signed v2 versus pending v3
 
-The release PASS must not be read as a deployment PASS.
+Policy v1 and v2 are immutable historical signed evidence. The currently
+tracked `core-safety/production/safe-core-policy.json` remains signed policy
+v2 until the protected migration is complete. That v2 document contains the
+historical `2miners/Ravencoin` identity and therefore is **not** the final
+RavenProject-only production policy for the current branch.
+
+The reviewed `safe-core-policy-v3.unsigned.json` candidate performs one atomic
+transition:
+
+- `2miners/Ravencoin@b60f50...` -> `REVOKED`;
+- `RavenProject/Ravencoin@225491...` -> `KNOWN_SAFE`.
+
+The unsigned file is review material, not a trust anchor. It must not be copied
+over `safe-core-policy.json`, relabelled as signed or accepted by production.
+The dedicated `.github/workflows/ravenproject-trust-migration.yml` workflow
+first regenerates the migration from the signed v2 baseline plus the persisted
+RavenProject certification report and compares that result with the reviewed
+candidate. Only after that gate passes does the protected
+`core-safety-signing` environment expose `POLICY_SIGNING_KEY`. The workflow then
+signs v3, verifies the signature again with the published public key, and
+publishes the resulting signed artifacts to the migration branch.
+
+This preserves both audit history and the RavenProject-only trust boundary.
+
+## What the certification profile proves
+
+Release certification is bounded and deterministic. It records:
+
+- exact source identity and tag resolution;
+- profile revision and digest;
+- build/candidate evidence;
+- mandatory consensus/security probes;
+- positive and negative controls;
+- per-test outcomes;
+- a certification report digest bound into policy/release metadata.
+
+A missing mandatory probe, unavailable required candidate path or inconclusive
+result is never upgraded to PASS.
+
+The profile is not a substitute for a synchronized production node. Mainnet
+sync, live REST/index behavior, ElectrumX indexing, live backend evidence and
+operator networking belong to separate deployment gates.
 
 ## Architecture artifact qualification
 
-Between release certification and live deployment sits a third, distinct
-check: whether the certified source actually builds and starts correctly on a
-given CPU architecture. This is artifact qualification, and it is neither the
-release certification above nor the live-node validation in [Validation
-status](validation-status.md#live-deployment).
+Artifact qualification sits between source certification and live deployment.
+It checks whether the exact pinned source/artifact can build and start on a
+supported architecture and runs the architecture-appropriate startup/RPC/REST/
+txindex/restart checks.
 
-Artifact qualification builds the certified commit for the target
-architecture (from the published release binary on amd64, compiled from the
-certified source archive on ARM64), then runs it in an isolated,
-wallet-disabled regtest container to check startup, RPC, real REST
-(`/rest/block/<hash>.bin`), txindex, graceful shutdown and container restart.
-Because the qualification environment has no wallet, it cannot legitimately
-exercise asset RPC or asset-index behavior; those checks are recorded as
-`LIVE-ONLY` rather than `PASS`, and are only proven later against the
-synchronized mainnet deployment. Current per-architecture results are in
-[Validation status](validation-status.md#architecture-artifact-qualification).
+On amd64 the deployment can use the pinned official release artifact. On ARM64
+the Docker build compiles the exact pinned RavenProject source because an
+identical prebuilt artifact is not assumed. ARM64 build/startup evidence is not
+the same claim as full incident-specific consensus qualification unless those
+mandatory probes were actually run on that artifact.
 
-Artifact qualification does not modify, extend or replace release
-certification. Profile revision 1's evidence and digest above are unaffected
-by which architectures have since been artifact-qualified.
+See [Validation status](validation-status.md) for the evidence that applies to
+the current branch and for historical hardware runs that were performed against
+an older exact commit.
 
-## How a candidate becomes known-safe
+## Independent installer enforcement
 
-The watcher polls the two permitted source repositories:
+The single-file installer does not trust a Core merely because `compose.yaml`
+names RavenProject. It independently verifies the signed safe-Core policy under
+a policy public key pinned in the bootstrap itself, separate from the ElectrumX
+release/update key.
 
-- [2miners/Ravencoin](https://github.com/2miners/Ravencoin)
-- [RavenProject/Ravencoin](https://github.com/RavenProject/Ravencoin)
+For the Core named by the release manifest, the installer requires one unique
+policy entry whose:
 
-A tag is resolved to an immutable commit before any result is recorded. The
-candidate identity is the repository, tag, version and resolved commit; a
-repository name or semantic version never grants trust. The build environment
-is isolated from the production node and uses bounded fixtures, so a full
-mainnet synchronization is not part of release certification.
+- repository is `RavenProject/Ravencoin`;
+- commit matches the manifest exactly;
+- status is `KNOWN_SAFE`;
+- version and tag match;
+- certification result is `PASS`;
+- `reportDigest` matches `certificationReportDigest` in the release manifest;
+- policy version matches `safeCorePolicyVersion` in the release manifest.
 
-The behavioural profile includes positive and negative controls for the
-consensus properties it claims to test. A positive fixture must be accepted by
-the exact candidate; a deliberately invalid or pre-fix control must be rejected.
-Missing fixtures, unavailable candidate paths and skipped mandatory tests are
-`REVIEW_REQUIRED`, not PASS. A candidate that demonstrates a mandatory unsafe
-behavior is `CERTIFICATION_FAILED`; a build that cannot complete is
-`BUILD_FAILED`.
-
-## Evidence and policy
-
-The certification report records the source identity, tag object, build
-environment, profile revision and digest, every mandatory test, fixture or
-negative control, result and report digest. Only a complete PASS can be
-proposed for a signed safe-Core policy. The signing job is separate from
-candidate building and holds the policy key only in its protected
-environment, and before signing anything it independently checks that every
-downloaded report's candidate identity was actually produced by that same
-run's discovery step, so a report or artifact cannot be substituted between
-jobs.
-
-The CI `certify` job runs the harness with no candidate binaries or probe
-target of its own, so every core-scope test currently returns `UNAVAILABLE`
-and the job cannot itself produce `CERTIFICATION_PASSED`. The current
-production certification (below) was produced by a manual local run of the
-same harness against a real candidate; the pipeline's build+probe stage that
-would let CI reach a pass on its own does not exist yet.
-
-The current certified baseline is `2miners/Ravencoin` `v4.8.0` at commit
-`b60f50e04f1fba425b28804e61be2694faaf3469`. Its 12 mandatory release tests
-passed. Exact evidence and policy artifacts are kept under
-`core-safety/production/`; do not copy private signing keys there.
+The bundled copy of the Core-policy public key must also equal the independently
+pinned bootstrap key. A release signer therefore cannot replace both a Core
+policy and its verification key inside the same bundle.
 
 ## Revocation and future releases
 
-A later policy can revoke a previously certified identity. A persistent
-anti-rollback floor prevents replaying an older signed policy after a newer
-one has been accepted. A hypothetical `4.9.0` remains unreviewed until its own
-repository and commit pass the profile and appear in a valid newer policy.
+A later signed policy can revoke a previously certified identity. Persistent
+anti-rollback state prevents an already accepted newer policy from being
+silently replaced by an older one. New RavenProject releases remain unreviewed
+until their exact commits complete the certification pipeline and appear in a
+valid newer policy.
+
+Repositories other than `RavenProject/Ravencoin` are not eligible for new
+`KNOWN_SAFE` promotion. Historical third-party identities may remain in policy
+history only in non-trusted/revoked form where needed for an auditable
+transition.

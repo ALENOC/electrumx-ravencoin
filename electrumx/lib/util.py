@@ -30,6 +30,7 @@ import array
 import inspect
 import json
 import logging
+import os
 import sys
 from collections.abc import Container, Mapping
 from ipaddress import ip_address
@@ -210,14 +211,41 @@ class LogicalFile(object):
                 size -= len(part)
         return b''.join(parts)
 
-    def write(self, start, b):
-        '''Write the bytes-like object, b, to the underlying virtual file.'''
+    def write(self, start, b, *, sync=False):
+        '''Write b to the virtual file.
+
+        If sync is true, every touched segment is fsync'd before this method
+        returns.  Newly-created segment directory entries are fsync'd too.
+        This is the durability barrier used by DB.flush_fs() before the
+        corresponding LevelDB state batch is allowed to commit.
+        '''
+        created_dirs = set()
         while b:
             size = min(len(b), self.file_size - (start % self.file_size))
+            file_num, _offset = divmod(start, self.file_size)
+            filename = self.filename_fmt.format(file_num)
+            existed = os.path.exists(filename)
             with self.open_file(start, True) as f:
                 f.write(b if size == len(b) else b[:size])
+                if sync:
+                    f.flush()
+                    os.fsync(f.fileno())
+            if sync and not existed:
+                created_dirs.add(os.path.dirname(filename) or '.')
             b = b[size:]
             start += size
+
+        # fsyncing a newly-created file does not by itself guarantee that its
+        # directory entry survives sudden power loss.  Persist those entries
+        # before the LevelDB commit can advance chain state.
+        if sync:
+            flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
+            for directory in sorted(created_dirs):
+                fd = os.open(directory, flags)
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
 
     def open_file(self, start, create):
         '''Open the virtual file and seek to start.  Return a file handle.
@@ -229,6 +257,49 @@ class LogicalFile(object):
         f = open_file(filename, create)
         f.seek(offset)
         return f
+
+    def segment_files(self):
+        '''Yield the existing on-disk segment file names in order.'''
+        file_num = 0
+        while True:
+            filename = self.filename_fmt.format(file_num)
+            if not os.path.exists(filename):
+                return
+            yield filename
+            file_num += 1
+
+    def logical_size(self):
+        '''Total byte size of the virtual file across all segments.
+
+        A sparse hole created by writing past a truncated end of file has
+        the same logical size as the data written past it, so this detects
+        truncation and unexpected growth, but not interior holes.
+        '''
+        return sum(os.path.getsize(filename) for filename in self.segment_files())
+
+    def find_zero_slot(self, slot_size):
+        '''Return the byte offset of the first all-zero run of the given
+        byte length, or None if no such run exists anywhere in the file.
+
+        Streams the segments in chunks; a zero run straddling a chunk
+        boundary is caught by carrying the tail of the previous chunk.
+        '''
+        zero_run = bytes(slot_size)
+        base = 0
+        carry = b''
+        for filename in self.segment_files():
+            with open(filename, 'rb') as handle:
+                while True:
+                    data = handle.read(1 << 22)
+                    if not data:
+                        break
+                    data = carry + data
+                    found = data.find(zero_run)
+                    if found != -1:
+                        return base + found
+                    carry = data[-(slot_size - 1):]
+                    base += len(data) - len(carry)
+        return None
 
 
 def open_file(filename, create=False):

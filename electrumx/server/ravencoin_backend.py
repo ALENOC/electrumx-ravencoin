@@ -26,9 +26,10 @@ INCIDENT_CHECKPOINT_HASH = (
 #: A profile describes required behaviour; a version number does not.
 SAFETY_PROFILE = "rvn-consensus-2026-08-v1"
 
-#: Repositories a Ravencoin Core release may legitimately come from.  Being on
-#: this list makes a release a candidate for certification, never trusted.
-KNOWN_SOURCE_REPOSITORIES = ("2miners/Ravencoin", "RavenProject/Ravencoin")
+#: Only the official RavenProject repository is an eligible Core source. Being
+#: listed here makes a release a candidate for certification, never trusted by
+#: repository name or version alone.
+KNOWN_SOURCE_REPOSITORIES = ("RavenProject/Ravencoin",)
 
 
 class IdentityEvidence:

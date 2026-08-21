@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-data_dir=/var/lib/ravencoin
-config_dir=/var/lib/ravencoin-config
+data_dir=${RAVENCOIN_DATA_DIR:-/var/lib/ravencoin}
+config_dir=${RAVENCOIN_CONFIG_DIR:-/var/lib/ravencoin-config}
 config_file="$config_dir/raven.conf"
 rpc_user_file=${RAVEN_RPC_USER_FILE:-/run/raven-secrets/raven_rpc_user}
 rpc_password_file=${RAVEN_RPC_PASSWORD_FILE:-/run/raven-secrets/raven_rpc_password}
@@ -79,6 +79,35 @@ else
         printf '%s\n' \
             'Ravencoin RPC secrets do not match the persistent configuration.' \
             'Refusing to overwrite either value automatically.' >&2
+        exit 1
+    fi
+fi
+
+# ChainStrap pending-validation gate (GLM53-RVN-004): staged raw block data
+# must never be consumed by normal startup with the default assumevalid
+# checkpoint. If the blocks marker exists, the one-shot bootstrap-reindex
+# container must have completed full validation first. The Compose dependency
+# graph enforces this ordering, but the container itself must fail closed so
+# the invariant holds for direct invocations, restarts, and overlay removal.
+chainstrap_blocks_marker="$data_dir/.chainstrap-blocks-ready.json"
+chainstrap_done_marker="$data_dir/.chainstrap-reindex-complete"
+if [ -s "$chainstrap_blocks_marker" ]; then
+    if [ -s "$chainstrap_done_marker" ]; then
+        set -- $(sha256sum "$chainstrap_blocks_marker")
+        blocks_hash=$1
+        done_hash=$(sed -n '1p' "$chainstrap_done_marker")
+        if [ "$blocks_hash" != "$done_hash" ]; then
+            printf '%s\n' \
+                'ChainStrap reindex-complete marker does not match the block' \
+                'bootstrap marker. Refusing normal startup: the staged block data' \
+                'has not been fully validated for this snapshot.' >&2
+            exit 1
+        fi
+    else
+        printf '%s\n' \
+            'ChainStrap raw block data is staged but has not completed full' \
+            'validation (-reindex -assumevalid=0). Refusing normal startup;' \
+            'run the ravencoin-bootstrap-reindex service first.' >&2
         exit 1
     fi
 fi
