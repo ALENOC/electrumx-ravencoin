@@ -100,6 +100,11 @@ CONTROLLER_SCRIPT = f"{MONITOR_PATH}/contrib/ravencoin-bandwidth-controller.py"
 MONITOR_PORT_VERIFY = f"{MONITOR_PATH}/contrib/verify-published-port.py"
 NETWORK_CONFIG_HELPER = "core-safety/scripts/configure_monitor_admin_network.py"
 CONTROLLER_UNIT = "electrumx-ravencoin-monitor-controller.service"
+# The root systemd unit must never execute anything from the operator-owned
+# install tree.  The controller script is copied, root-owned and unwritable by
+# the installing user, into this fixed trusted location (GLM53-RVN-002).
+TRUSTED_CONTROLLER_DIR = Path("/usr/local/lib/electrumx-ravencoin")
+TRUSTED_CONTROLLER_PATH = TRUSTED_CONTROLLER_DIR / "ravencoin-bandwidth-controller.py"
 CHAINSTRAP_OVERLAY = "compose.chainstrap.yaml"
 STORAGE_OVERLAY = "compose.storage.yaml"
 BASE_COMPOSE = "compose.yaml"
@@ -1383,7 +1388,11 @@ def compose_files(bootstrap: str, monitor: bool, controller: bool = False) -> li
 
 
 def _compose_prefix(files: Sequence[str]) -> list[str]:
-    result = ["docker", "compose"]
+    # The project name is pinned explicitly (GLM53-RVN-008): an exported
+    # COMPOSE_PROJECT_NAME in the operator's environment must not be able to
+    # detach the installer from the project namespace its preflights and the
+    # monitor/controller container names assume.
+    result = ["docker", "compose", "-p", COMPOSE_PROJECT_NAME]
     for filename in files:
         result += ["-f", filename]
     return result
@@ -1430,7 +1439,6 @@ def controller_unit_body(root: Path) -> str:
         raise InstallError(
             "advanced controller requires an install path containing only letters, "
             "digits, '.', '_', '/', or '-' to keep the root systemd unit unambiguous")
-    script = root / CONTROLLER_SCRIPT
     return "\n".join((
         "[Unit]",
         "Description=Ravencoin Node Monitor host controller",
@@ -1441,7 +1449,10 @@ def controller_unit_body(root: Path) -> str:
         "Type=simple",
         "User=root",
         "Group=root",
-        f"ExecStart=/usr/bin/python3 {script}",
+        # GLM53-RVN-002: execute only the root-owned verified copy in the
+        # trusted library path, never a script inside the operator-writable
+        # install tree.
+        f"ExecStart=/usr/bin/python3 {TRUSTED_CONTROLLER_PATH}",
         "Restart=on-failure",
         "RestartSec=3",
         "Environment=BANDWIDTH_SOCKET_PATH=/run/ravencoin-bandwidth/control.sock",
@@ -1471,8 +1482,60 @@ def controller_unit_body(root: Path) -> str:
     ))
 
 
+def install_trusted_controller(source: Path) -> None:
+    """Copy the bundle-verified controller to a root-owned trusted path.
+
+    The copy is written to a root-owned staging name inside a root-owned
+    directory and then renamed, so there is no user-writable intermediate
+    state, and the installing user can never modify what the root unit
+    executes (GLM53-RVN-002).
+    """
+    controller_prerequisites(require_sudo=True)
+    if not source.is_file():
+        raise InstallError(
+            f"bundle did not contain the monitor controller script at {source}")
+    prefix = _sudo_prefix()
+    staged = TRUSTED_CONTROLLER_PATH.with_name(TRUSTED_CONTROLLER_PATH.name + ".new")
+    run_checked(prefix + ["mkdir", "-p", "-o", "root", "-g", "root", "-m", "0755",
+                          str(TRUSTED_CONTROLLER_DIR)])
+    run_checked(prefix + ["install", "-o", "root", "-g", "root", "-m", "0755",
+                          str(source), str(staged)])
+    # Same-filesystem rename under a root-owned 0755 directory: atomic, and
+    # the destination is never absent-then-user-controlled.
+    run_checked(prefix + ["mv", "-fT", str(staged), str(TRUSTED_CONTROLLER_PATH)])
+    verify_trusted_controller()
+
+
+def verify_trusted_controller() -> None:
+    """Fail unless the trusted controller copy is root-owned and not
+    writable by group or other (or by the invoking user)."""
+    try:
+        stat_result = TRUSTED_CONTROLLER_PATH.stat()
+    except OSError as exc:
+        raise InstallError(
+            f"trusted controller {TRUSTED_CONTROLLER_PATH} is not installed: {exc}")
+    if stat_result.st_uid != 0 or stat_result.st_gid != 0:
+        raise InstallError(
+            f"trusted controller {TRUSTED_CONTROLLER_PATH} must be owned by "
+            f"root:root, found uid={stat_result.st_uid} gid={stat_result.st_gid}")
+    if stat_result.st_mode & 0o022:
+        raise InstallError(
+            f"trusted controller {TRUSTED_CONTROLLER_PATH} must not be group- or "
+            f"world-writable (mode {stat_result.st_mode & 0o777:o})")
+    if os.geteuid() != 0:
+        # The invoking user must not be able to replace the file: the
+        # containing directory must be root-owned and not user-writable.
+        dir_stat = TRUSTED_CONTROLLER_DIR.stat()
+        if dir_stat.st_uid != 0 or dir_stat.st_mode & 0o022:
+            raise InstallError(
+                f"trusted controller directory {TRUSTED_CONTROLLER_DIR} must be "
+                "root-owned and not group- or world-writable")
+
+
 def install_controller(root: Path) -> None:
     controller_prerequisites(require_sudo=True)
+    install_trusted_controller(root / CONTROLLER_SCRIPT)
+    verify_trusted_controller()
     unit = controller_unit_body(root)
     with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", prefix="electrumx-controller-",
@@ -1495,6 +1558,10 @@ def uninstall_controller_best_effort() -> None:
         subprocess.run(prefix + ["systemctl", "disable", "--now", CONTROLLER_UNIT],
                        check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(prefix + ["rm", "-f", f"/etc/systemd/system/{CONTROLLER_UNIT}"],
+                       check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(prefix + ["rm", "-f", str(TRUSTED_CONTROLLER_PATH)],
+                       check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(prefix + ["rmdir", str(TRUSTED_CONTROLLER_DIR)],
                        check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(prefix + ["systemctl", "daemon-reload"], check=False,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
