@@ -297,6 +297,10 @@ def verify_manifest(document: dict, trusted_keys: dict) -> dict:
     if signature.get("algorithm") != SIGNATURE_ALGORITHM:
         raise ManifestError(f"unsupported signature algorithm {signature.get('algorithm')!r}")
     key_id = signature.get("keyId")
+    # A malformed type (list, dict, null, oversized string) must be a clean
+    # verification failure, never an uncaught TypeError (GLM53-RVN-020).
+    if not isinstance(key_id, str) or len(key_id) > 128:
+        raise ManifestError(f"malformed signature key id {key_id!r}")
     if key_id not in trusted_keys:
         raise ManifestError(f"manifest signed by unknown key id {key_id!r}")
     public_bytes = trusted_keys[key_id]

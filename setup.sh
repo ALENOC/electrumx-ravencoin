@@ -48,9 +48,12 @@ set_env_value() {
     setting_value=$2
     if grep -q "^${setting_key}=" .env; then
         sed_script="s|^${setting_key}=.*|${setting_key}=${setting_value}|"
-        temporary_env=".env.new.$$"
-        sed "$sed_script" .env > "$temporary_env"
+        # Unpredictable private temporary (GLM53-RVN-014): a predictable
+        # .env.new.$$ name lets a local attacker pre-plant a symlink that the
+        # redirect follows into an arbitrary file.
+        temporary_env=$(mktemp .env.new.XXXXXXXXXX)
         chmod 600 "$temporary_env"
+        sed "$sed_script" .env > "$temporary_env"
         mv "$temporary_env" .env
     else
         printf '%s=%s\n' "$setting_key" "$setting_value" >> .env

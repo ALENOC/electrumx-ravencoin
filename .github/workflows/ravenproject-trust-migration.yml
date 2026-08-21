@@ -96,6 +96,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
+          # Credentials are not persisted for the signing steps below; the
+          # push step provides its own token explicitly at push time.
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
@@ -214,6 +217,8 @@ jobs:
 
       - name: Publish signed migration
         id: publish
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git fetch origin security/ravenproject-only-core-source
@@ -222,6 +227,10 @@ jobs:
             echo "migration branch moved during signing; refusing publication" >&2
             exit 1
           }
+          # The checkout persists no credentials (see above); supply the
+          # token only to this push, only now.
+          git remote set-url origin \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git rm .github/workflows/ravenproject-trust-migration.yml
