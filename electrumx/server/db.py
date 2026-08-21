@@ -336,6 +336,7 @@ class DB:
         
         self.tx_counts = None
         self.fs_metadata_issue = None
+        self.fs_zero_slot_offset = None
         
         self.asset_db: Storage = None
         self.suid_db: Storage = None
@@ -427,6 +428,35 @@ class DB:
         if any(hashes[offset:offset + 32] == bytes(32)
                for offset in range(0, len(hashes), 32)):
             self.fs_metadata_issue = f'zero transaction-hash slot detected at height {height:,d}'
+            return True
+
+        # Global extent check (GLM53-RVN-003): the hash file must cover
+        # exactly the committed tx_count over the whole history, not just the
+        # tip block.  Truncation older than the bounded recovery window, or
+        # unexpected extra bytes, must be detected here so the bounded repair
+        # can refuse rather than silently writing sparse zero holes.
+        expected_hash_bytes = self.state.tx_count * 32
+        hash_bytes = self.hashes_file.logical_size()
+        if hash_bytes < expected_hash_bytes:
+            self.fs_metadata_issue = (
+                f'transaction-hash metadata is truncated: {hash_bytes:,d} bytes '
+                f'present, {expected_hash_bytes:,d} expected for the committed '
+                f'tx_count {self.state.tx_count:,d}')
+            return True
+        if hash_bytes > expected_hash_bytes:
+            self.fs_metadata_issue = (
+                f'transaction-hash metadata has {hash_bytes - expected_hash_bytes:,d} '
+                f'unexpected bytes beyond the committed tx_count '
+                f'{self.state.tx_count:,d}')
+            return True
+        # Interior all-zero slots anywhere in history (e.g. a sparse hole left
+        # by writing past a truncated end of file) can never be valid tx hashes.
+        zero_slot = self.hashes_file.find_zero_slot(32)
+        self.fs_zero_slot_offset = zero_slot
+        if zero_slot is not None:
+            self.fs_metadata_issue = (
+                f'all-zero transaction-hash slot at byte offset {zero_slot:,d} '
+                f'below the committed tx_count')
             return True
         return False
 

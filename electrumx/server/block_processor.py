@@ -1639,7 +1639,16 @@ class BlockProcessor:
                 tx_num, = unpack_le_uint64(tx_num_packed + bytes(3))
                 fs_hash, _height = self.db.fs_tx_hash(tx_num)
                 if fs_hash != tx_hash:
-                    assert fs_hash is not None  # Should always be found
+                    if fs_hash is None:
+                        # Short read: hashes metadata has not caught up with
+                        # the UTXO table.  A reachable assert here would kill
+                        # the whole block-processing task; fail this UTXO
+                        # lookup loudly instead (GLM53-RVN-009).
+                        raise ChainError(
+                            f'UTXO {hash_to_hex_str(tx_hash)} / {tx_idx:,d} '
+                            f'references tx_num {tx_num:,d} beyond the '
+                            'transaction-hash metadata; database state is '
+                            'inconsistent, reindex required')
                     continue
 
             # Key: b'u' + address_hashX + tx_idx + tx_num
@@ -1797,6 +1806,34 @@ class BlockProcessor:
         elif base_tx_count != 0:
             raise self.db.DBError('refusing filesystem metadata repair: genesis boundary mismatch')
 
+        # Global hash-extent gate (GLM53-RVN-003): the bounded repair may only
+        # rewrite the trailing window.  If hash data is missing below the
+        # window, extends beyond the committed tx_count, or contains an
+        # all-zero slot below the window (a sparse hole from a past
+        # past-EOF write), rewriting the tail would leave a valid-looking but
+        # incorrect index, so refuse and require a full reindex.
+        hash_extent = self.db.hashes_file.logical_size()
+        if hash_extent < base_tx_count * 32:
+            raise self.db.DBError(
+                'refusing filesystem metadata repair: transaction-hash metadata '
+                'is missing below the bounded recovery window; a full reindex is '
+                'required, refusing to write sparse holes')
+        if hash_extent > state.tx_count * 32:
+            raise self.db.DBError(
+                'refusing filesystem metadata repair: transaction-hash metadata '
+                'extends beyond the committed tx_count; a full reindex is required')
+        zero_offset = self.db.fs_zero_slot_offset
+        if zero_offset is not None and zero_offset < base_tx_count * 32:
+            raise self.db.DBError(
+                'refusing filesystem metadata repair: all-zero transaction-hash '
+                'slot below the bounded recovery window; a full reindex is required')
+        if base_tx_count > 0:
+            boundary = self.db.hashes_file.read((base_tx_count - 1) * 32, 32)
+            if len(boundary) != 32 or boundary == bytes(32):
+                raise self.db.DBError(
+                    'refusing filesystem metadata repair: transaction-hash slot '
+                    'at the recovery boundary is missing or zero')
+
         cumulative = []
         running = base_tx_count
         for block_tx_count in txs_per_block:
@@ -1815,6 +1852,10 @@ class BlockProcessor:
         self.db.headers_file.write(self.db.header_offset(start), headers_blob, sync=True)
         self.db.tx_counts_file.write(start * 8, counts_blob, sync=True)
         self.db.hashes_file.write(base_tx_count * 32, hashes_blob, sync=True)
+        if self.db.hashes_file.logical_size() != state.tx_count * 32:
+            raise self.db.DBError(
+                'filesystem metadata repair left the transaction-hash extent '
+                'inconsistent; refusing to continue on this database')
 
         await self.db._read_tx_counts(force=True, strict=True)
         self.db.fs_height = state.height

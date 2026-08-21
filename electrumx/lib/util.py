@@ -258,6 +258,49 @@ class LogicalFile(object):
         f.seek(offset)
         return f
 
+    def segment_files(self):
+        '''Yield the existing on-disk segment file names in order.'''
+        file_num = 0
+        while True:
+            filename = self.filename_fmt.format(file_num)
+            if not os.path.exists(filename):
+                return
+            yield filename
+            file_num += 1
+
+    def logical_size(self):
+        '''Total byte size of the virtual file across all segments.
+
+        A sparse hole created by writing past a truncated end of file has
+        the same logical size as the data written past it, so this detects
+        truncation and unexpected growth, but not interior holes.
+        '''
+        return sum(os.path.getsize(filename) for filename in self.segment_files())
+
+    def find_zero_slot(self, slot_size):
+        '''Return the byte offset of the first all-zero run of the given
+        byte length, or None if no such run exists anywhere in the file.
+
+        Streams the segments in chunks; a zero run straddling a chunk
+        boundary is caught by carrying the tail of the previous chunk.
+        '''
+        zero_run = bytes(slot_size)
+        base = 0
+        carry = b''
+        for filename in self.segment_files():
+            with open(filename, 'rb') as handle:
+                while True:
+                    data = handle.read(1 << 22)
+                    if not data:
+                        break
+                    data = carry + data
+                    found = data.find(zero_run)
+                    if found != -1:
+                        return base + found
+                    carry = data[-(slot_size - 1):]
+                    base += len(data) - len(carry)
+        return None
+
 
 def open_file(filename, create=False):
     '''Open the file name.  Return its handle.'''
