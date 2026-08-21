@@ -46,28 +46,28 @@ def test_a_trusted_copy_is_not_user_writable_after_install(monkeypatch, tmp_path
     script = trusted / "controller.py"
     script.write_text("# controller\n")
 
-    real_stat = os.stat
+    real_stat = pathlib.Path.stat
     mode_overrides = {str(script): 0o755, str(trusted): 0o755}
 
-    def fake_stat(path, *args, **kwargs):
-        result = real_stat(path, *args, **kwargs)
-        key = str(pathlib.Path(str(path)))
-        if key in mode_overrides:
+    def fake_stat(self, *args, **kwargs):
+        result = real_stat(self, *args, **kwargs)
+        if str(self) in mode_overrides:
             return os.stat_result(
-                (mode_overrides[key], result.st_ino, result.st_dev, 0, 0, 0,
-                 result.st_size, result.st_atime, result.st_mtime,
+                (mode_overrides[str(self)], result.st_ino, result.st_dev,
+                 0, 0, 0, result.st_size, result.st_atime, result.st_mtime,
                  result.st_ctime))
         return result
 
     monkeypatch.setattr(installer, "TRUSTED_CONTROLLER_DIR", trusted)
     monkeypatch.setattr(installer, "TRUSTED_CONTROLLER_PATH", script)
-    monkeypatch.setattr(os, "stat", fake_stat)
+    # Patch Path.stat (not os.stat) so the fake applies on every Python
+    # version: 3.10's pathlib does not resolve os.stat dynamically.
+    monkeypatch.setattr(pathlib.Path, "stat", fake_stat)
     monkeypatch.setattr(installer.os, "geteuid", lambda: 1000)
     # Root-owned 0755 file in a root-owned 0755 directory: accepted.
     installer.verify_trusted_controller()
 
     # Group-writable file: refused.
-    script.chmod(0o775)
     mode_overrides[str(script)] = 0o775
     try:
         installer.verify_trusted_controller()
@@ -76,7 +76,6 @@ def test_a_trusted_copy_is_not_user_writable_after_install(monkeypatch, tmp_path
         raised = True
     assert raised, "group-writable trusted controller must be refused"
     mode_overrides[str(script)] = 0o755
-    script.chmod(0o755)
 
 
 def test_verify_rejects_non_root_owner(monkeypatch, tmp_path):
