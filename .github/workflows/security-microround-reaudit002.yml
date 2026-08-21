@@ -1,0 +1,242 @@
+name: Security micro-round REAUDIT-002
+
+on:
+  push:
+    branches:
+      - automation/security-microround-20260821
+
+permissions:
+  contents: write
+
+jobs:
+  patch-target:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact target branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          ref: work/chainstrap-ravenproject
+          fetch-depth: 0
+
+      - name: Apply fail-closed trusted-controller digest binding
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("electrumx-ravencoin-install.py")
+          text = path.read_text(encoding="utf-8")
+
+          anchor = '''def _archive_text(archive: tarfile.TarFile, name: str) -> str:
+              handle = archive.extractfile(archive.getmember(name))
+              if handle is None:
+                  raise InstallError(f"cannot read bundle member {name!r}")
+              try:
+                  return handle.read().decode("utf-8")
+              except UnicodeDecodeError as exc:
+                  raise InstallError(f"bundle member {name!r} is not UTF-8") from exc
+          '''
+          replacement = anchor + '''
+
+          def _bundle_member_sha256(data: bytes, name: str) -> str:
+              """Derive a member digest from the already signature-bound bundle bytes.
+
+              This expected digest is computed before extracted files enter the
+              operator-writable install tree, so it remains an independent reference for
+              privileged controller installation (REAUDIT-002).
+              """
+              try:
+                  with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+                      member = archive.getmember(name)
+                      normalized = _safe_member_name(member.name).as_posix()
+                      if normalized != name or not member.isfile():
+                          raise InstallError(
+                              f"bundle member {name!r} is not the expected regular file")
+                      source = archive.extractfile(member)
+                      if source is None:
+                          raise InstallError(f"cannot read bundle member {name!r}")
+                      digest = hashlib.sha256()
+                      for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                          digest.update(chunk)
+                      return digest.hexdigest()
+              except (tarfile.TarError, KeyError) as exc:
+                  raise InstallError(
+                      f"cannot derive trusted digest for bundle member {name!r}") from exc
+
+
+          def _file_sha256(path: Path) -> str:
+              digest = hashlib.sha256()
+              try:
+                  with path.open("rb") as handle:
+                      for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                          digest.update(chunk)
+              except OSError as exc:
+                  raise InstallError(f"cannot hash trusted controller copy {path}: {exc}") from exc
+              return digest.hexdigest()
+          '''
+          if text.count(anchor) != 1:
+              raise SystemExit("archive helper anchor mismatch")
+          text = text.replace(anchor, replacement, 1)
+
+          old = '''def install_trusted_controller(source: Path) -> None:
+              """Copy the bundle-verified controller to a root-owned trusted path.
+
+              The copy is written to a root-owned staging name inside a root-owned
+              directory and then renamed, so there is no user-writable intermediate
+              state, and the installing user can never modify what the root unit
+              executes (GLM53-RVN-002).
+              """
+              controller_prerequisites(require_sudo=True)
+              if not source.is_file():
+                  raise InstallError(
+                      f"bundle did not contain the monitor controller script at {source}")
+              prefix = _sudo_prefix()
+              staged = TRUSTED_CONTROLLER_PATH.with_name(TRUSTED_CONTROLLER_PATH.name + ".new")
+              run_checked(prefix + ["mkdir", "-p", "-o", "root", "-g", "root", "-m", "0755",
+                                    str(TRUSTED_CONTROLLER_DIR)])
+              run_checked(prefix + ["install", "-o", "root", "-g", "root", "-m", "0755",
+                                    str(source), str(staged)])
+              # Same-filesystem rename under a root-owned 0755 directory: atomic, and
+              # the destination is never absent-then-user-controlled.
+              run_checked(prefix + ["mv", "-fT", str(staged), str(TRUSTED_CONTROLLER_PATH)])
+              verify_trusted_controller()
+          '''
+          new = '''def install_trusted_controller(source: Path, expected_sha256: str) -> None:
+              """Install the controller only if the privileged copy matches the signed bundle.
+
+              ``expected_sha256`` is derived from the already signature-bound bundle bytes,
+              before extraction into an operator-writable tree.  The source may therefore
+              change concurrently without being able to cross into root execution: the
+              root-owned staged copy is hashed before atomic placement and the final copy is
+              checked again before systemd can be enabled (REAUDIT-002).
+              """
+              controller_prerequisites(require_sudo=True)
+              if not RAW_SHA256_RE.fullmatch(expected_sha256 or ""):
+                  raise InstallError("trusted controller expected SHA-256 is malformed")
+              if not source.is_file():
+                  raise InstallError(
+                      f"bundle did not contain the monitor controller script at {source}")
+              prefix = _sudo_prefix()
+              staged = TRUSTED_CONTROLLER_PATH.with_name(
+                  TRUSTED_CONTROLLER_PATH.name + f".new.{secrets.token_hex(8)}")
+              run_checked(prefix + ["mkdir", "-p", "-o", "root", "-g", "root", "-m", "0755",
+                                    str(TRUSTED_CONTROLLER_DIR)])
+              try:
+                  run_checked(prefix + ["install", "-o", "root", "-g", "root", "-m", "0755",
+                                        str(source), str(staged)])
+                  staged_digest = _file_sha256(staged)
+                  if staged_digest != expected_sha256:
+                      raise InstallError(
+                          "trusted controller SHA-256 mismatch after privileged copy; "
+                          "refusing root execution")
+                  # Same-filesystem rename under a root-owned 0755 directory: atomic, and
+                  # after hashing the staged object the normal user cannot modify it.
+                  run_checked(prefix + ["mv", "-fT", str(staged),
+                                        str(TRUSTED_CONTROLLER_PATH)])
+              except BaseException:
+                  subprocess.run(prefix + ["rm", "-f", str(staged)], check=False,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                  raise
+              verify_trusted_controller(expected_sha256)
+          '''
+          if text.count(old) != 1:
+              raise SystemExit("install_trusted_controller anchor mismatch")
+          text = text.replace(old, new, 1)
+
+          old = '''def verify_trusted_controller() -> None:
+              """Fail unless the trusted controller copy is root-owned and not
+              writable by group or other (or by the invoking user)."""
+          '''
+          new = '''def verify_trusted_controller(expected_sha256: Optional[str] = None) -> None:
+              """Fail unless the trusted controller has safe ownership and expected bytes."""
+          '''
+          if text.count(old) != 1:
+              raise SystemExit("verify_trusted_controller signature anchor mismatch")
+          text = text.replace(old, new, 1)
+
+          anchor = '''    if stat_result.st_mode & 0o022:
+                  raise InstallError(
+                      f"trusted controller {TRUSTED_CONTROLLER_PATH} must not be group- or "
+                      f"world-writable (mode {stat_result.st_mode & 0o777:o})")
+              if os.geteuid() != 0:
+          '''
+          replacement = '''    if stat_result.st_mode & 0o022:
+                  raise InstallError(
+                      f"trusted controller {TRUSTED_CONTROLLER_PATH} must not be group- or "
+                      f"world-writable (mode {stat_result.st_mode & 0o777:o})")
+              if expected_sha256 is not None:
+                  if not RAW_SHA256_RE.fullmatch(expected_sha256 or ""):
+                      raise InstallError("trusted controller expected SHA-256 is malformed")
+                  if _file_sha256(TRUSTED_CONTROLLER_PATH) != expected_sha256:
+                      raise InstallError(
+                          "installed trusted controller SHA-256 does not match signed bundle")
+              if os.geteuid() != 0:
+          '''
+          if text.count(anchor) != 1:
+              raise SystemExit("trusted controller mode anchor mismatch")
+          text = text.replace(anchor, replacement, 1)
+
+          old = '''def install_controller(root: Path) -> None:
+              controller_prerequisites(require_sudo=True)
+              install_trusted_controller(root / CONTROLLER_SCRIPT)
+              verify_trusted_controller()
+          '''
+          new = '''def install_controller(root: Path, expected_sha256: str) -> None:
+              controller_prerequisites(require_sudo=True)
+              install_trusted_controller(root / CONTROLLER_SCRIPT, expected_sha256)
+              verify_trusted_controller(expected_sha256)
+          '''
+          if text.count(old) != 1:
+              raise SystemExit("install_controller anchor mismatch")
+          text = text.replace(old, new, 1)
+
+          anchor = '''    if controller:
+                  controller_prerequisites(require_sudo=True)
+                  controller_unit_body(target)
+
+              # compose.yaml intentionally has a fixed project name because monitor and
+          '''
+          replacement = '''    if controller:
+                  controller_prerequisites(require_sudo=True)
+                  controller_unit_body(target)
+              # Derive the expected controller digest from the immutable, signed bundle
+              # bytes before anything is extracted into the operator-writable tree.
+              trusted_controller_sha256 = (
+                  _bundle_member_sha256(data, CONTROLLER_SCRIPT) if controller else None)
+
+              # compose.yaml intentionally has a fixed project name because monitor and
+          '''
+          if text.count(anchor) != 1:
+              raise SystemExit("install_fresh preflight anchor mismatch")
+          text = text.replace(anchor, replacement, 1)
+
+          old = '''        if controller:
+                      install_controller(target)
+                      controller_installed = True
+          '''
+          new = '''        if controller:
+                      if trusted_controller_sha256 is None:
+                          raise InstallError("trusted controller digest was not established")
+                      install_controller(target, trusted_controller_sha256)
+                      controller_installed = True
+          '''
+          if text.count(old) != 1:
+              raise SystemExit("install_fresh controller call anchor mismatch")
+          text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          python -m py_compile electrumx-ravencoin-install.py
+          git diff --check
+          git diff -- electrumx-ravencoin-install.py
+
+      - name: Commit exact target patch
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "work/chainstrap-ravenproject"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add electrumx-ravencoin-install.py
+          git commit -m 'fix(installer): bind root controller to signed bundle digest'
+          git push origin HEAD:work/chainstrap-ravenproject
