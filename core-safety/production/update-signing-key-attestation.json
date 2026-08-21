@@ -1,0 +1,17 @@
+{
+  "signature": {
+    "algorithm": "ed25519",
+    "keyId": "288e85d43f792f83",
+    "value": "ce5d46b65ec773a5596ac789e66c4a721480b851cf7adda11524bb8565a5aeeec0950f67838c9f295eb35485370978c5b5e0af5b40279fd434269cce1e3f790e"
+  },
+  "statement": {
+    "ceremonyDate": "2026-08-21",
+    "domain": "ALENOC-RVN-ELECTRUMX-UPDATE-MANIFEST-v1",
+    "keyId": "288e85d43f792f83",
+    "operator": "ALENOC",
+    "publicKey": "4dbeb6131495015b1c44d2d61f80d527217623e1b12dee8f34664509ee3d2b35",
+    "purpose": "ElectrumX release/update manifest signing trust root",
+    "secretEnvironment": "electrumx-release-signing",
+    "secretName": "ELECTRUMX_UPDATE_SIGNING_KEY"
+  }
+}
