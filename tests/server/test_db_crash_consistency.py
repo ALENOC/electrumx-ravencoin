@@ -10,15 +10,20 @@ from electrumx.server.db import DB
 
 
 class RecordingFile:
-    def __init__(self, reads=None):
+    def __init__(self, reads=None, extent=0):
         self.reads = reads or {}
         self.writes = []
+        self._extent = extent
 
     def read(self, start, size=-1):
         return self.reads.get((start, size), b"")
 
     def write(self, start, data, *, sync=False):
         self.writes.append((start, data, sync))
+        self._extent = max(self._extent, start + len(data))
+
+    def logical_size(self):
+        return self._extent
 
 
 @pytest.mark.asyncio
@@ -121,6 +126,7 @@ async def test_bounded_startup_repair_rebuilds_torn_tail_from_daemon(monkeypatch
         tx_counts_file=RecordingFile(),
         hashes_file=RecordingFile(),
         fs_height=-1, fs_tx_count=0, fs_asset_count=0, fs_h160_count=0,
+        fs_zero_slot_offset=None,
         DBError=DB.DBError,
     )
     db.fs_metadata_needs_recovery = lambda: True
