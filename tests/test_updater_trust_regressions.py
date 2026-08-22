@@ -81,12 +81,8 @@ def test_legacy_state_migrates_with_zero_policy_floor(tmp_path):
         "schemaVersion": 1,
         "currentRelease": {"electrumxVersion": "1.13.0"},
     }), encoding="utf-8")
-    state = load_state(str(path))
-    assert state.minimum_core_policy_version == 0
-    save_state(str(path), state)
-    persisted = json.loads(path.read_text(encoding="utf-8"))
-    assert persisted["schemaVersion"] == 2
-    assert persisted["minimumCorePolicyVersion"] == 0
+    with pytest.raises(ValueError, match="manual 1.13.1 -> 1.13.2 trust transition"):
+        load_state(str(path))
 
 
 def test_schema_v2_missing_policy_floor_fails_closed(tmp_path):
