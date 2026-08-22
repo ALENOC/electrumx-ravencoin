@@ -5,24 +5,23 @@
 """One-time, explicit adoption path for legacy setup.sh 1.13.1 installs.
 
 The 1.13.2 transactional updater normally requires the installer marker and
-bind-backed storage introduced by the new installer.  Historical 1.13.1
-``setup.sh`` deployments predate both.  This wrapper discovers and proves that
+bind-backed storage introduced by the new installer. Historical 1.13.1
+``setup.sh`` deployments predate both. This wrapper discovers and proves that
 specific legacy shape while the old node is still serving, requires explicit
 operator consent, writes a narrow schema-v1 adoption marker atomically, and
 then runs the normal v2 updater with process-local storage proof functions that
 preserve the existing Docker named volumes verbatim.
 
 Nothing here converts a Docker volume to a bind mount, derives an API from
-Docker's private data-root, removes a volume, or runs ChainStrap.  The wrapper
+Docker's private data-root, removes a volume, or runs ChainStrap. The wrapper
 accepts only ElectrumX-RVN 1.13.1 / Ravencoin Core 4.8.0 and the fixed Compose
-project namespace.  Any ambiguity is refused before the old services stop.
+project namespace. Any ambiguity is refused before the old services stop.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -125,7 +124,7 @@ def _rendered_named_model(root: Path) -> dict:
     volumes = model.get("volumes")
     if not isinstance(volumes, dict):
         raise LegacyAdoptionError("legacy Compose model has no volumes object")
-    for logical in LEGACY_DATA_MOUNTS["ravencoin-core"] | LEGACY_DATA_MOUNTS["electrumx"]:
+    for logical in set(LEGACY_DATA_MOUNTS["ravencoin-core"]) | set(LEGACY_DATA_MOUNTS["electrumx"]):
         definition = volumes.get(logical)
         if definition is None:
             raise LegacyAdoptionError(f"legacy Compose model lost volume {logical}")
@@ -147,7 +146,6 @@ def discover_legacy_install(root: Path) -> dict:
     compose = root / runtime.BASE_COMPOSE
     if compose.is_symlink() or not compose.is_file():
         raise LegacyAdoptionError("legacy install root lacks a safe compose.yaml")
-    # A legacy setup.sh deployment did not activate the bind-storage overlay.
     _rendered_named_model(root)
 
     core_id = _container_id(root, "ravencoin-core")
@@ -282,8 +280,7 @@ def install_runtime_compatibility_hooks() -> None:
         return original_running(root, files, marker)
 
     def candidate(root: Path, files: Sequence[str], expected):
-        marker = runtime.read_install_marker(root)
-        if marker.get("storageMode") == LEGACY_STORAGE_MODE:
+        if expected and all(isinstance(value, str) for value in expected.values()):
             return _prove_candidate_named_storage(root, files, expected)
         return original_candidate(root, files, expected)
 
