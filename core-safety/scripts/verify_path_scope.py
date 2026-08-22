@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Fail-closed protected-path gate for high-trust repository surfaces.
+"""Fail-closed protected-path gate for immutable repository trust surfaces.
 
-The gate is intentionally independent from GitHub's changed-files API. It reads
-Git's raw diff so file modes, deletions, and rename-as-delete/add behavior are
-visible. The only bootstrap exception is the single introducing range rooted at
+The gate reads Git's raw diff so file modes, deletions, and rename-as-delete/add
+behavior remain visible. There is no approval path or feature-PR bypass. The
+only bootstrap exception is the original single introducing range rooted at
 the audited pre-gate commit below.
 """
 
@@ -22,6 +22,7 @@ BOOTSTRAP_ALLOWED_PATHS = frozenset((WORKFLOW_PATH, SCRIPT_PATH, TEST_PATH))
 
 PROTECTED_EXACT_PATHS = frozenset((
     WORKFLOW_PATH,
+    SCRIPT_PATH,
     "docker/core/Dockerfile",
     "core-safety/production/update-signing-public-key.hex",
     "core-safety/production/core-policy-signing-public-key.hex",
@@ -31,7 +32,7 @@ GATEWAY_SYMBOLS = ("DEFAULT_GATEWAYS", "ALLOWED_GATEWAY_HOSTS")
 
 
 class ScopeViolation(RuntimeError):
-    """A proposed diff crosses a protected repository boundary."""
+    """A proposed diff crosses an immutable repository trust boundary."""
 
 
 @dataclass(frozen=True)
@@ -48,8 +49,7 @@ def git_bytes(*args: str) -> bytes:
     if completed.returncode != 0:
         raise ScopeViolation(
             f"git {' '.join(args)} failed: "
-            f"{completed.stderr.decode('utf-8', errors='replace').strip()}"
-        )
+            f"{completed.stderr.decode('utf-8', errors='replace').strip()}")
     return completed.stdout
 
 
@@ -141,7 +141,7 @@ def verify(base: str, head: str) -> None:
                 f"file mode change is forbidden: {change.path} "
                 f"({change.old_mode} -> {change.new_mode})")
         if change.path in PROTECTED_EXACT_PATHS:
-            if bootstrap and change.path == WORKFLOW_PATH:
+            if bootstrap and change.path in BOOTSTRAP_ALLOWED_PATHS:
                 continue
             raise ScopeViolation(
                 f"protected path may not be changed by this PR: {change.path}")
@@ -150,13 +150,12 @@ def verify(base: str, head: str) -> None:
         if gateway_policy(base) != gateway_policy(head):
             raise ScopeViolation(
                 "release-embedded IPFS gateway allowlist/policy changed in "
-                f"{GATEWAY_POLICY_PATH}"
-            )
+                f"{GATEWAY_POLICY_PATH}")
 
     if bootstrap:
         print("path-scope: audited one-time introduction range accepted")
     else:
-        print("path-scope: protected repository boundaries unchanged")
+        print("path-scope: immutable repository trust boundaries unchanged")
 
 
 def parse_args() -> argparse.Namespace:
