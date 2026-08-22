@@ -5,16 +5,10 @@
 """Orchestrates ``electrumx-update apply``: the only code path allowed to
 change what is running.
 
-``check`` / ``status`` / ``show`` never call anything in this module. This
-module is entered only from an explicit operator command and refuses unless the
-pending candidate is both ELIGIBLE and VERIFIED. A consensus-changing manifest
-also requires ``--approve-consensus-change``.
-
-Production hooks stage/build before stopping the old node, atomically switch a
-same-filesystem release directory, start the new stack, run real health gates,
-and either restore the exact previous release or return a promotion decision.
-The caller durably saves the promoted UpdateState *before* invoking the optional
-``finalize_success`` hook that deletes the last-known-good directory/journal.
+A higher ``artifact_revision`` under the *same* ElectrumX version is metadata
+only: applying it advances verified release state without stopping services,
+rebuilding images, reindexing Core, or touching the running node. A version
+change retains the existing transactional switch and health-gate behavior.
 """
 
 from __future__ import annotations
@@ -38,8 +32,6 @@ class ApplyHooks:
     start_services: Callable[[], None]
     run_health_checks: Callable[[dict], HealthGateResult]
     rollback_to: Callable[[Optional[dict]], None]
-    # Deliberately not invoked inside apply_pending_candidate. The production
-    # CLI invokes it only after save_state() has durably recorded promotion.
     finalize_success: Optional[Callable[[], None]] = None
 
 
@@ -65,14 +57,21 @@ def _rollback_after_failure(state: UpdateState, hooks: ApplyHooks, *,
     return ApplyResult(HealthVerdict.ROLLBACK_TO_LAST_KNOWN_GOOD, detail)
 
 
+def _revision_only(previous: Optional[dict], manifest: dict) -> bool:
+    if not previous:
+        return False
+    if previous.get("electrumxVersion") != manifest.get("electrumxVersion"):
+        return False
+    current_revision = previous.get("artifact_revision")
+    candidate_revision = manifest.get("artifact_revision")
+    return isinstance(current_revision, int) and not isinstance(current_revision, bool) and \
+        isinstance(candidate_revision, int) and not isinstance(candidate_revision, bool) and \
+        candidate_revision > current_revision
+
+
 def apply_pending_candidate(state: UpdateState, hooks: ApplyHooks, *,
                             approve_consensus_change: bool) -> ApplyResult:
-    """Run the explicit apply transaction after discovery/trust revalidation.
-
-    The caller is responsible for re-fetching and re-verifying the signed
-    manifest and artifact immediately before entering this function. The
-    persisted verdict is still checked here as defence in depth.
-    """
+    """Run an explicit apply after immediate trust revalidation."""
     candidate = state.pending_candidate
     eligibility = candidate.get("_eligibilityVerdict") if candidate else None
     verification = candidate.get("_verificationVerdict") if candidate else None
@@ -96,12 +95,17 @@ def apply_pending_candidate(state: UpdateState, hooks: ApplyHooks, *,
 
     manifest = candidate["manifest"]
     previous = state.current_release
-    rollback_safe = manifest.get("rollbackSafe", False)
 
+    # Artifact revision is deliberately informational for a running node.
+    # The signed release identity/high-water advances, but no runtime hooks run.
+    if _revision_only(previous, manifest):
+        record_promotion(state, applied_release=manifest)
+        return ApplyResult(
+            HealthVerdict.PROMOTE_TO_CURRENT,
+            "revision-only promotion: running services, images and databases unchanged")
+
+    rollback_safe = manifest.get("rollbackSafe", False)
     try:
-        # Production ``stop_services`` performs/statically validates staging and
-        # the new image build before stopping the old node. This preserves the
-        # small, testable hook API while minimizing downtime.
         hooks.stop_services()
         hooks.switch_atomically(manifest)
         hooks.start_services()
@@ -119,10 +123,7 @@ def apply_pending_candidate(state: UpdateState, hooks: ApplyHooks, *,
             state.failure_reason or reason)
 
     health_decision = evaluate_health(health, rollback_safe=rollback_safe)
-
     if health_decision.verdict == HealthVerdict.PROMOTE_TO_CURRENT:
-        # Only in-memory state changes here. The CLI must fsync this state before
-        # calling hooks.finalize_success / TransactionalComposeSwitch.finalize_success.
         record_promotion(state, applied_release=manifest)
         return ApplyResult(health_decision.verdict, health_decision.reason)
 
@@ -131,7 +132,5 @@ def apply_pending_candidate(state: UpdateState, hooks: ApplyHooks, *,
             state, hooks, previous=previous,
             reason=health_decision.reason or "post-update health gates failed")
 
-    # STUCK_NO_BLIND_ROLLBACK: leave the switched unhealthy state and exact
-    # backup/journal in place so an operator can choose a migration-safe action.
     record_stuck(state, reason=health_decision.reason)
     return ApplyResult(health_decision.verdict, health_decision.reason)
