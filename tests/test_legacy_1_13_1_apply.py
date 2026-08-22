@@ -1,0 +1,130 @@
+# Copyright (c) 2026, the ElectrumX-RVN community maintainers
+# The MIT License (MIT). See LICENCE for details.
+
+from __future__ import annotations
+
+import importlib.util
+import pathlib
+import subprocess
+import sys
+
+import pytest
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "core-safety" / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+
+SPEC = importlib.util.spec_from_file_location(
+    "legacy_1_13_1_apply", SCRIPTS / "legacy_1_13_1_apply.py")
+legacy = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(legacy)
+
+
+def _cp(stdout="", stderr="", returncode=0):
+    return subprocess.CompletedProcess([], returncode, stdout, stderr)
+
+
+def test_legacy_compose_selection_preserves_named_volumes_without_storage_overlay():
+    marker = {
+        "schemaVersion": 1,
+        "bootstrapChoice": "p2p",
+        "nodeMonitorEnabled": False,
+        "monitorControllerEnabled": False,
+        "storageMode": legacy.LEGACY_STORAGE_MODE,
+    }
+    assert legacy._legacy_compose_files(marker) == [legacy.runtime.BASE_COMPOSE]
+    assert legacy.runtime.STORAGE_OVERLAY not in legacy._legacy_compose_files(marker)
+
+
+def test_legacy_compose_selection_refuses_implicit_in_project_monitor():
+    marker = {
+        "storageMode": legacy.LEGACY_STORAGE_MODE,
+        "nodeMonitorEnabled": True,
+        "monitorControllerEnabled": False,
+    }
+    with pytest.raises(legacy.LegacyAdoptionError, match="cannot absorb"):
+        legacy._legacy_compose_files(marker)
+
+
+def test_named_volume_identity_is_project_bound(monkeypatch):
+    inspected = []
+    monkeypatch.setattr(legacy, "_inspect_named_volume", lambda name: inspected.append(name) or {})
+    expected = legacy._expected_data_volumes()
+    legacy._prove_named_volume_objects(expected)
+    assert inspected == list(expected.values())
+
+    changed = dict(expected)
+    changed["electrumx-data"] = "other-project_electrumx-data"
+    with pytest.raises(legacy.LegacyAdoptionError, match="identity changed"):
+        legacy._prove_named_volume_objects(changed)
+
+
+def test_candidate_proof_never_requires_bind_host_dirs(monkeypatch, tmp_path):
+    expected = legacy._expected_data_volumes()
+    monkeypatch.setattr(legacy, "_rendered_named_model", lambda root: {})
+    monkeypatch.setattr(legacy, "_prove_named_volume_objects", lambda value: None)
+    legacy._prove_candidate_named_storage(tmp_path, [legacy.runtime.BASE_COMPOSE], expected)
+
+
+def test_candidate_proof_refuses_storage_overlay(monkeypatch, tmp_path):
+    monkeypatch.setattr(legacy, "_rendered_named_model", lambda root: {})
+    with pytest.raises(legacy.LegacyAdoptionError, match="storage overlay"):
+        legacy._prove_candidate_named_storage(
+            tmp_path,
+            [legacy.runtime.BASE_COMPOSE, legacy.runtime.STORAGE_OVERLAY],
+            legacy._expected_data_volumes(),
+        )
+
+
+def test_adoption_marker_is_atomic_private_and_disables_chainstrap(tmp_path):
+    legacy._write_adoption_marker(tmp_path)
+    marker_path = tmp_path / legacy.runtime.INSTALL_MARKER
+    marker = legacy.runtime.read_install_marker(tmp_path)
+    assert marker["bootstrapChoice"] == "p2p"
+    assert marker["nodeMonitorEnabled"] is False
+    assert marker["storageMode"] == legacy.LEGACY_STORAGE_MODE
+    assert marker["legacyAdoption"]["chainstrapRerunAllowed"] is False
+    assert marker_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_discovery_rejects_wrong_electrumx_version(monkeypatch, tmp_path):
+    (tmp_path / legacy.runtime.BASE_COMPOSE).write_text("services: {}\n", encoding="utf-8")
+    monkeypatch.setattr(legacy, "_rendered_named_model", lambda root: {})
+    monkeypatch.setattr(legacy, "_container_id", lambda root, service: service + "-id")
+
+    def fake_compose(root, *args):
+        if "electrumx_rpc" in args:
+            return _cp('{"version":"ElectrumX-RVN 1.13.0","db height":1}')
+        return _cp("Raven Core Daemon version v4.8.0\n")
+
+    monkeypatch.setattr(legacy, "_compose", fake_compose)
+    with pytest.raises(legacy.LegacyAdoptionError, match="supports only ElectrumX-RVN 1.13.1"):
+        legacy.discover_legacy_install(tmp_path)
+
+
+def test_discovery_refuses_bind_backed_volume(monkeypatch):
+    monkeypatch.setattr(legacy.subprocess, "run", lambda *a, **k: _cp(
+        '[{"Driver":"local","Options":{"type":"none","o":"bind","device":"/srv/data"}}]'))
+    with pytest.raises(legacy.LegacyAdoptionError, match="plain local named volume"):
+        legacy._inspect_named_volume("electrumx-ravencoin_ravencoin-data")
+
+
+def test_noninteractive_adoption_defaults_to_refusal(monkeypatch):
+    monkeypatch.setattr(legacy.sys.stdin, "isatty", lambda: False)
+    with pytest.raises(legacy.LegacyAdoptionError, match="requires a TTY"):
+        legacy._confirm({
+            "root": pathlib.Path("/tmp/node"),
+            "electrumxVersion": "1.13.1",
+            "coreVersion": "4.8.0",
+            "storage": {},
+        }, assume_yes=False)
+
+
+def test_runtime_hooks_route_string_storage_identity_to_named_volume_proofs(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(legacy, "_prove_candidate_named_storage",
+                        lambda root, files, expected: calls.append((tuple(files), dict(expected))))
+    legacy.install_runtime_compatibility_hooks()
+    legacy.runtime.prove_candidate_storage_continuity(
+        tmp_path, [legacy.runtime.BASE_COMPOSE], legacy._expected_data_volumes())
+    assert calls and calls[0][0] == (legacy.runtime.BASE_COMPOSE,)
