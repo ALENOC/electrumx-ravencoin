@@ -2,19 +2,7 @@
 #
 # The MIT License (MIT).  See LICENCE for details.
 
-"""Pure decision logic for the ElectrumX node self-update system.
-
-Every function here is a pure function from (current state, candidate
-release/manifest, host facts) to a verdict enum. No network, no filesystem,
-no subprocess, no docker. Detect / verify / pre-pull are things a node may do
-unattended; install is not. That split is enforced by keeping "is this
-candidate eligible and trustworthy" (this module) completely separate from
-"perform the switch" (update_apply.py), so an automated ``electrumx-update
-check`` can only ever populate a pending candidate, never install it.
-
-The default branch of every classifier here is a refusal. A field this module
-does not recognize, or a check it cannot complete, must not silently pass.
-"""
+"""Pure decision logic for the ElectrumX node self-update system."""
 
 from __future__ import annotations
 
@@ -30,7 +18,10 @@ AUTO_UPDATE_MODES = ("off", "notify", "stable", "security")
 class EligibilityVerdict(enum.Enum):
     ELIGIBLE = "ELIGIBLE"
     IGNORED_SAME_VERSION = "IGNORED_SAME_VERSION"
+    IGNORED_SAME_ARTIFACT = "IGNORED_SAME_ARTIFACT"
     REFUSED_OLDER_VERSION = "REFUSED_OLDER_VERSION"
+    REFUSED_OLDER_REVISION = "REFUSED_OLDER_REVISION"
+    REFUSED_ARTIFACT_EQUIVOCATION = "REFUSED_ARTIFACT_EQUIVOCATION"
     REFUSED_PRERELEASE_ON_STABLE_CHANNEL = "REFUSED_PRERELEASE_ON_STABLE_CHANNEL"
     REFUSED_WRONG_CHANNEL = "REFUSED_WRONG_CHANNEL"
     REFUSED_AUTO_UPDATE_OFF = "REFUSED_AUTO_UPDATE_OFF"
@@ -69,9 +60,9 @@ class HostFacts:
     installed_updater_version: str
     current_electrumx_version: str
     current_core_commit: Optional[str] = None
-    # Current production ElectrumX DB schema. Existing pre-updater installs of
-    # this project are schema 1; new installers persist the schema explicitly.
     current_db_schema: int = 1
+    current_artifact_revision: int = 0
+    current_artifact_digest: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -115,15 +106,22 @@ class Decision:
     reason: str = ""
 
 
+def _revision_value(value, label: str) -> Optional[int]:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{label} must be a non-negative integer")
+    return value
+
+
 def evaluate_eligibility(*, auto_update_mode: str, channel: str,
                          current_version: str, candidate_version: str,
-                         candidate_is_prerelease: bool) -> Decision:
-    """Step 1-5 of the update algorithm: is this release worth even looking at.
-
-    Never treats a mutable ``latest`` tag as trust; the caller is expected to
-    have already enumerated concrete tagged GitHub Releases and to call this
-    once per candidate.
-    """
+                         candidate_is_prerelease: bool,
+                         current_revision: Optional[int] = None,
+                         candidate_revision: Optional[int] = None,
+                         current_artifact_digest: Optional[str] = None,
+                         candidate_artifact_digest: Optional[str] = None) -> Decision:
+    """Classify version+revision ordering; legacy callers retain version-only semantics."""
     if auto_update_mode not in AUTO_UPDATE_MODES:
         return Decision(EligibilityVerdict.REFUSED_AUTO_UPDATE_OFF,
                         f"unknown AUTO_UPDATE mode {auto_update_mode!r}")
@@ -135,9 +133,7 @@ def evaluate_eligibility(*, auto_update_mode: str, channel: str,
                         f"channel {channel!r} not enabled by AUTO_UPDATE={auto_update_mode}")
     if auto_update_mode == "security" and channel != "security":
         return Decision(EligibilityVerdict.REFUSED_WRONG_CHANNEL,
-                        f"AUTO_UPDATE=security only considers the security channel, "
-                        f"got {channel!r}")
-
+                        f"AUTO_UPDATE=security only considers the security channel, got {channel!r}")
     if channel == "stable" and candidate_is_prerelease:
         return Decision(EligibilityVerdict.REFUSED_PRERELEASE_ON_STABLE_CHANNEL)
 
@@ -148,11 +144,31 @@ def evaluate_eligibility(*, auto_update_mode: str, channel: str,
         return Decision(EligibilityVerdict.REFUSED_OLDER_VERSION,
                         f"unparseable version: {exc}")
 
-    if candidate == current:
-        return Decision(EligibilityVerdict.IGNORED_SAME_VERSION)
     if candidate < current:
         return Decision(EligibilityVerdict.REFUSED_OLDER_VERSION)
-    return Decision(EligibilityVerdict.ELIGIBLE)
+    if candidate > current:
+        return Decision(EligibilityVerdict.ELIGIBLE)
+
+    # Preserve the version-1 API for tests/callers that have not supplied
+    # authenticated manifest revision data yet.
+    if current_revision is None or candidate_revision is None:
+        return Decision(EligibilityVerdict.IGNORED_SAME_VERSION)
+    try:
+        old_revision = _revision_value(current_revision, "current_revision")
+        new_revision = _revision_value(candidate_revision, "candidate_revision")
+    except ValueError as exc:
+        return Decision(EligibilityVerdict.REFUSED_OLDER_REVISION, str(exc))
+
+    if new_revision < old_revision:
+        return Decision(EligibilityVerdict.REFUSED_OLDER_REVISION)
+    if new_revision > old_revision:
+        return Decision(EligibilityVerdict.ELIGIBLE)
+    if current_artifact_digest and candidate_artifact_digest and \
+            current_artifact_digest != candidate_artifact_digest:
+        return Decision(
+            EligibilityVerdict.REFUSED_ARTIFACT_EQUIVOCATION,
+            "same version/revision is bound to a different artifact digest")
+    return Decision(EligibilityVerdict.IGNORED_SAME_ARTIFACT)
 
 
 def _updater_version_compatible(host: HostFacts, manifest: dict) -> bool:
@@ -179,7 +195,6 @@ def _db_compatibility_known(host: HostFacts, manifest: dict) -> bool:
         return False
     if candidate_schema == current_schema:
         return True
-
     migration = db_compat.get("migration")
     if not isinstance(migration, dict):
         return False
@@ -187,9 +202,7 @@ def _db_compatibility_known(host: HostFacts, manifest: dict) -> bool:
     to_schema = migration.get("toSchema")
     if from_schema != current_schema or to_schema != candidate_schema:
         return False
-    if not isinstance(migration.get("reversible"), bool):
-        return False
-    return True
+    return isinstance(migration.get("reversible"), bool)
 
 
 def evaluate_verification(*, manifest: Optional[dict], signature_valid: bool,
@@ -198,20 +211,6 @@ def evaluate_verification(*, manifest: Optional[dict], signature_valid: bool,
                           github_reachable: bool = True,
                           safe_core_certification_digests: Optional[dict] = None,
                           verified_core_policy_version: Optional[int] = None) -> Decision:
-    """Steps 6-12: verify everything about a candidate before it may ever be
-    pre-pulled or presented to an operator as a real candidate.
-
-    ``safe_core_certified_commits`` is the set of Core commits this
-    installation's verified safe-Core policy currently recognizes as certified.
-    When ``safe_core_certification_digests`` is supplied, the signed ElectrumX
-    manifest must also name the exact certification report digest recorded by
-    that policy; a matching commit alone is not enough.
-
-    ``safeCorePolicyVersion`` in the release manifest is the policy version
-    that existed when the release was prepared. A node may have a newer policy,
-    but it may never accept a release that requires a policy newer than the one
-    it has actually verified.
-    """
     if not github_reachable:
         return Decision(VerificationVerdict.REFUSED_GITHUB_UNREACHABLE)
     if manifest is None:
@@ -221,19 +220,14 @@ def evaluate_verification(*, manifest: Optional[dict], signature_valid: bool,
     if not downloaded_artifact_digest or \
             downloaded_artifact_digest != manifest.get("artifactDigest"):
         return Decision(VerificationVerdict.REFUSED_ARTIFACT_DIGEST_MISMATCH)
+
     architecture = manifest.get("architecture")
-    # Signed manifests may declare a multi-architecture target set such as
-    # "linux/amd64,linux/arm64" (the same canonical form the manifest
-    # builder validates).  Accept it only when this host's platform is one
-    # of the declared targets; anything else remains a mismatch refusal.
     if isinstance(architecture, str):
-        targets = tuple(item.strip() for item in architecture.split(",")
-                        if item.strip())
+        targets = tuple(item.strip() for item in architecture.split(",") if item.strip())
     else:
         targets = ()
     if host.architecture not in targets:
         return Decision(VerificationVerdict.REFUSED_ARCHITECTURE_MISMATCH)
-
     if not _updater_version_compatible(host, manifest):
         return Decision(
             VerificationVerdict.REFUSED_UPDATER_TOO_OLD,
@@ -255,7 +249,6 @@ def evaluate_verification(*, manifest: Optional[dict], signature_valid: bool,
     commit = manifest.get("coreCommit")
     if not commit or commit not in safe_core_certified_commits:
         return Decision(VerificationVerdict.REFUSED_CORE_IDENTITY_MISMATCH)
-
     certification_digest = manifest.get("certificationReportDigest")
     if not certification_digest:
         return Decision(VerificationVerdict.REFUSED_MISSING_CERTIFICATION_DIGEST)
@@ -264,15 +257,11 @@ def evaluate_verification(*, manifest: Optional[dict], signature_valid: bool,
         if not expected_digest or certification_digest != expected_digest:
             return Decision(
                 VerificationVerdict.REFUSED_CERTIFICATION_DIGEST_MISMATCH,
-                "signed update manifest certification digest does not match "
-                "the verified safe-Core policy",
-            )
-
+                "signed update manifest certification digest does not match the verified safe-Core policy")
     if not _db_compatibility_known(host, manifest):
         return Decision(
             VerificationVerdict.REFUSED_UNKNOWN_DB_COMPATIBILITY,
             "candidate DB schema/migration is not compatible with the installed schema")
-
     return Decision(VerificationVerdict.VERIFIED)
 
 
@@ -280,26 +269,17 @@ def evaluate_apply(*, pending_candidate: Optional[dict],
                    pending_verdict: Optional[EligibilityVerdict],
                    pending_verification: Optional[VerificationVerdict],
                    approve_consensus_change: bool) -> Decision:
-    """Gate for ``electrumx-update apply``: install is always an explicit,
-    separate operator action, never a consequence of check/status/show, of a
-    timer, of a restart, or of a reboot.
-    """
     if pending_candidate is None or \
             pending_verdict != EligibilityVerdict.ELIGIBLE or \
             pending_verification != VerificationVerdict.VERIFIED:
         return Decision(ApplyVerdict.REFUSED_NO_VERIFIED_CANDIDATE)
-
     manifest = pending_candidate.get("manifest") or {}
     if manifest.get("consensusImpact") and not approve_consensus_change:
         return Decision(ApplyVerdict.REFUSED_CONSENSUS_CHANGE_NOT_APPROVED)
-
     return Decision(ApplyVerdict.ALLOWED)
 
 
 def evaluate_health(result: HealthGateResult, *, rollback_safe: bool) -> Decision:
-    """Steps 17-19: confirm, or refuse to blindly roll back across an
-    irreversible migration.
-    """
     if result.all_pass():
         return Decision(HealthVerdict.PROMOTE_TO_CURRENT)
     if rollback_safe:
