@@ -29,6 +29,9 @@ The runtime resolver may select a newer official ChainStrap snapshot. A newer
 height/hash is therefore not compared to a hard-coded tip. The exact resolved
 commit, metadata digest, height and hash printed during the run become the
 identity that must be preserved through raw-block staging and Core validation.
+Scenario A intentionally uses the default `runtime-master` path: it must resolve
+current official upstream at run time and the resolved snapshot height must be
+strictly greater than the reviewed release floor.
 
 ## Publication / hand-off ordering
 
@@ -202,7 +205,8 @@ cp "$REINDEX_MARKER" "$EVIDENCE/chainstrap-reindex-complete"
 
 PASS: every command exits `0`.
 
-Record and check the load-bearing floor in the completed marker:
+Record and check the load-bearing floor and the live runtime-master resolution in
+the completed marker:
 
 ```sh
 python3 - "$BLOCK_MARKER" <<'PY'
@@ -210,11 +214,12 @@ import json, sys
 m=json.load(open(sys.argv[1], encoding='utf-8'))
 assert m['schema'] == 2
 assert m['chain'] == 'RVN' and m['mode'] == 'mainnet'
+assert m['resolution_mode'] == 'runtime-master'
 assert m['release_floor_height'] == 4501329
 assert m['release_floor_blockhash'] == '000000000004967a3501a0e5edca06f6a88f3a6b4af7b4688160e2b63a4a7e48'
 assert isinstance(m['source_commit'], str) and len(m['source_commit']) == 40
 assert isinstance(m['metadata_sha256'], str) and len(m['metadata_sha256']) == 64
-assert m['height'] >= 4501329
+assert m['height'] > 4501329
 print('marker=PASS')
 print(f"resolved_source={m['source_commit']}")
 print(f"resolved_metadata_sha256={m['metadata_sha256']}")
@@ -222,7 +227,9 @@ print(f"resolved_tip={m['height']}:{m['blockhash']}")
 PY
 ```
 
-Expected first line: `marker=PASS`.
+Expected first line: `marker=PASS`. Any `reviewed-local`/`exact-commit` marker or
+resolved height equal to the floor is Scenario A FAIL: this scenario must exercise
+mutable-master resolution against a snapshot newer than the release floor.
 
 ## A4. Prove the mandatory Core validation result
 
