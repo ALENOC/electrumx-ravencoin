@@ -59,6 +59,7 @@ render_installer_v2.render(
 v2_spec = importlib.util.spec_from_file_location(
     "electrumx_ravencoin_install_v2", RENDERED_INSTALLER_PATH)
 v2_installer = importlib.util.module_from_spec(v2_spec)
+sys.modules[v2_spec.name] = v2_installer
 v2_spec.loader.exec_module(v2_installer)
 
 # Preserve the pre-existing exception assertions byte-for-byte while changing
