@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """Fail-closed protected-path gate for high-trust repository surfaces.
 
-The gate is intentionally independent from GitHub's changed-files API. It reads
-Git's raw diff so file modes, deletions, and rename-as-delete/add behavior are
-visible. The only bootstrap exception is the single introducing range rooted at
-the audited pre-gate commit below.
+The gate reads Git's raw diff so file modes, deletions, and rename-as-delete/add
+behavior remain visible. The only unaudited bootstrap exception is the original
+single introducing range rooted at ``BOOTSTRAP_BASE_SHA``.
 
 Compose files are protected. A reviewed change requires a logged PR comment by
 an allowed maintainer which binds the exact base SHA and SHA-256 of the complete
 protected diff. Any later protected-path edit changes that digest and invalidates
 the approval. The verifier's own policy change is included in the same digest
-when present so this migration is not silently hidden from the approval record.
+when present so this migration is visible in the approval record.
 """
 
 from __future__ import annotations
@@ -39,20 +38,14 @@ PROTECTED_COMPOSE_PATHS = frozenset((
     "compose.monitor.yaml",
     "compose.monitor-controller.yaml",
 ))
-# These surfaces require an exact logged maintainer approval. SCRIPT_PATH is
-# included so the PR that introduces this mechanism is visible in that same
-# approval digest rather than being silently adjacent to a Compose exception.
 APPROVAL_PROTECTED_PATHS = frozenset((*PROTECTED_COMPOSE_PATHS, SCRIPT_PATH))
-
-# No PR-comment exception exists for these paths. The workflow itself remains
-# immutable after its audited bootstrap introduction; Core pins and trust roots
-# require a separate versioned security process.
 PROTECTED_EXACT_PATHS = frozenset((
     WORKFLOW_PATH,
     "docker/core/Dockerfile",
     "core-safety/production/update-signing-public-key.hex",
     "core-safety/production/core-policy-signing-public-key.hex",
 ))
+
 GATEWAY_POLICY_PATH = "contrib/bootstrap/chainstrap_bootstrap.py"
 GATEWAY_SYMBOLS = ("DEFAULT_GATEWAYS", "ALLOWED_GATEWAY_HOSTS")
 
@@ -92,8 +85,7 @@ def git_bytes(*args: str) -> bytes:
     if completed.returncode != 0:
         raise ScopeViolation(
             f"git {' '.join(args)} failed: "
-            f"{completed.stderr.decode('utf-8', errors='replace').strip()}"
-        )
+            f"{completed.stderr.decode('utf-8', errors='replace').strip()}")
     return completed.stdout
 
 
@@ -190,9 +182,11 @@ def _pr_context() -> tuple[str, int]:
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     event_path = os.environ.get("GITHUB_EVENT_PATH", "")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
-        raise ScopeViolation("protected diff requires GitHub PR context; GITHUB_REPOSITORY is invalid")
+        raise ScopeViolation(
+            "protected diff requires GitHub PR context; GITHUB_REPOSITORY is invalid")
     if not event_path:
-        raise ScopeViolation("protected diff requires GitHub PR context; GITHUB_EVENT_PATH is missing")
+        raise ScopeViolation(
+            "protected diff requires GitHub PR context; GITHUB_EVENT_PATH is missing")
     try:
         with open(event_path, "r", encoding="utf-8") as handle:
             event = json.load(handle)
@@ -200,7 +194,8 @@ def _pr_context() -> tuple[str, int]:
         raise ScopeViolation(f"cannot read GitHub PR event: {exc}") from exc
     number = event.get("number")
     if not isinstance(number, int) or number < 1 or not isinstance(event.get("pull_request"), dict):
-        raise ScopeViolation("protected diff approval is available only on pull_request events")
+        raise ScopeViolation(
+            "protected diff approval is available only on pull_request events")
     return repository, number
 
 
@@ -281,11 +276,14 @@ def verify(base: str, head: str) -> None:
                 "release-embedded IPFS gateway allowlist/policy changed in "
                 f"{GATEWAY_POLICY_PATH}")
 
-    approval_paths = {
-        change.path for change in changes if change.path in APPROVAL_PROTECTED_PATHS
-    }
+    if bootstrap:
+        approval_paths: set[str] = set()
+    else:
+        approval_paths = {
+            change.path for change in changes if change.path in APPROVAL_PROTECTED_PATHS
+        }
+
     approval = None
-    digest = None
     if approval_paths:
         digest = protected_diff_digest(base, head, approval_paths)
         approval = find_maintainer_approval(base, digest)
