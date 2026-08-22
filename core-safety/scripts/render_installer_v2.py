@@ -92,7 +92,7 @@ def render(*, output: pathlib.Path, public_key_hex: str) -> None:
         f'RELEASE_PUBLIC_KEY_HEX = "{public_key_hex}"', "public key injection")
     source = _replace_once(
         source, '"alenoc/electrumx-ravencoin:1.13.1", "-ec",',
-        '"alenoc/electrumx-ravencoin:1.13.2", "-ec", "release image version")
+        '"alenoc/electrumx-ravencoin:1.13.2", "-ec",', "release image version")
     source = _replace_once(
         source, '\nif __name__ == "__main__":\n    raise SystemExit(main())\n',
         _embedded_revision_block() +
