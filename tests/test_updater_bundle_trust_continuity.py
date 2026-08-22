@@ -89,6 +89,13 @@ def _bundle_files(*, policy_document, core_key_hex,
             f"RAVENCOIN_SOURCE_COMMIT: {CORE_COMMIT}\n"
             "RAVENCOIN_SOURCE_REPOSITORY: RavenProject/Ravencoin\n"
         ).encode(),
+        "compose.storage.yaml": (
+            b"volumes:\n"
+            b"  ravencoin-data:\n    driver: local\n"
+            b"  ravencoin-config:\n    driver: local\n"
+            b"  electrumx-data:\n    driver: local\n"
+            b"  monitor-data:\n    driver: local\n"
+        ),
         "compose.chainstrap.yaml": b"network_mode: none\n",
         "compose.monitor.yaml": (
             b"services:\n  monitor:\n"

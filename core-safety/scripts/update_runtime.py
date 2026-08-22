@@ -10,10 +10,14 @@ builds it while the current node is still running, stops the old stack, swaps
 the installation directory with same-filesystem renames, starts the new stack,
 and evaluates the concrete runtime health gates.
 
-The blockchain, ElectrumX DB and prepared Core RPC secrets live in named Docker
-volumes and are never copied into a release bundle. Operator configuration and
-host-side secrets are copied only from a small allowlist of known mutable paths.
-ChainStrap is deliberately *not* re-run during a software update.
+Blockchain, ElectrumX DB, monitor data and Core configuration are held through
+four Docker local-driver volumes whose ``device`` is an installer-selected host
+bind directory. The updater proves those existing bind mappings before it can
+stop the running node, proves the candidate Compose model resolves to the same
+four host directories, and rechecks the mapping before starting the new stack.
+Operator configuration and host-side secrets are copied only from a small
+allowlist of known mutable paths. ChainStrap is deliberately *not* re-run during
+a software update.
 
 A normal software update is also forbidden from rotating either production
 trust root. The candidate bundle must carry the same ElectrumX release/update
@@ -53,6 +57,7 @@ CORE_REPOSITORY = "RavenProject/Ravencoin"
 COMPOSE_PROJECT_NAME = "electrumx-ravencoin"
 INSTALL_MARKER = ".electrumx-ravencoin-installed.json"
 BASE_COMPOSE = "compose.yaml"
+STORAGE_OVERLAY = "compose.storage.yaml"
 MONITOR_OVERLAY = "compose.monitor.yaml"
 MONITOR_CONTROLLER_OVERLAY = "compose.monitor-controller.yaml"
 CHAINSTRAP_OVERLAY = "compose.chainstrap.yaml"
@@ -61,6 +66,25 @@ MONITOR_PATH = "vendor/ravencoin-node-monitor"
 UPDATE_PUBLIC_KEY_PATH = "core-safety/production/update-signing-public-key.hex"
 CORE_POLICY_PATH = "core-safety/production/safe-core-policy.json"
 CORE_POLICY_PUBLIC_KEY_PATH = "core-safety/production/core-policy-signing-public-key.hex"
+
+STORAGE_BIND_ENV = {
+    "ravencoin-data": "RAVENCOIN_DATA_HOST_DIR",
+    "ravencoin-config": "RAVENCOIN_CONFIG_HOST_DIR",
+    "electrumx-data": "ELECTRUMX_DATA_HOST_DIR",
+    "monitor-data": "MONITOR_DATA_HOST_DIR",
+}
+ACTIVE_STORAGE_MOUNTS = {
+    "ravencoin-core": {
+        "ravencoin-data": "/var/lib/ravencoin",
+        "ravencoin-config": "/var/lib/ravencoin-config",
+    },
+    "electrumx": {
+        "electrumx-data": "/var/lib/electrumx/db",
+    },
+    "monitor": {
+        "monitor-data": "/data",
+    },
+}
 
 CHECKPOINT_HEIGHT = 4_487_775
 CHECKPOINT_HASH = "000000000002d64509e06e76ddbbe418c725291687ec62b41ecfc40386a091fd"
@@ -75,6 +99,7 @@ COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 
 REQUIRED_BUNDLE_PATHS = frozenset({
     BASE_COMPOSE,
+    STORAGE_OVERLAY,
     CHAINSTRAP_OVERLAY,
     MONITOR_OVERLAY,
     "setup.sh",
@@ -466,19 +491,74 @@ def read_install_marker(root: Path) -> dict:
     return marker
 
 
-def update_compose_files(marker: dict, root: Path) -> list[str]:
-    # A normal software update never invokes ChainStrap services again. Named
-    # Core/ElectrumX data volumes are preserved and base Compose starts directly.
-    files = [BASE_COMPOSE]
+def _required_update_compose_files(marker: dict) -> list[str]:
+    # ChainStrap is a completed one-shot bootstrap and intentionally does not
+    # run during software updates. Every Compose file that the *running* node
+    # still depends on is carried forward, including the storage overlay.
+    files = [BASE_COMPOSE, STORAGE_OVERLAY]
     if marker.get("nodeMonitorEnabled"):
         files.append(MONITOR_OVERLAY)
     if marker.get("monitorControllerEnabled"):
-        overlay = root / MONITOR_CONTROLLER_OVERLAY
-        if not overlay.is_file():
-            raise UpdateRuntimeError(
-                "monitor controller was enabled but its Compose overlay is missing")
         files.append(MONITOR_CONTROLLER_OVERLAY)
     return files
+
+
+def update_compose_files(marker: dict, root: Path) -> list[str]:
+    files = _required_update_compose_files(marker)
+    for filename in files:
+        path = root / filename
+        if path.is_symlink() or not path.is_file():
+            raise UpdateRuntimeError(
+                f"running node depends on Compose file {filename!r}, but it is absent or unsafe")
+    return files
+
+
+def _read_storage_env(root: Path) -> dict[str, Path]:
+    env_path = root / ".env"
+    if env_path.is_symlink() or not env_path.is_file():
+        raise UpdateRuntimeError("installer .env is missing or is a symlink")
+    values: dict[str, str] = {}
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise UpdateRuntimeError(f"cannot read installer .env: {exc}") from exc
+    wanted = set(STORAGE_BIND_ENV.values())
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key not in wanted:
+            continue
+        if key in values:
+            raise UpdateRuntimeError(f"installer .env contains duplicate {key}")
+        values[key] = value.strip()
+    missing = sorted(wanted - set(values))
+    if missing:
+        raise UpdateRuntimeError(
+            "installer .env is missing storage binding(s): " + ", ".join(missing))
+
+    result = {}
+    for logical, key in STORAGE_BIND_ENV.items():
+        raw = values[key]
+        if not raw or "${" in raw or "\x00" in raw:
+            raise UpdateRuntimeError(f"installer storage binding {key} is malformed")
+        path = Path(raw)
+        if not path.is_absolute():
+            raise UpdateRuntimeError(f"installer storage binding {key} must be absolute")
+        try:
+            info = path.lstat()
+        except OSError as exc:
+            raise UpdateRuntimeError(
+                f"installer storage binding {key} does not exist: {path}: {exc}") from exc
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise UpdateRuntimeError(
+                f"installer storage binding {key} must be an existing non-symlink directory")
+        result[logical] = path.resolve()
+    if len(set(result.values())) != len(result):
+        raise UpdateRuntimeError("two installer storage volumes resolve to the same host directory")
+    return result
 
 
 def _run(argv: Sequence[str], *, cwd: Path, timeout: int = 1800,
@@ -494,10 +574,145 @@ def _run(argv: Sequence[str], *, cwd: Path, timeout: int = 1800,
 
 
 def _compose_prefix(root: Path, files: Sequence[str]) -> list[str]:
+    del root
     args = ["docker", "compose", "-p", COMPOSE_PROJECT_NAME]
     for filename in files:
         args += ["-f", filename]
     return args
+
+
+def _compose_storage_bindings(root: Path, files: Sequence[str]) -> dict[str, Path]:
+    completed = _run(
+        _compose_prefix(root, files) + ["config", "--format", "json"],
+        cwd=root, timeout=120)
+    if completed.returncode != 0:
+        detail = (completed.stdout + "\n" + completed.stderr)[-2000:]
+        raise UpdateRuntimeError(f"cannot render Compose storage model:\n{detail}")
+    try:
+        config = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise UpdateRuntimeError("docker compose config did not return valid JSON") from exc
+    volumes = config.get("volumes")
+    if not isinstance(volumes, dict):
+        raise UpdateRuntimeError("rendered Compose model has no volumes object")
+
+    result = {}
+    for logical in STORAGE_BIND_ENV:
+        definition = volumes.get(logical)
+        if not isinstance(definition, dict):
+            raise UpdateRuntimeError(f"rendered Compose model lost volume {logical}")
+        driver = definition.get("driver")
+        options = definition.get("driver_opts")
+        if driver != "local" or not isinstance(options, dict):
+            raise UpdateRuntimeError(
+                f"rendered Compose volume {logical} is not a local bind-backed volume")
+        option_type = str(options.get("type", ""))
+        option_o = str(options.get("o", ""))
+        option_device = str(options.get("device", ""))
+        if option_type != "none" or "bind" not in {item.strip() for item in option_o.split(",")}:
+            raise UpdateRuntimeError(
+                f"rendered Compose volume {logical} lost type=none/o=bind")
+        device = Path(option_device)
+        if not device.is_absolute():
+            raise UpdateRuntimeError(
+                f"rendered Compose volume {logical} has non-absolute bind device")
+        result[logical] = device.resolve()
+    return result
+
+
+def _docker_volume_bindings(expected: dict[str, Path]) -> None:
+    for logical, wanted in expected.items():
+        volume_name = f"{COMPOSE_PROJECT_NAME}_{logical}"
+        completed = subprocess.run(
+            ["docker", "volume", "inspect", volume_name], check=False,
+            capture_output=True, text=True, timeout=60)
+        if completed.returncode != 0:
+            raise UpdateRuntimeError(
+                f"existing installer volume {volume_name} is missing; refusing update")
+        try:
+            payload = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            raise UpdateRuntimeError(
+                f"docker volume inspect returned invalid JSON for {volume_name}") from exc
+        if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], dict):
+            raise UpdateRuntimeError(
+                f"docker volume inspect returned unexpected data for {volume_name}")
+        volume = payload[0]
+        options = volume.get("Options")
+        if volume.get("Driver") != "local" or not isinstance(options, dict):
+            raise UpdateRuntimeError(
+                f"existing installer volume {volume_name} is not local bind-backed storage")
+        option_type = str(options.get("type", ""))
+        option_o = str(options.get("o", ""))
+        option_device = str(options.get("device", ""))
+        if option_type != "none" or "bind" not in {item.strip() for item in option_o.split(",")}:
+            raise UpdateRuntimeError(
+                f"existing installer volume {volume_name} lost type=none/o=bind")
+        if Path(option_device).resolve() != wanted:
+            raise UpdateRuntimeError(
+                f"existing installer volume {volume_name} points to {option_device}, expected {wanted}")
+
+
+def _verify_active_storage_mounts(root: Path, files: Sequence[str], marker: dict) -> None:
+    services = ["ravencoin-core", "electrumx"]
+    if marker.get("nodeMonitorEnabled"):
+        services.append("monitor")
+    for service in services:
+        completed = _run(
+            _compose_prefix(root, files) + ["ps", "-q", service], cwd=root, timeout=60)
+        container_id = completed.stdout.strip()
+        if completed.returncode != 0 or not container_id:
+            raise UpdateRuntimeError(
+                f"cannot prove active storage mounts because service {service} is not running")
+        inspected = subprocess.run(
+            ["docker", "inspect", "--format", "{{json .Mounts}}", container_id],
+            check=False, capture_output=True, text=True, timeout=60)
+        if inspected.returncode != 0:
+            raise UpdateRuntimeError(f"cannot inspect active mounts for service {service}")
+        try:
+            mounts = json.loads(inspected.stdout)
+        except json.JSONDecodeError as exc:
+            raise UpdateRuntimeError(
+                f"docker inspect returned invalid mount JSON for service {service}") from exc
+        if not isinstance(mounts, list):
+            raise UpdateRuntimeError(f"docker inspect returned invalid mounts for {service}")
+        for logical, destination in ACTIVE_STORAGE_MOUNTS[service].items():
+            volume_name = f"{COMPOSE_PROJECT_NAME}_{logical}"
+            matches = [
+                item for item in mounts
+                if isinstance(item, dict)
+                and item.get("Type") == "volume"
+                and item.get("Name") == volume_name
+                and item.get("Destination") == destination
+            ]
+            if len(matches) != 1:
+                raise UpdateRuntimeError(
+                    f"running {service} is not attached to expected installer volume "
+                    f"{volume_name} at {destination}")
+
+
+def prove_running_storage_continuity(
+        root: Path, files: Sequence[str], marker: dict) -> dict[str, Path]:
+    expected = _read_storage_env(root)
+    rendered = _compose_storage_bindings(root, files)
+    if rendered != expected:
+        raise UpdateRuntimeError(
+            "running Compose storage model does not match the four installer host paths")
+    _docker_volume_bindings(expected)
+    _verify_active_storage_mounts(root, files, marker)
+    return expected
+
+
+def prove_candidate_storage_continuity(
+        root: Path, files: Sequence[str], expected: dict[str, Path]) -> None:
+    candidate = _read_storage_env(root)
+    if candidate != expected:
+        raise UpdateRuntimeError(
+            "candidate .env does not preserve the four existing installer host paths")
+    rendered = _compose_storage_bindings(root, files)
+    if rendered != expected:
+        raise UpdateRuntimeError(
+            "candidate Compose model would not preserve the four existing bind mounts")
 
 
 def _write_private_json(path: Path, payload: dict) -> None:
@@ -527,6 +742,13 @@ class TransactionalComposeSwitch:
         self.health_timeout = health_timeout
         self.marker = read_install_marker(self.root)
         self.old_files = update_compose_files(self.marker, self.root)
+        # This is the first mutating-upgrade gate. It runs while the old stack
+        # is still serving and refuses any lost/changed bind volume or mount.
+        self.storage_bindings = prove_running_storage_continuity(
+            self.root, self.old_files, self.marker)
+        print(
+            "UPDATER_CHECKPOINT storage-preflight=PASS old-stack=RUNNING "
+            "bind-paths=4 volume-objects=4 active-mounts=PASS")
         self.trusted_update_public_key_hex = _read_installed_key(
             self.root / UPDATE_PUBLIC_KEY_PATH, "ElectrumX release/update")
         self.trusted_core_policy_public_key_hex = _read_installed_key(
@@ -550,6 +772,9 @@ class TransactionalComposeSwitch:
             "failed": str(self.failed) if self.failed else None,
             "candidateVersion": self.manifest.get("electrumxVersion"),
             "artifactDigest": self.manifest.get("artifactDigest"),
+            "storageBindings": {
+                name: str(path) for name, path in self.storage_bindings.items()
+            },
         })
 
     def prepare(self) -> None:
@@ -569,10 +794,14 @@ class TransactionalComposeSwitch:
             _run(["sh", "./setup.sh", "--bundled-core"], cwd=staging, check=True)
             marker = dict(self.marker)
             files = update_compose_files(marker, staging)
+            prove_candidate_storage_continuity(staging, files, self.storage_bindings)
+            print(
+                "UPDATER_CHECKPOINT candidate-storage=PASS old-stack=RUNNING "
+                "compose-model=PASS bind-paths=4")
             prefix = _compose_prefix(staging, files)
             _run(prefix + ["config", "--quiet"], cwd=staging, check=True)
-            # Build the new release while the old containers remain alive.
-            # Versioned image tags make the old images available for rollback.
+            # Build before activation while the old containers and their proven
+            # bind-backed storage remain untouched and online.
             _run(prefix + ["build"], cwd=staging, timeout=7200, check=True)
             self._journal("STAGED_AND_BUILT")
         except BaseException:
@@ -609,9 +838,17 @@ class TransactionalComposeSwitch:
         self.staging = None
         self.switched = True
         self._journal("NEW_ROOT_ACTIVE")
+        print(
+            "UPDATER_CHECKPOINT release-switch=PASS "
+            "same-filesystem-renames=COMPLETE new-root=ACTIVE")
 
     def start_services(self) -> None:
         files = update_compose_files(self.marker, self.root)
+        # Recheck the candidate tree after the atomic rename and before Docker
+        # can create/attach anything. A missing storage overlay therefore can
+        # never silently fall through to fresh named volumes.
+        prove_candidate_storage_continuity(self.root, files, self.storage_bindings)
+        _docker_volume_bindings(self.storage_bindings)
         prefix = _compose_prefix(self.root, files)
         _run(prefix + ["up", "-d", "--no-build"], cwd=self.root,
              timeout=1800, check=True)
@@ -664,6 +901,12 @@ class TransactionalComposeSwitch:
     def run_health_checks(self, manifest: dict) -> HealthGateResult:
         if manifest != self.manifest:
             raise UpdateRuntimeError("health-check manifest changed after switch")
+
+        # The new services must still be attached to the same bind-backed
+        # volume objects before a release can be promoted to current.
+        _docker_volume_bindings(self.storage_bindings)
+        _verify_active_storage_mounts(
+            self.root, update_compose_files(self.marker, self.root), self.marker)
 
         core_id = self._container_id("ravencoin-core")
         electrumx_id = self._container_id("electrumx")
@@ -775,6 +1018,11 @@ class TransactionalComposeSwitch:
         self.switched = False
         self._journal("ROLLED_BACK")
         prefix = _compose_prefix(self.root, self.old_files)
+        # The restored release directory still carries the previously proven
+        # storage overlay and .env. Recheck the Docker volume objects before
+        # bringing the old stack back.
+        prove_candidate_storage_continuity(self.root, self.old_files, self.storage_bindings)
+        _docker_volume_bindings(self.storage_bindings)
         _run(prefix + ["up", "-d", "--no-build"], cwd=self.root,
              timeout=1800, check=True)
         self.journal.unlink(missing_ok=True)
