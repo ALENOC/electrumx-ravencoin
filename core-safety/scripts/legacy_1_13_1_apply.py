@@ -12,6 +12,13 @@ operator consent, writes a narrow schema-v1 adoption marker atomically, and
 then runs the normal v2 updater with process-local storage proof functions that
 preserve the existing Docker named volumes verbatim.
 
+The ``discover`` command is strictly read-only. The ``apply`` command refuses to
+write the adoption marker until the already-discovered pending 1.13.2 candidate
+has been revalidated, downloaded, provenance-checked, bundle-checked and trust-
+continuity checked. If this invocation creates an adoption marker but the normal
+updater returns without promotion, the wrapper removes that marker again only
+when the restored root still contains the exact 1.13.1 adoption marker.
+
 Nothing here converts a Docker volume to a bind mount, derives an API from
 Docker's private data-root, removes a volume, or runs ChainStrap. The wrapper
 accepts only ElectrumX-RVN 1.13.1 / Ravencoin Core 4.8.0 and the fixed Compose
@@ -22,8 +29,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Sequence
 
@@ -144,7 +154,7 @@ def discover_legacy_install(root: Path) -> dict:
     marker = root / runtime.INSTALL_MARKER
     if marker.exists() or marker.is_symlink():
         raise LegacyAdoptionError(
-            "installer marker already exists; use the normal updater instead of legacy adoption")
+            "installer marker already exists; use the normal updater instead of legacy discovery")
     compose = root / runtime.BASE_COMPOSE
     if compose.is_symlink() or not compose.is_file():
         raise LegacyAdoptionError("legacy install root lacks a safe compose.yaml")
@@ -201,6 +211,19 @@ def discover_legacy_install(root: Path) -> dict:
     }
 
 
+def _print_discovery(discovery: dict) -> None:
+    print("LEGACY INSTALLATION DISCOVERED")
+    print(f"  install root: {discovery['root']}")
+    print(f"  ElectrumX:    {discovery['electrumxVersion']}")
+    print(f"  Core:         {discovery['coreVersion']}")
+    print(f"  DB height:    {discovery.get('electrumxHeight')}")
+    print("  storage:      existing Docker named volumes (preserved, not converted)")
+    for logical, name in discovery["storage"].items():
+        print(f"    {logical}: {name}")
+    print("  Node Monitor: external/separate project; not adopted into this Compose project")
+    print("  ChainStrap:   disabled for this upgrade path")
+
+
 def _write_adoption_marker(root: Path, *, electrumx_version: str = LEGACY_ELECTRUMX_VERSION) -> None:
     runtime._write_private_json(root / runtime.INSTALL_MARKER, {
         "schemaVersion": 1,
@@ -216,6 +239,44 @@ def _write_adoption_marker(root: Path, *, electrumx_version: str = LEGACY_ELECTR
             "chainstrapRerunAllowed": False,
         },
     })
+
+
+def _is_exact_legacy_marker(marker: dict, *, version: str) -> bool:
+    legacy = marker.get("legacyAdoption") or {}
+    return bool(
+        marker.get("schemaVersion") == 1 and
+        marker.get("electrumxVersion") == version and
+        marker.get("bootstrapChoice") == "p2p" and
+        marker.get("nodeMonitorEnabled") is False and
+        marker.get("monitorControllerEnabled") is False and
+        marker.get("storageMode") == LEGACY_STORAGE_MODE and
+        legacy.get("source") == "setup.sh" and
+        legacy.get("fromVersion") == LEGACY_ELECTRUMX_VERSION and
+        legacy.get("storageMode") == LEGACY_STORAGE_MODE and
+        legacy.get("chainstrapRerunAllowed") is False
+    )
+
+
+def _remove_created_adoption_marker(root: Path) -> None:
+    path = root / runtime.INSTALL_MARKER
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise LegacyAdoptionError(
+            "cannot roll back adoption marker because marker path is not a regular file")
+    marker = runtime.read_install_marker(root)
+    if not _is_exact_legacy_marker(marker, version=LEGACY_ELECTRUMX_VERSION):
+        raise LegacyAdoptionError(
+            "refusing to remove adoption marker because restored root is not exact legacy 1.13.1 state")
+    path.unlink()
+    directory_fd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    print("UPDATER_CHECKPOINT legacy-adoption-rollback=PASS marker=REMOVED old-stack=PRESERVED")
 
 
 def _legacy_compose_files(marker: dict) -> list[str]:
@@ -302,15 +363,7 @@ def install_runtime_compatibility_hooks() -> None:
 
 
 def _confirm(discovery: dict, *, assume_yes: bool) -> None:
-    print("LEGACY INSTALLATION DISCOVERED")
-    print(f"  install root: {discovery['root']}")
-    print(f"  ElectrumX:    {discovery['electrumxVersion']}")
-    print(f"  Core:         {discovery['coreVersion']}")
-    print("  storage:      existing Docker named volumes (preserved, not converted)")
-    for logical, name in discovery["storage"].items():
-        print(f"    {logical}: {name}")
-    print("  Node Monitor: external/separate project; not adopted into this Compose project")
-    print("  ChainStrap:   disabled for this upgrade path")
+    _print_discovery(discovery)
     if assume_yes:
         return
     if not sys.stdin.isatty():
@@ -321,45 +374,108 @@ def _confirm(discovery: dict, *, assume_yes: bool) -> None:
         raise LegacyAdoptionError("legacy adoption not confirmed")
 
 
+def _preflight_pending_candidate() -> dict:
+    """Fully authenticate the pending 1.13.2 candidate before marker mutation."""
+    try:
+        state = cli.load_state(cli.DEFAULT_STATE_PATH)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise LegacyAdoptionError(
+            f"cannot load updater state before legacy adoption: {exc}") from exc
+    if not state.pending_candidate:
+        raise LegacyAdoptionError(
+            "no pending candidate; run electrumx-update check after the signed 1.13.2 release exists")
+
+    trusted_keys = cli.load_trusted_key(cli.DEFAULT_TRUSTED_KEY_PATH)
+    resolved_policy = cli.resolve_production_core_policy(state)
+    _high_water_path, high_water = cli._resolve_high_water()
+    manifest, artifact_url = cli._revalidate_pending_for_apply(
+        state, resolved_policy, trusted_keys, high_water)
+    if manifest.get("electrumxVersion") != TARGET_ELECTRUMX_VERSION:
+        raise LegacyAdoptionError(
+            f"legacy adoption target must be exactly ElectrumX-RVN {TARGET_ELECTRUMX_VERSION}")
+
+    root = cli.DEFAULT_INSTALL_ROOT
+    trusted_update_key = runtime._read_installed_key(
+        root / runtime.UPDATE_PUBLIC_KEY_PATH, "ElectrumX release/update")
+    trusted_core_key = runtime._read_installed_key(
+        root / runtime.CORE_POLICY_PUBLIC_KEY_PATH, "safe-Core policy")
+
+    cli.DEFAULT_STATE_DIR.mkdir(parents=True, mode=0o700, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+            prefix=".legacy-adoption-preflight-", dir=cli.DEFAULT_STATE_DIR) as temporary:
+        artifact = runtime.download_verified_artifact(
+            artifact_url, expected_digest=manifest["artifactDigest"],
+            directory=Path(temporary))
+        cli._verify_bundle_provenance(artifact, manifest)
+        runtime.validate_bundle_file(
+            artifact, manifest,
+            trusted_update_public_key_hex=trusted_update_key,
+            trusted_core_policy_public_key_hex=trusted_core_key)
+
+    print(
+        "UPDATER_CHECKPOINT legacy-candidate-preflight=PASS "
+        f"version={TARGET_ELECTRUMX_VERSION} marker=UNTOUCHED old-stack=RUNNING")
+    return manifest
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="electrumx-update-legacy-1.13.1")
-    parser.add_argument("--yes-adopt-legacy", action="store_true",
-                        help="explicitly approve the one-time legacy adoption")
-    parser.add_argument("--approve-consensus-change", action="store_true")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("discover", help="read-only discovery; never writes the adoption marker")
+    apply_parser = sub.add_parser("apply", help="preflight candidate, adopt, then apply")
+    apply_parser.add_argument("--yes-adopt-legacy", action="store_true",
+                              help="explicitly approve the one-time legacy adoption")
+    apply_parser.add_argument("--approve-consensus-change", action="store_true")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     root = cli.DEFAULT_INSTALL_ROOT
+    created_marker = False
     try:
-        if (root / runtime.INSTALL_MARKER).exists():
+        if args.command == "discover":
+            discovery = discover_legacy_install(root)
+            _print_discovery(discovery)
+            print("UPDATER_CHECKPOINT legacy-discovery=PASS mutation=NONE old-stack=RUNNING")
+            return 0
+
+        # No install-root mutation is permitted before this succeeds. This
+        # deliberately performs the expensive network/artifact checks twice:
+        # once here to guard adoption, and again inside the normal apply path
+        # immediately before the transaction.
+        _preflight_pending_candidate()
+
+        marker_path = root / runtime.INSTALL_MARKER
+        if marker_path.exists() or marker_path.is_symlink():
             marker = runtime.read_install_marker(root)
-            if marker.get("storageMode") != LEGACY_STORAGE_MODE or \
-                    (marker.get("legacyAdoption") or {}).get("fromVersion") != LEGACY_ELECTRUMX_VERSION:
+            if not _is_exact_legacy_marker(marker, version=LEGACY_ELECTRUMX_VERSION):
                 raise LegacyAdoptionError(
-                    "an installer marker already exists but is not a verified legacy-1.13.1 adoption")
-            discovery = {
-                "root": root,
-                "electrumxVersion": LEGACY_ELECTRUMX_VERSION,
-                "coreVersion": LEGACY_CORE_VERSION,
-                "storage": {**_expected_data_volumes(),
-                            "rpc-secrets": f"{runtime.COMPOSE_PROJECT_NAME}_rpc-secrets",
-                            "raven-secrets": f"{runtime.COMPOSE_PROJECT_NAME}_raven-secrets"},
-            }
+                    "an installer marker already exists but is not an exact legacy-1.13.1 adoption")
             _prove_running_named_storage(root, [runtime.BASE_COMPOSE], marker)
         else:
             discovery = discover_legacy_install(root)
             _confirm(discovery, assume_yes=args.yes_adopt_legacy)
             _write_adoption_marker(root)
+            created_marker = True
             print("UPDATER_CHECKPOINT legacy-adoption=PASS old-stack=RUNNING storage=named-volumes")
 
         install_runtime_compatibility_hooks()
         forwarded = ["apply"]
         if args.approve_consensus_change:
             forwarded.append("--approve-consensus-change")
-        return cli.main(forwarded)
+        result = cli.main(forwarded)
+        if result != 0 and created_marker:
+            _remove_created_adoption_marker(root)
+        return result
     except (OSError, ValueError, json.JSONDecodeError, runtime.UpdateRuntimeError) as exc:
+        if created_marker:
+            try:
+                _remove_created_adoption_marker(root)
+            except runtime.UpdateRuntimeError as rollback_exc:
+                print(
+                    "legacy adoption marker rollback refused: "
+                    f"{type(rollback_exc).__name__}: {rollback_exc}", file=sys.stderr)
         print(f"legacy adoption/apply refused: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
