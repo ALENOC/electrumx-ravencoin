@@ -9,6 +9,9 @@ our separately signed ElectrumX release manifest. The optional Node Monitor is
 vendored at one exact reviewed commit. For the 1.13.2 trust-root migration the
 builder may replace only the bundled copy of the release/update public key; the
 tracked repository trust-root file remains untouched and historical.
+
+``release-provenance.json`` is synthetic reviewed evidence. Its exact bytes are
+included in the bundle and their SHA-256 is independently signed in manifest v2.
 """
 
 from __future__ import annotations
@@ -27,7 +30,9 @@ import tarfile
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PIN_FILE = ROOT / "release" / "install-sources.json"
 UPDATE_KEY_PATH = "core-safety/production/update-signing-public-key.hex"
+PROVENANCE_PATH = "release-provenance.json"
 MAX_FILE_BYTES = 256 * 1024 * 1024
+MAX_PROVENANCE_BYTES = 256 * 1024
 RAW_KEY_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -104,11 +109,15 @@ def load_pin() -> dict:
 
 
 def build_bundle(*, monitor_dir: pathlib.Path, output: pathlib.Path,
-                 version: str, update_public_key_hex: str | None = None) -> tuple[str, dict]:
+                 version: str, update_public_key_hex: str | None = None,
+                 provenance_bytes: bytes | None = None) -> tuple[str, dict]:
     pin = load_pin()
     monitor = pin["nodeMonitor"]
     if update_public_key_hex is not None and not RAW_KEY_RE.fullmatch(update_public_key_hex):
         raise BundleError("replacement update public key is malformed")
+    if provenance_bytes is None or not isinstance(provenance_bytes, bytes) or \
+            not provenance_bytes or len(provenance_bytes) > MAX_PROVENANCE_BYTES:
+        raise BundleError("release provenance bytes are missing or exceed the limit")
 
     repo_head = run_git(ROOT, "rev-parse", "HEAD")
     monitor_head = run_git(monitor_dir, "rev-parse", "HEAD")
@@ -139,8 +148,9 @@ def build_bundle(*, monitor_dir: pathlib.Path, output: pathlib.Path,
             with tarfile.open(fileobj=zipped, mode="w", format=tarfile.PAX_FORMAT) as archive:
                 for relative in repo_files:
                     relative_name = relative.as_posix()
-                    if relative_name == "release-install-metadata.json":
-                        raise BundleError("tracked file shadows generated release metadata")
+                    if relative_name in ("release-install-metadata.json", PROVENANCE_PATH):
+                        raise BundleError(
+                            f"tracked file shadows generated release evidence: {relative_name}")
                     source = ROOT / relative
                     data = source.read_bytes()
                     if relative_name == UPDATE_KEY_PATH and update_public_key_hex is not None:
@@ -156,6 +166,7 @@ def build_bundle(*, monitor_dir: pathlib.Path, output: pathlib.Path,
                         archive, f"{prefix}/{relative.as_posix()}",
                         source.read_bytes(), mode=normalized_mode(source))
 
+                add_bytes(archive, PROVENANCE_PATH, provenance_bytes, mode=0o644)
                 add_bytes(
                     archive, "release-install-metadata.json", metadata_bytes,
                     mode=0o644)
@@ -171,11 +182,13 @@ def main() -> int:
     parser.add_argument("--output", required=True, type=pathlib.Path)
     parser.add_argument("--version", required=True)
     parser.add_argument("--update-public-key-hex")
+    parser.add_argument("--provenance", required=True, type=pathlib.Path)
     args = parser.parse_args()
 
     digest, metadata = build_bundle(
         monitor_dir=args.monitor_dir.resolve(), output=args.output.resolve(),
-        version=args.version, update_public_key_hex=args.update_public_key_hex)
+        version=args.version, update_public_key_hex=args.update_public_key_hex,
+        provenance_bytes=args.provenance.read_bytes())
     print(f"bundle={args.output}")
     print(f"sha256={digest}")
     print(f"sourceCommit={metadata['sourceCommit']}")
