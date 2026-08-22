@@ -12,6 +12,8 @@ tracked repository trust-root file remains untouched and historical.
 
 ``release-provenance.json`` is synthetic reviewed evidence. Its exact bytes are
 included in the bundle and their SHA-256 is independently signed in manifest v2.
+The generated standalone installer is injected byte-for-byte into the bundle so
+there is no second, stale installer implementation in the shipped artifact.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ import tarfile
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PIN_FILE = ROOT / "release" / "install-sources.json"
 UPDATE_KEY_PATH = "core-safety/production/update-signing-public-key.hex"
+INSTALLER_PATH = "electrumx-ravencoin-install.py"
 PROVENANCE_PATH = "release-provenance.json"
 MAX_FILE_BYTES = 256 * 1024 * 1024
 MAX_PROVENANCE_BYTES = 256 * 1024
@@ -110,7 +113,8 @@ def load_pin() -> dict:
 
 def build_bundle(*, monitor_dir: pathlib.Path, output: pathlib.Path,
                  version: str, update_public_key_hex: str | None = None,
-                 provenance_bytes: bytes | None = None) -> tuple[str, dict]:
+                 provenance_bytes: bytes | None = None,
+                 installer_bytes: bytes | None = None) -> tuple[str, dict]:
     pin = load_pin()
     monitor = pin["nodeMonitor"]
     if update_public_key_hex is not None and not RAW_KEY_RE.fullmatch(update_public_key_hex):
@@ -118,6 +122,10 @@ def build_bundle(*, monitor_dir: pathlib.Path, output: pathlib.Path,
     if provenance_bytes is None or not isinstance(provenance_bytes, bytes) or \
             not provenance_bytes or len(provenance_bytes) > MAX_PROVENANCE_BYTES:
         raise BundleError("release provenance bytes are missing or exceed the limit")
+    if installer_bytes is None or not isinstance(installer_bytes, bytes) or not installer_bytes:
+        raise BundleError("rendered standalone installer bytes are required")
+    if len(installer_bytes) > MAX_FILE_BYTES:
+        raise BundleError("rendered standalone installer exceeds bundle file limit")
 
     repo_head = run_git(ROOT, "rev-parse", "HEAD")
     monitor_head = run_git(monitor_dir, "rev-parse", "HEAD")
@@ -155,6 +163,8 @@ def build_bundle(*, monitor_dir: pathlib.Path, output: pathlib.Path,
                     data = source.read_bytes()
                     if relative_name == UPDATE_KEY_PATH and update_public_key_hex is not None:
                         data = (update_public_key_hex + "\n").encode("ascii")
+                    elif relative_name == INSTALLER_PATH:
+                        data = installer_bytes
                     add_bytes(
                         archive, relative_name, data,
                         mode=normalized_mode(source))
@@ -183,12 +193,14 @@ def main() -> int:
     parser.add_argument("--version", required=True)
     parser.add_argument("--update-public-key-hex")
     parser.add_argument("--provenance", required=True, type=pathlib.Path)
+    parser.add_argument("--installer", required=True, type=pathlib.Path)
     args = parser.parse_args()
 
     digest, metadata = build_bundle(
         monitor_dir=args.monitor_dir.resolve(), output=args.output.resolve(),
         version=args.version, update_public_key_hex=args.update_public_key_hex,
-        provenance_bytes=args.provenance.read_bytes())
+        provenance_bytes=args.provenance.read_bytes(),
+        installer_bytes=args.installer.read_bytes())
     print(f"bundle={args.output}")
     print(f"sha256={digest}")
     print(f"sourceCommit={metadata['sourceCommit']}")
