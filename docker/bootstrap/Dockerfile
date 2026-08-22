@@ -7,15 +7,20 @@ RUN apt-get update \
 RUN groupadd --gid 10001 ravencoin \
     && useradd --uid 10001 --gid 10001 --system \
        --home-dir /var/lib/ravencoin --shell /usr/sbin/nologin ravencoin \
-    && install -d -o ravencoin -g ravencoin /var/lib/ravencoin /opt/electrumx-ravencoin/bootstrap
+    && install -d -o ravencoin -g ravencoin \
+       /var/lib/ravencoin /opt/electrumx-ravencoin/bootstrap
 
-COPY --chmod=0555 contrib/bootstrap/chainstrap_bootstrap.py /usr/local/bin/chainstrap-bootstrap
-COPY --chown=10001:10001 contrib/bootstrap/manifests/rvn-mainnet-2026-08-19.json \
-    /opt/electrumx-ravencoin/bootstrap/rvn-mainnet.json
+# The transport/downloader remains importable as a library.  Production starts
+# only through the runtime resolver, so the historical --manifest entrypoint is
+# not reachable from this image's default command.
+COPY --chmod=0444 contrib/bootstrap/chainstrap_bootstrap.py \
+    /opt/electrumx-ravencoin/bootstrap/chainstrap_bootstrap.py
+COPY --chmod=0555 contrib/bootstrap/chainstrap_runtime.py \
+    /usr/local/bin/chainstrap-bootstrap
 
+ENV PYTHONPATH=/opt/electrumx-ravencoin/bootstrap
 USER ravencoin
 WORKDIR /var/lib/ravencoin
 VOLUME ["/var/lib/ravencoin"]
 ENTRYPOINT ["chainstrap-bootstrap"]
-CMD ["--manifest", "/opt/electrumx-ravencoin/bootstrap/rvn-mainnet.json", \
-     "--datadir", "/var/lib/ravencoin"]
+CMD ["--datadir", "/var/lib/ravencoin"]
