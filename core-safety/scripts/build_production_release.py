@@ -176,14 +176,18 @@ def main() -> int:
     provenance_path.write_bytes(provenance_bytes)
     provenance_digest = "sha256:" + hashlib.sha256(provenance_bytes).hexdigest()
 
+    # Render once and ship those exact bytes both as the standalone installer
+    # asset and as the installer copy inside the source bundle.
+    render_installer_v2.render(output=installer_path, public_key_hex=public_key_hex)
+    installer_bytes = installer_path.read_bytes()
     bundle_digest, metadata = build_release_bundle.build_bundle(
         monitor_dir=monitor_dir,
         output=bundle_path,
         version=version,
         update_public_key_hex=public_key_hex,
         provenance_bytes=provenance_bytes,
+        installer_bytes=installer_bytes,
     )
-    render_installer_v2.render(output=installer_path, public_key_hex=public_key_hex)
 
     manifest_body = update_manifest.build_manifest(
         electrumx_version=version,
