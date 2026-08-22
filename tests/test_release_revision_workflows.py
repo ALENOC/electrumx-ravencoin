@@ -9,7 +9,8 @@ DOC = ROOT / "docs/release-artifact-revisions.md"
 def test_release_workflow_cannot_sign_or_publish():
     text = RELEASE.read_text(encoding="utf-8")
     assert "permissions:\n  contents: read" in text
-    assert "ELECTRUMX_UPDATE_SIGNING_KEY" not in text
+    assert "secrets.ELECTRUMX_UPDATE_SIGNING_KEY" not in text
+    assert 'test -z "${ELECTRUMX_UPDATE_SIGNING_KEY:-}"' in text
     assert "contents: write" not in text
     assert "gh release create" not in text
     assert "gh release edit" not in text
@@ -23,7 +24,7 @@ def test_signing_workflow_is_handoff_only():
     text = SIGNING.read_text(encoding="utf-8")
     assert "actions: read" in text
     assert "contents: read" in text
-    assert "ELECTRUMX_UPDATE_SIGNING_KEY" not in text
+    assert "secrets.ELECTRUMX_UPDATE_SIGNING_KEY" not in text
     assert "contents: write" not in text
     assert "gh release create" not in text
     assert "pkeyutl -sign" not in text
@@ -45,3 +46,4 @@ def test_docs_bind_one_root_owned_high_water_locator():
     assert "${XDG_STATE_HOME:-$HOME/.local/state}/electrumx-ravencoin/security-state.json" in text
     assert "mode `0644`" in text
     assert "mode `0600`" in text
+    assert "highestAcceptedVersion" in text
