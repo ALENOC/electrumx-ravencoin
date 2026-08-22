@@ -55,8 +55,10 @@ CORE_POLICY_PUBLIC_KEY_BUNDLE_PATH = (
     "core-safety/production/core-policy-signing-public-key.hex"
 )
 BUNDLE_METADATA_NAME = "release-install-metadata.json"
+PROVENANCE_BUNDLE_PATH = "release-provenance.json"
 MONITOR_BUNDLE_PATH = "vendor/ravencoin-node-monitor"
 LOCAL_CORE_POLICY_PUBLIC_KEY_FILE = "core-policy-public-key.hex"
+LOCAL_ARTIFACT_REVISION = 0
 MAX_FILE_BYTES = 256 * 1024 * 1024
 
 
@@ -195,6 +197,10 @@ def load_validation_policy_body(core_commit: str, core_version: str) -> tuple[di
     return body, entry
 
 
+def sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
 def build_bundle(*, monitor_repo: Path, update_public_key_hex: str,
                  core_policy_document: dict, core_policy_public_key_hex: str,
                  ex_version: str) -> tuple[bytes, dict]:
@@ -219,6 +225,19 @@ def build_bundle(*, monitor_repo: Path, update_public_key_hex: str,
         "sourceCommit": repo_head,
         "nodeMonitor": dict(monitor_pin),
     }
+    provenance = {
+        "schemaVersion": 1,
+        "purpose": "NON-PRODUCTION local release validation",
+        "electrumxVersion": ex_version,
+        "artifact_revision": LOCAL_ARTIFACT_REVISION,
+        "sourceRepository": metadata["sourceRepository"],
+        "sourceCommit": repo_head,
+        "nodeMonitor": dict(monitor_pin),
+        "updateSigningPublicKey": update_public_key_hex,
+    }
+    provenance_bytes = (
+        json.dumps(provenance, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    metadata["provenanceDigest"] = "sha256:" + sha256_hex(provenance_bytes)
     metadata_bytes = (
         json.dumps(metadata, indent=2, sort_keys=True) + "\n").encode("utf-8")
     overrides = {
@@ -237,9 +256,9 @@ def build_bundle(*, monitor_repo: Path, update_public_key_hex: str,
         with tarfile.open(fileobj=zipped, mode="w", format=tarfile.PAX_FORMAT) as archive:
             for relative in repo_files:
                 name = relative.as_posix()
-                if name == BUNDLE_METADATA_NAME:
+                if name in (BUNDLE_METADATA_NAME, PROVENANCE_BUNDLE_PATH):
                     raise ValidationBundleError(
-                        "tracked file shadows generated release metadata")
+                        f"tracked file shadows generated release evidence: {name}")
                 if name in overrides:
                     # Local validation intentionally substitutes only trust
                     # material; the source/code tree remains the exact commit.
@@ -256,13 +275,10 @@ def build_bundle(*, monitor_repo: Path, update_public_key_hex: str,
 
             for name, data in sorted(overrides.items()):
                 add_bytes(archive, name, data)
+            add_bytes(archive, PROVENANCE_BUNDLE_PATH, provenance_bytes)
             add_bytes(archive, BUNDLE_METADATA_NAME, metadata_bytes)
 
     return buffer.getvalue(), metadata
-
-
-def sha256_hex(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
 
 
 def write_private_mode(path: Path, data: bytes) -> None:
@@ -311,8 +327,10 @@ def main() -> int:
     installer_digest = sha256_hex(INSTALLER_PATH.read_bytes())
     body = um.build_manifest(
         electrumx_version=ex_version,
+        artifact_revision=LOCAL_ARTIFACT_REVISION,
         channel="stable",
         artifact_digest="sha256:" + sha256_hex(bundle_bytes),
+        provenance_digest=metadata["provenanceDigest"],
         architecture="linux/amd64,linux/arm64",
         core_version=core_version,
         core_repository="RavenProject/Ravencoin",

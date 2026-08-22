@@ -4,10 +4,12 @@
 
 """Build, sign and verify the signed ElectrumX update manifest.
 
-A running node observes only signed ALENOC/electrumx-ravencoin releases. Core
-trust remains a separate signed safe-Core policy rooted solely in official
-RavenProject/Ravencoin identities. The release/update signing key is distinct
-from the Core-policy signing key and uses a distinct signature domain.
+Schema v2 adds a monotonic ``artifact_revision`` and a signed provenance
+digest. A running node observes only signed ALENOC/electrumx-ravencoin
+releases. Core trust remains a separate signed safe-Core policy rooted solely
+in official RavenProject/Ravencoin identities. The release/update signing key
+is distinct from the Core-policy signing key and uses a distinct signature
+domain.
 """
 
 from __future__ import annotations
@@ -25,9 +27,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 from packaging.version import InvalidVersion, Version
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SIGNATURE_ALGORITHM = "ed25519"
-SIGNATURE_DOMAIN = b"ALENOC-RVN-ELECTRUMX-UPDATE-MANIFEST-v1\x00"
+SIGNATURE_DOMAIN = b"ALENOC-RVN-ELECTRUMX-UPDATE-MANIFEST-v2\x00"
 VALID_CHANNELS = ("stable", "security")
 TRUSTED_CORE_REPOSITORIES = ("RavenProject/Ravencoin",)
 SUPPORTED_ARCHITECTURES = ("linux/amd64", "linux/arm64")
@@ -40,9 +42,11 @@ FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$")
 
 REQUIRED_FIELDS = (
     "electrumxVersion",
+    "artifact_revision",
     "channel",
     "releaseTimestamp",
     "artifactDigest",
+    "provenanceDigest",
     "architecture",
     "coreVersion",
     "coreRepository",
@@ -86,13 +90,7 @@ VALID_CONSENSUS_IMPACT_CLASSES = (
 
 
 def classify_consensus_impact(classification: str) -> tuple:
-    """Map the three release-review states onto the signed booleans.
-
-    (False, True)  = NONE
-    (False, False) = COMPATIBILITY
-    (True, False)  = CONSENSUS_CHANGE
-    There is intentionally no (True, True) state.
-    """
+    """Map the three release-review states onto the signed booleans."""
     if classification == CONSENSUS_IMPACT_NONE:
         return False, True
     if classification == CONSENSUS_IMPACT_COMPATIBILITY:
@@ -142,10 +140,14 @@ def _architecture_values(value) -> tuple[str, ...]:
     return values
 
 
-def build_manifest(*, electrumx_version: str, channel: str, artifact_digest: str,
-                    architecture, core_version: str, core_repository: str,
-                    core_tag: str, core_commit: str, certification_report_digest: str,
-                    safe_core_policy_version: int, required_updater_version: str,
+def build_manifest(*, electrumx_version: str, artifact_revision: int,
+                    channel: str, artifact_digest: str,
+                    provenance_digest: str, architecture,
+                    core_version: str, core_repository: str,
+                    core_tag: str, core_commit: str,
+                    certification_report_digest: str,
+                    safe_core_policy_version: int,
+                    required_updater_version: str,
                     config_compatibility: dict, db_compatibility: dict,
                     rollback_safe: bool, consensus_impact: bool,
                     auto_update_eligible: bool, installer_filename: str,
@@ -156,9 +158,11 @@ def build_manifest(*, electrumx_version: str, channel: str, artifact_digest: str
     body = {
         "schemaVersion": SCHEMA_VERSION,
         "electrumxVersion": electrumx_version,
+        "artifact_revision": artifact_revision,
         "channel": channel,
         "releaseTimestamp": timestamp,
         "artifactDigest": artifact_digest,
+        "provenanceDigest": provenance_digest,
         "architecture": architecture,
         "coreVersion": core_version,
         "coreRepository": core_repository,
@@ -184,7 +188,8 @@ def validate_body(body: dict) -> None:
     if not isinstance(body, dict):
         raise ManifestError("manifest body must be an object")
     if body.get("schemaVersion") != SCHEMA_VERSION:
-        raise ManifestError(f"unsupported manifest schemaVersion {body.get('schemaVersion')!r}")
+        raise ManifestError(
+            f"unsupported manifest schemaVersion {body.get('schemaVersion')!r}")
     missing = [field for field in REQUIRED_FIELDS if field not in body]
     if missing:
         raise ManifestError(f"manifest is missing required field(s): {missing}")
@@ -196,13 +201,15 @@ def validate_body(body: dict) -> None:
     _valid_version(body["coreVersion"], "coreVersion")
     _valid_version(body["requiredUpdaterVersion"], "requiredUpdaterVersion")
 
+    revision = body["artifact_revision"]
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
+        raise ManifestError("artifact_revision must be a non-negative integer")
+
     if body["channel"] not in VALID_CHANNELS:
         raise ManifestError(f"invalid channel {body['channel']!r}")
     if not isinstance(body["releaseTimestamp"], str):
         raise ManifestError("releaseTimestamp must be a string")
     stamp = body["releaseTimestamp"]
-    # Python 3.10 fromisoformat rejects the "Z" UTC designator that every
-    # release manifest uses, so normalise it to the explicit offset first.
     if stamp.endswith(("Z", "z")):
         stamp = stamp[:-1] + "+00:00"
     try:
@@ -212,10 +219,9 @@ def validate_body(body: dict) -> None:
     if parsed_time.tzinfo is None:
         raise ManifestError("releaseTimestamp must include a timezone")
 
-    if not SHA256_RE.fullmatch(str(body["artifactDigest"])):
-        raise ManifestError("artifactDigest must be sha256:<64 lowercase hex>")
-    if not SHA256_RE.fullmatch(str(body["installerDigest"])):
-        raise ManifestError("installerDigest must be sha256:<64 lowercase hex>")
+    for field in ("artifactDigest", "provenanceDigest", "installerDigest"):
+        if not SHA256_RE.fullmatch(str(body[field])):
+            raise ManifestError(f"{field} must be sha256:<64 lowercase hex>")
     if not RAW_SHA256_RE.fullmatch(str(body["certificationReportDigest"])):
         raise ManifestError("certificationReportDigest must be 64 lowercase hex")
 
@@ -257,12 +263,9 @@ def validate_body(body: dict) -> None:
         if not isinstance(migration["reversible"], bool):
             raise ManifestError("migration.reversible must be boolean")
 
-    if not isinstance(body["rollbackSafe"], bool):
-        raise ManifestError("rollbackSafe must be boolean")
-    if not isinstance(body["consensusImpact"], bool):
-        raise ManifestError("consensusImpact must be boolean")
-    if not isinstance(body["autoUpdateEligible"], bool):
-        raise ManifestError("autoUpdateEligible must be boolean")
+    for field in ("rollbackSafe", "consensusImpact", "autoUpdateEligible"):
+        if not isinstance(body[field], bool):
+            raise ManifestError(f"{field} must be boolean")
     consensus_classification(body)
     if migration is not None and migration["reversible"] is False and body["rollbackSafe"]:
         raise ManifestError(
@@ -300,10 +303,9 @@ def verify_manifest(document: dict, trusted_keys: dict) -> dict:
     if set(signature) != {"algorithm", "keyId", "value"}:
         raise ManifestError("signature object contains missing or unknown fields")
     if signature.get("algorithm") != SIGNATURE_ALGORITHM:
-        raise ManifestError(f"unsupported signature algorithm {signature.get('algorithm')!r}")
+        raise ManifestError(
+            f"unsupported signature algorithm {signature.get('algorithm')!r}")
     key_id = signature.get("keyId")
-    # A malformed type (list, dict, null, oversized string) must be a clean
-    # verification failure, never an uncaught TypeError (GLM53-RVN-020).
     if not isinstance(key_id, str) or len(key_id) > 128:
         raise ManifestError(f"malformed signature key id {key_id!r}")
     if key_id not in trusted_keys:

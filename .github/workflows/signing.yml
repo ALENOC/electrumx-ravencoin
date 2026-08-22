@@ -1,0 +1,112 @@
+name: Prepare offline release signing handoff
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Workflow run ID that produced the reviewed unsigned candidate
+        required: true
+      artifact_name:
+        description: Exact unsigned candidate artifact name
+        required: true
+      expected_public_key_hex:
+        description: Independently authenticated replacement Ed25519 public key (hex)
+        required: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  handoff:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out verifier source without credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Download exact candidate artifact
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16  # v4.1.8
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ runner.temp }}/candidate
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate candidate and prepare canonical offline review bytes
+        env:
+          EXPECTED_PUBLIC_KEY_HEX: ${{ inputs.expected_public_key_hex }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/candidate"
+          sha256sum --check SHA256SUMS.build
+          test ! -e release-manifest.json
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+          import sys
+
+          scripts = pathlib.Path(os.environ["GITHUB_WORKSPACE"]) / "core-safety" / "scripts"
+          sys.path.insert(0, str(scripts))
+          import render_installer_v2
+          import update_manifest
+
+          root = pathlib.Path(os.environ["RUNNER_TEMP"]) / "candidate"
+          public = os.environ["EXPECTED_PUBLIC_KEY_HEX"].strip().lower()
+          if not re.fullmatch(r"[0-9a-f]{64}", public):
+              raise SystemExit("replacement public key is malformed")
+          if public == render_installer_v2.RETIRED_UPDATE_PUBLIC_KEY_HEX:
+              raise SystemExit("retired CI-held update key is forbidden")
+
+          inputs = json.loads((root / "offline-signing-inputs.json").read_text())
+          body = json.loads((root / "unsigned-release-manifest.json").read_text())
+          update_manifest.validate_body(body)
+          key_id = update_manifest.key_id_for(bytes.fromhex(public))
+          if inputs.get("expectedPublicKeyHex") != public or inputs.get("expectedKeyId") != key_id:
+              raise SystemExit("candidate signing identity differs from reviewed public key")
+          if inputs.get("retiredKeyIdForbidden") != render_installer_v2.RETIRED_UPDATE_KEY_ID:
+              raise SystemExit("candidate does not bind retired-key prohibition")
+
+          provenance = root / "release-provenance.json"
+          observed_provenance = "sha256:" + hashlib.sha256(provenance.read_bytes()).hexdigest()
+          if observed_provenance != body.get("provenanceDigest"):
+              raise SystemExit("candidate provenance digest mismatch")
+
+          canonical = update_manifest.canonical_bytes(body)
+          (root / "release-manifest.canonical").write_bytes(canonical)
+          review = {
+              "schemaVersion": 1,
+              "electrumxVersion": body["electrumxVersion"],
+              "artifact_revision": body["artifact_revision"],
+              "artifactDigest": body["artifactDigest"],
+              "installerDigest": body["installerDigest"],
+              "provenanceDigest": body["provenanceDigest"],
+              "expectedPublicKeyHex": public,
+              "expectedKeyId": key_id,
+              "canonicalSha256": hashlib.sha256(canonical).hexdigest(),
+              "privateKeyPresent": False,
+          }
+          (root / "OFFLINE_SIGNING_REVIEW.json").write_text(
+              json.dumps(review, indent=2, sort_keys=True) + "\n")
+          PY
+          test -z "${ELECTRUMX_UPDATE_SIGNING_KEY:-}"
+
+      - name: Upload offline handoff
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        with:
+          name: offline-signing-${{ inputs.artifact_name }}
+          path: |
+            ${{ runner.temp }}/candidate/electrumx-ravencoin-bundle.tar.gz
+            ${{ runner.temp }}/candidate/electrumx-ravencoin-install.py
+            ${{ runner.temp }}/candidate/unsigned-release-manifest.json
+            ${{ runner.temp }}/candidate/release-provenance.json
+            ${{ runner.temp }}/candidate/offline-signing-inputs.json
+            ${{ runner.temp }}/candidate/release-manifest.canonical
+            ${{ runner.temp }}/candidate/OFFLINE_SIGNING_REVIEW.json
+            ${{ runner.temp }}/candidate/SHA256SUMS.build
+          if-no-files-found: error
+          retention-days: 7
