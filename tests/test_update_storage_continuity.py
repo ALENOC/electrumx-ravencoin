@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import os
 import pathlib
 import sys
@@ -138,3 +139,21 @@ def test_running_storage_preflight_proves_volume_objects_and_active_mounts(
         ("volumes", expected),
         ("mounts", tuple(files)),
     ]
+
+
+def test_qualification_checkpoints_are_after_proofs_and_before_or_after_switch_as_claimed():
+    init_source = inspect.getsource(runtime.TransactionalComposeSwitch.__init__)
+    assert init_source.index("prove_running_storage_continuity") < init_source.index(
+        "UPDATER_CHECKPOINT storage-preflight=PASS")
+
+    prepare_source = inspect.getsource(runtime.TransactionalComposeSwitch.prepare)
+    assert prepare_source.index("prove_candidate_storage_continuity") < prepare_source.index(
+        "UPDATER_CHECKPOINT candidate-storage=PASS")
+
+    stop_source = inspect.getsource(runtime.TransactionalComposeSwitch.stop_services)
+    assert stop_source.index("self.prepare()") < stop_source.index('["stop"]')
+
+    switch_source = inspect.getsource(runtime.TransactionalComposeSwitch.switch_atomically)
+    second_rename = switch_source.index("os.replace(self.staging, self.root)")
+    checkpoint = switch_source.index("UPDATER_CHECKPOINT release-switch=PASS")
+    assert second_rename < checkpoint
