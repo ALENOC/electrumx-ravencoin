@@ -30,13 +30,18 @@ This is a deliberate trust discontinuity. A compromised retired signing key ther
 
 Manifest schema v2 adds the signed fields `artifact_revision` and `provenanceDigest`.
 
-Release identity is ordered as `(electrumxVersion, artifact_revision)`. `artifact_revision` is a canonical, non-negative integer and is monotonic within one ElectrumX version.
+Release identity is ordered first by `electrumxVersion`, then by `artifact_revision`; equality at one version/revision additionally requires both `artifactDigest` and `provenanceDigest` to be present, well formed and identical. `artifact_revision` is a canonical, non-negative integer and is monotonic within one ElectrumX version.
 
 - a higher semantic version is a new software release;
 - the same version with a higher `artifact_revision` is a reviewed artifact revision;
-- a lower revision is a rollback and is rejected;
-- the same version and revision with a different `artifactDigest` is equivocation and is rejected;
-- the same version/revision/digest is the same artifact identity.
+- a lower semantic version or lower revision is a rollback and is rejected;
+- the same version and revision with a different artifact or provenance digest is equivocation and is rejected;
+- missing revision data is a refusal, not version-only compatibility;
+- malformed revision data is a distinct refusal, not an older revision;
+- missing or malformed digest data is a refusal and can never be classified as sameness;
+- only the same version, revision, artifact digest and provenance digest is the same artifact identity.
+
+There is one canonical ordering implementation in `core-safety/scripts/artifact_revision.py`. Updater eligibility delegates to that implementation rather than maintaining a second version/revision comparison.
 
 A revision-only promotion is informational for an already-running node. It must not stop services, rebuild images, reindex Ravencoin Core, alter databases, or otherwise change the running node. Only the verified release/high-water records advance.
 
@@ -69,6 +74,12 @@ When it runs as an unprivileged user, the canonical state path is:
 `${XDG_STATE_HOME:-$HOME/.local/state}/electrumx-ravencoin/security-state.json`
 
 The target must be owned by that exact UID and mode `0600`. The unprivileged process is never allowed to create or replace the root-owned locator; an administrator must provision the locator with that UID and exact canonical path. If the same host is later invoked under a different UID (including root), the owner/path mismatch is a hard failure. The implementation never silently chooses a second namespace.
+
+Security-state reads are descriptor-bound: the implementation opens with `O_NOFOLLOW`, validates ownership/type/mode with `fstat()` on that descriptor, and reads JSON from that same descriptor. Replacing the pathname after `open()` therefore cannot substitute different locator or high-water bytes for the bytes that were validated.
+
+High-water schema v2 records both a per-version revision/digest record and a global `highestAcceptedVersion`. The global value is advanced only after a successful install/promotion. A candidate whose semantic version is below `highestAcceptedVersion` is rejected before updater operational state (`HostFacts`) is used for ordering. Consequently, lowering or replacing `currentRelease` in the ordinary updater-state file cannot authorize a version rollback. For the highest accepted version, the host-wide record separately enforces its highest accepted revision plus artifact/provenance digest binding.
+
+For root installs this anti-rollback state is root-owned `0600`, so an unprivileged local user cannot lower either floor. For an explicitly unprivileged installation, the selected state target is owned by that same UID and therefore shares that user's trust boundary; another UID still cannot select a divergent namespace because the locator remains root-owned.
 
 This design prevents a local unprivileged user from pre-creating a world-writable `/var/tmp` locator and feeding attacker-controlled anti-rollback state to a root installer.
 
