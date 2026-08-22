@@ -24,6 +24,22 @@ def _cp(stdout="", stderr="", returncode=0):
     return subprocess.CompletedProcess([], returncode, stdout, stderr)
 
 
+def _discovery(tmp_path):
+    return {
+        "root": tmp_path,
+        "electrumxVersion": "1.13.1",
+        "coreVersion": "4.8.0",
+        "storage": {
+            "ravencoin-data": "electrumx-ravencoin_ravencoin-data",
+            "ravencoin-config": "electrumx-ravencoin_ravencoin-config",
+            "electrumx-data": "electrumx-ravencoin_electrumx-data",
+            "rpc-secrets": "electrumx-ravencoin_rpc-secrets",
+            "raven-secrets": "electrumx-ravencoin_raven-secrets",
+        },
+        "electrumxHeight": 123,
+    }
+
+
 def test_legacy_compose_selection_preserves_named_volumes_without_storage_overlay():
     marker = {
         "schemaVersion": 1,
@@ -109,15 +125,10 @@ def test_discovery_refuses_bind_backed_volume(monkeypatch):
         legacy._inspect_named_volume("electrumx-ravencoin_ravencoin-data")
 
 
-def test_noninteractive_adoption_defaults_to_refusal(monkeypatch):
+def test_noninteractive_adoption_defaults_to_refusal(monkeypatch, tmp_path):
     monkeypatch.setattr(legacy.sys.stdin, "isatty", lambda: False)
     with pytest.raises(legacy.LegacyAdoptionError, match="requires a TTY"):
-        legacy._confirm({
-            "root": pathlib.Path("/tmp/node"),
-            "electrumxVersion": "1.13.1",
-            "coreVersion": "4.8.0",
-            "storage": {},
-        }, assume_yes=False)
+        legacy._confirm(_discovery(tmp_path), assume_yes=False)
 
 
 def test_runtime_hooks_route_string_storage_identity_to_named_volume_proofs(monkeypatch, tmp_path):
@@ -128,3 +139,91 @@ def test_runtime_hooks_route_string_storage_identity_to_named_volume_proofs(monk
     legacy.runtime.prove_candidate_storage_continuity(
         tmp_path, [legacy.runtime.BASE_COMPOSE], legacy._expected_data_volumes())
     assert calls and calls[0][0] == (legacy.runtime.BASE_COMPOSE,)
+
+
+def test_parser_requires_explicit_discover_or_apply_command():
+    parser = legacy.build_parser()
+    assert parser.parse_args(["discover"]).command == "discover"
+    parsed = parser.parse_args(["apply", "--yes-adopt-legacy"])
+    assert parsed.command == "apply"
+    assert parsed.yes_adopt_legacy is True
+
+
+def test_discover_command_is_read_only(monkeypatch, tmp_path):
+    monkeypatch.setattr(legacy.cli, "DEFAULT_INSTALL_ROOT", tmp_path)
+    monkeypatch.setattr(legacy, "discover_legacy_install", lambda root: _discovery(tmp_path))
+    monkeypatch.setattr(
+        legacy, "_write_adoption_marker",
+        lambda root, **kwargs: pytest.fail("discover must not write marker"))
+    monkeypatch.setattr(
+        legacy, "_preflight_pending_candidate",
+        lambda: pytest.fail("discover must not preflight/apply candidate"))
+    assert legacy.main(["discover"]) == 0
+    assert not (tmp_path / legacy.runtime.INSTALL_MARKER).exists()
+
+
+def test_apply_preflights_candidate_before_any_marker_mutation(monkeypatch, tmp_path):
+    events = []
+    monkeypatch.setattr(legacy.cli, "DEFAULT_INSTALL_ROOT", tmp_path)
+    monkeypatch.setattr(
+        legacy, "_preflight_pending_candidate",
+        lambda: events.append("candidate-preflight") or {"electrumxVersion": "1.13.2"})
+    monkeypatch.setattr(
+        legacy, "discover_legacy_install",
+        lambda root: events.append("discovery") or _discovery(tmp_path))
+    monkeypatch.setattr(legacy, "_confirm", lambda discovery, assume_yes: events.append("confirm"))
+
+    def write_marker(root, **kwargs):
+        events.append("marker")
+        legacy.runtime._write_private_json(root / legacy.runtime.INSTALL_MARKER, {
+            "schemaVersion": 1,
+            "electrumxVersion": "1.13.1",
+            "bootstrapChoice": "p2p",
+            "nodeMonitorEnabled": False,
+            "monitorControllerEnabled": False,
+            "storageMode": legacy.LEGACY_STORAGE_MODE,
+            "legacyAdoption": {
+                "source": "setup.sh",
+                "fromVersion": "1.13.1",
+                "storageMode": legacy.LEGACY_STORAGE_MODE,
+                "chainstrapRerunAllowed": False,
+            },
+        })
+
+    monkeypatch.setattr(legacy, "_write_adoption_marker", write_marker)
+    monkeypatch.setattr(legacy, "install_runtime_compatibility_hooks", lambda: events.append("hooks"))
+    monkeypatch.setattr(legacy.cli, "main", lambda args: events.append("apply") or 0)
+
+    assert legacy.main(["apply", "--yes-adopt-legacy"]) == 0
+    assert events == ["candidate-preflight", "discovery", "confirm", "marker", "hooks", "apply"]
+
+
+def test_missing_candidate_refuses_before_marker_write(monkeypatch, tmp_path):
+    monkeypatch.setattr(legacy.cli, "DEFAULT_INSTALL_ROOT", tmp_path)
+    monkeypatch.setattr(
+        legacy, "_preflight_pending_candidate",
+        lambda: (_ for _ in ()).throw(legacy.LegacyAdoptionError("no pending candidate")))
+    monkeypatch.setattr(
+        legacy, "_write_adoption_marker",
+        lambda root, **kwargs: pytest.fail("marker must not be written without candidate"))
+    assert legacy.main(["apply", "--yes-adopt-legacy"]) == 1
+    assert not (tmp_path / legacy.runtime.INSTALL_MARKER).exists()
+
+
+def test_failed_apply_removes_marker_created_by_same_invocation(monkeypatch, tmp_path):
+    monkeypatch.setattr(legacy.cli, "DEFAULT_INSTALL_ROOT", tmp_path)
+    monkeypatch.setattr(legacy, "_preflight_pending_candidate", lambda: {"electrumxVersion": "1.13.2"})
+    monkeypatch.setattr(legacy, "discover_legacy_install", lambda root: _discovery(tmp_path))
+    monkeypatch.setattr(legacy, "_confirm", lambda discovery, assume_yes: None)
+    monkeypatch.setattr(legacy, "install_runtime_compatibility_hooks", lambda: None)
+    monkeypatch.setattr(legacy.cli, "main", lambda args: 1)
+
+    assert legacy.main(["apply", "--yes-adopt-legacy"]) == 1
+    assert not (tmp_path / legacy.runtime.INSTALL_MARKER).exists()
+
+
+def test_marker_rollback_refuses_to_remove_promoted_or_unknown_marker(tmp_path):
+    legacy._write_adoption_marker(tmp_path, electrumx_version=legacy.TARGET_ELECTRUMX_VERSION)
+    with pytest.raises(legacy.LegacyAdoptionError, match="refusing to remove"):
+        legacy._remove_created_adoption_marker(tmp_path)
+    assert (tmp_path / legacy.runtime.INSTALL_MARKER).exists()
