@@ -26,6 +26,8 @@ The operator must perform the transition explicitly:
 
 This is a deliberate trust discontinuity. A compromised retired signing key therefore cannot authorize the new root of trust.
 
+Legacy updater state is not silently upgraded into a revision-aware identity. If an existing state file has a `currentRelease`, `lastKnownGoodRelease`, or pending manifest that lacks authenticated `artifact_revision`, `artifactDigest`, or `provenanceDigest` identity, the 1.13.2 state loader refuses it. It does not invent `artifact_revision = 0`. The only supported way forward is the separately authenticated manual trust transition above: authenticate the replacement public key out of band, verify the complete 1.13.2 v2 release identity, and establish fresh revision-aware operational/high-water state from that verified release.
+
 ## Manifest v2 and `artifact_revision`
 
 Manifest schema v2 adds the signed fields `artifact_revision` and `provenanceDigest`.
@@ -41,7 +43,7 @@ Release identity is ordered first by `electrumxVersion`, then by `artifact_revis
 - missing or malformed digest data is a refusal and can never be classified as sameness;
 - only the same version, revision, artifact digest and provenance digest is the same artifact identity.
 
-There is one canonical ordering implementation in `core-safety/scripts/artifact_revision.py`. Updater eligibility delegates to that implementation rather than maintaining a second version/revision comparison.
+There is one canonical ordering implementation in `core-safety/scripts/electrumx_core_safety/artifact_revision.py`. The legacy top-level `artifact_revision` module is only an alias to that same Python module object; it defines no independent enums or ordering policy. Updater eligibility delegates to the canonical implementation rather than maintaining a second version/revision comparison.
 
 A revision-only promotion is informational for an already-running node. It must not stop services, rebuild images, reindex Ravencoin Core, alter databases, or otherwise change the running node. Only the verified release/high-water records advance.
 
