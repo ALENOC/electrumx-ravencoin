@@ -16,12 +16,14 @@ import dataclasses
 import datetime
 import json
 import os
+import re
 import tempfile
 from typing import Optional
 
 STATE_SCHEMA_VERSION = 3
 PREVIOUS_STATE_SCHEMA_VERSION = 2
 LEGACY_STATE_SCHEMA_VERSION = 1
+SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 @dataclasses.dataclass
@@ -50,12 +52,32 @@ class UpdateState:
             return None
         if not isinstance(value, dict):
             raise ValueError("release state must be an object")
+
         migrated = dict(value)
-        if schema_version < STATE_SCHEMA_VERSION:
-            migrated.setdefault("artifact_revision", 0)
-        revision = migrated.get("artifact_revision")
+        required_identity = (
+            "electrumxVersion",
+            "artifact_revision",
+            "artifactDigest",
+            "provenanceDigest",
+        )
+        missing = [field for field in required_identity if field not in migrated]
+        if missing:
+            if schema_version < STATE_SCHEMA_VERSION:
+                raise ValueError(
+                    "legacy updater state lacks authenticated revision-aware release identity; "
+                    "manual 1.13.1 -> 1.13.2 trust transition is required")
+            raise ValueError(f"release state is missing identity field(s): {missing}")
+
+        version = migrated["electrumxVersion"]
+        if not isinstance(version, str) or not version:
+            raise ValueError("release electrumxVersion must be a non-empty string")
+        revision = migrated["artifact_revision"]
         if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
             raise ValueError("release artifact_revision must be a non-negative integer")
+        for field in ("artifactDigest", "provenanceDigest"):
+            if not isinstance(migrated[field], str) or \
+                    SHA256_RE.fullmatch(migrated[field]) is None:
+                raise ValueError(f"release {field} must be sha256:<64 lowercase hex>")
         return migrated
 
     @classmethod
