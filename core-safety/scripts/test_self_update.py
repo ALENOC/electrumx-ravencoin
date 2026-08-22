@@ -32,10 +32,38 @@ from update_decision import (
 )
 from update_state import UpdateState, load_state, save_state
 
+CURRENT_ARTIFACT_DIGEST = "sha256:" + "a" * 64
+CURRENT_PROVENANCE_DIGEST = "sha256:" + "b" * 64
+CANDIDATE_PROVENANCE_DIGEST = "sha256:" + "2" * 64
+
+
+def _current_release(version="1.2.0") -> dict:
+    return {
+        "electrumxVersion": version,
+        "artifact_revision": 0,
+        "artifactDigest": CURRENT_ARTIFACT_DIGEST,
+        "provenanceDigest": CURRENT_PROVENANCE_DIGEST,
+    }
+
+
+def _empty_high_water() -> dict:
+    return {
+        "schemaVersion": 2,
+        "highestAcceptedVersion": None,
+        "releases": {},
+    }
+
 
 def _host(**overrides) -> HostFacts:
-    base = dict(architecture="linux/amd64", installed_updater_version="1.0.0",
-                current_electrumx_version="1.2.0", current_core_commit="a" * 40)
+    base = dict(
+        architecture="linux/amd64",
+        installed_updater_version="1.0.0",
+        current_electrumx_version="1.2.0",
+        current_core_commit="a" * 40,
+        current_artifact_revision=0,
+        current_artifact_digest=CURRENT_ARTIFACT_DIGEST,
+        current_provenance_digest=CURRENT_PROVENANCE_DIGEST,
+    )
     base.update(overrides)
     return HostFacts(**base)
 
@@ -47,8 +75,12 @@ def _signed_manifest(key_pair, *, core_commit="c" * 40, architecture="linux/amd6
                      db_schema=1, auto_update_eligible=True):
         private_key, public_bytes = key_pair
         body = um.build_manifest(
-            electrumx_version=electrumx_version, channel=channel,
-            artifact_digest=artifact_digest, architecture=architecture,
+            electrumx_version=electrumx_version,
+            artifact_revision=0,
+            channel=channel,
+            artifact_digest=artifact_digest,
+            provenance_digest=CANDIDATE_PROVENANCE_DIGEST,
+            architecture=architecture,
             core_version="4.8.0", core_repository="RavenProject/Ravencoin",
             core_tag="v4.8.0", core_commit=core_commit,
             certification_report_digest=cert_digest, safe_core_policy_version=3,
@@ -99,33 +131,48 @@ class ConsensusImpactClassificationTests(unittest.TestCase):
 class EligibilityTests(unittest.TestCase):
 
     def test_newer_stable_eligible(self):
-        d = evaluate_eligibility(auto_update_mode="stable", channel="stable",
-                                 current_version="1.2.0", candidate_version="1.3.0",
-                                 candidate_is_prerelease=False)
+        d = evaluate_eligibility(
+            auto_update_mode="stable", channel="stable", host=_host(),
+            candidate_version="1.3.0", candidate_is_prerelease=False,
+            candidate_revision=0,
+            candidate_artifact_digest="sha256:" + "d" * 64,
+            candidate_provenance_digest=CANDIDATE_PROVENANCE_DIGEST)
         self.assertEqual(d.verdict, EligibilityVerdict.ELIGIBLE)
 
     def test_same_version_ignored(self):
-        d = evaluate_eligibility(auto_update_mode="stable", channel="stable",
-                                 current_version="1.2.0", candidate_version="1.2.0",
-                                 candidate_is_prerelease=False)
-        self.assertEqual(d.verdict, EligibilityVerdict.IGNORED_SAME_VERSION)
+        d = evaluate_eligibility(
+            auto_update_mode="stable", channel="stable", host=_host(),
+            candidate_version="1.2.0", candidate_is_prerelease=False,
+            candidate_revision=0,
+            candidate_artifact_digest=CURRENT_ARTIFACT_DIGEST,
+            candidate_provenance_digest=CURRENT_PROVENANCE_DIGEST)
+        self.assertEqual(d.verdict, EligibilityVerdict.IGNORED_SAME_ARTIFACT)
 
     def test_older_refused(self):
-        d = evaluate_eligibility(auto_update_mode="stable", channel="stable",
-                                 current_version="1.2.0", candidate_version="1.1.0",
-                                 candidate_is_prerelease=False)
+        d = evaluate_eligibility(
+            auto_update_mode="stable", channel="stable", host=_host(),
+            candidate_version="1.1.0", candidate_is_prerelease=False,
+            candidate_revision=0,
+            candidate_artifact_digest="sha256:" + "d" * 64,
+            candidate_provenance_digest=CANDIDATE_PROVENANCE_DIGEST)
         self.assertEqual(d.verdict, EligibilityVerdict.REFUSED_OLDER_VERSION)
 
     def test_prerelease_refused_on_stable_channel(self):
-        d = evaluate_eligibility(auto_update_mode="stable", channel="stable",
-                                 current_version="1.2.0", candidate_version="1.3.0",
-                                 candidate_is_prerelease=True)
+        d = evaluate_eligibility(
+            auto_update_mode="stable", channel="stable", host=_host(),
+            candidate_version="1.3.0", candidate_is_prerelease=True,
+            candidate_revision=0,
+            candidate_artifact_digest="sha256:" + "d" * 64,
+            candidate_provenance_digest=CANDIDATE_PROVENANCE_DIGEST)
         self.assertEqual(d.verdict, EligibilityVerdict.REFUSED_PRERELEASE_ON_STABLE_CHANNEL)
 
     def test_auto_update_off_refuses_everything(self):
-        d = evaluate_eligibility(auto_update_mode="off", channel="stable",
-                                 current_version="1.2.0", candidate_version="1.3.0",
-                                 candidate_is_prerelease=False)
+        d = evaluate_eligibility(
+            auto_update_mode="off", channel="stable", host=_host(),
+            candidate_version="1.3.0", candidate_is_prerelease=False,
+            candidate_revision=0,
+            candidate_artifact_digest="sha256:" + "d" * 64,
+            candidate_provenance_digest=CANDIDATE_PROVENANCE_DIGEST)
         self.assertEqual(d.verdict, EligibilityVerdict.REFUSED_AUTO_UPDATE_OFF)
 
 
@@ -205,8 +252,11 @@ class VerificationTests(unittest.TestCase):
     def test_rollback_safe_cannot_be_true_with_irreversible_migration(self):
         with self.assertRaises(um.ManifestError):
             um.build_manifest(
-                electrumx_version="1.3.0", channel="stable",
-                artifact_digest="sha256:" + "d" * 64, architecture="linux/amd64",
+                electrumx_version="1.3.0", artifact_revision=0,
+                channel="stable",
+                artifact_digest="sha256:" + "d" * 64,
+                provenance_digest=CANDIDATE_PROVENANCE_DIGEST,
+                architecture="linux/amd64",
                 core_version="4.8.0", core_repository="RavenProject/Ravencoin",
                 core_tag="v4.8.0", core_commit="c" * 40,
                 certification_report_digest="c" * 64, safe_core_policy_version=3,
@@ -285,7 +335,7 @@ class StateAtomicWriteTests(unittest.TestCase):
     def test_save_then_load_round_trips(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "state.json")
-            state = UpdateState(current_release={"electrumxVersion": "1.2.0"})
+            state = UpdateState(current_release=_current_release())
             save_state(path, state)
             loaded = load_state(path)
             self.assertEqual(loaded.current_release["electrumxVersion"], "1.2.0")
@@ -314,6 +364,7 @@ class RunCheckAndApplyIntegrationTests(unittest.TestCase):
         self.trusted_keys = {um.key_id_for(public_bytes): public_bytes}
         self.host = _host()
         self.safe_commits = frozenset({"c" * 40})
+        self.high_water = _empty_high_water()
 
     def _candidate(self, **overrides):
         signed, _, _ = _signed_manifest(self.key_pair, **overrides)
@@ -323,11 +374,12 @@ class RunCheckAndApplyIntegrationTests(unittest.TestCase):
         return ReleaseCandidate(**defaults)
 
     def test_successful_check_then_apply_promotes(self):
-        state = UpdateState(current_release={"electrumxVersion": "1.2.0"})
+        state = UpdateState(current_release=_current_release())
         source = ReleaseSource(list_candidates=lambda: [self._candidate()])
         state = run_check(state=state, source=source, host=self.host,
                           trusted_keys=self.trusted_keys,
                           safe_core_certified_commits=self.safe_commits,
+                          artifact_high_water=self.high_water,
                           auto_update_mode="stable")
         self.assertEqual(state.pending_candidate["_verificationVerdict"],
                          VerificationVerdict.VERIFIED.value)
@@ -346,11 +398,12 @@ class RunCheckAndApplyIntegrationTests(unittest.TestCase):
         self.assertEqual(state.current_release["electrumxVersion"], "1.3.0")
 
     def test_health_check_failure_triggers_rollback(self):
-        state = UpdateState(current_release={"electrumxVersion": "1.2.0"})
+        state = UpdateState(current_release=_current_release())
         source = ReleaseSource(list_candidates=lambda: [self._candidate(rollback_safe=True)])
         state = run_check(state=state, source=source, host=self.host,
                           trusted_keys=self.trusted_keys,
                           safe_core_certified_commits=self.safe_commits,
+                          artifact_high_water=self.high_water,
                           auto_update_mode="stable")
         hooks = ApplyHooks(
             stop_services=lambda: None, switch_atomically=lambda m: None,
@@ -363,12 +416,13 @@ class RunCheckAndApplyIntegrationTests(unittest.TestCase):
         self.assertEqual(state.current_release["electrumxVersion"], "1.2.0")
 
     def test_rollback_unsafe_migration_blocks_blind_rollback(self):
-        state = UpdateState(current_release={"electrumxVersion": "1.2.0"})
+        state = UpdateState(current_release=_current_release())
         source = ReleaseSource(
             list_candidates=lambda: [self._candidate(rollback_safe=False)])
         state = run_check(state=state, source=source, host=self.host,
                           trusted_keys=self.trusted_keys,
                           safe_core_certified_commits=self.safe_commits,
+                          artifact_high_water=self.high_water,
                           auto_update_mode="stable")
         rollback_called = []
         hooks = ApplyHooks(
@@ -386,12 +440,13 @@ class RunCheckAndApplyIntegrationTests(unittest.TestCase):
         self.assertEqual(state.current_release["electrumxVersion"], "1.2.0")
 
     def test_consensus_change_candidate_requires_explicit_approval(self):
-        state = UpdateState(current_release={"electrumxVersion": "1.2.0"})
+        state = UpdateState(current_release=_current_release())
         source = ReleaseSource(
             list_candidates=lambda: [self._candidate(consensus_impact=True)])
         state = run_check(state=state, source=source, host=self.host,
                           trusted_keys=self.trusted_keys,
                           safe_core_certified_commits=self.safe_commits,
+                          artifact_high_water=self.high_water,
                           auto_update_mode="stable")
         # run_check's pending dict does not carry consensusImpact at the top
         # level; apply_pending_candidate reads it off candidate["manifest"].
@@ -408,11 +463,12 @@ class RunCheckAndApplyIntegrationTests(unittest.TestCase):
                          if False else ApplyVerdict.REFUSED_CONSENSUS_CHANGE_NOT_APPROVED)
 
     def test_github_unreachable_leaves_node_untouched(self):
-        state = UpdateState(current_release={"electrumxVersion": "1.2.0"})
+        state = UpdateState(current_release=_current_release())
         source = ReleaseSource(list_candidates=lambda: [self._candidate()], reachable=False)
         state = run_check(state=state, source=source, host=self.host,
                           trusted_keys=self.trusted_keys,
                           safe_core_certified_commits=self.safe_commits,
+                          artifact_high_water=self.high_water,
                           auto_update_mode="stable")
         self.assertIsNone(state.pending_candidate)
         self.assertEqual(state.current_release["electrumxVersion"], "1.2.0")
