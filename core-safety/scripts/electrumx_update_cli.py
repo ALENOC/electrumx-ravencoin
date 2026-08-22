@@ -29,7 +29,7 @@ from typing import Callable, Optional, Sequence
 
 from packaging.version import Version
 
-import artifact_revision
+from electrumx_core_safety import artifact_revision
 import policy as core_policy
 import update_apply
 import update_audit
