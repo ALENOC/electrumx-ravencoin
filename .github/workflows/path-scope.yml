@@ -1,0 +1,41 @@
+name: Protected path scope
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  path-scope:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out pull request history without credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify protected repository boundaries with trusted verifier
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$BASE_SHA" != "$HEAD_SHA"
+          VERIFIER_PATH='core-safety/scripts/verify_path_scope.py'
+          TRUSTED_VERIFIER="$RUNNER_TEMP/verify_path_scope.py"
+
+          if git cat-file -e "$BASE_SHA:$VERIFIER_PATH" 2>/dev/null; then
+            git show "$BASE_SHA:$VERIFIER_PATH" > "$TRUSTED_VERIFIER"
+          else
+            # One-time bootstrap only: the audited pre-gate base did not yet
+            # contain the verifier. No later base may execute the PR copy.
+            test "$BASE_SHA" = '6074ae4130e2aa1327f2daeb431875debfe40d1f'
+            git show "$HEAD_SHA:$VERIFIER_PATH" > "$TRUSTED_VERIFIER"
+          fi
+
+          chmod 0400 "$TRUSTED_VERIFIER"
+          python3 "$TRUSTED_VERIFIER" \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA"
