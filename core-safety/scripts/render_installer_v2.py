@@ -18,7 +18,10 @@ import re
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 INSTALLER = ROOT / "electrumx-ravencoin-install.py"
-REVISION_MODULE = ROOT / "core-safety" / "scripts" / "artifact_revision.py"
+REVISION_MODULE = (
+    ROOT / "core-safety" / "scripts" / "electrumx_core_safety" /
+    "artifact_revision.py"
+)
 RETIRED_UPDATE_PUBLIC_KEY_HEX = (
     "4dbeb6131495015b1c44d2d61f80d527217623e1b12dee8f34664509ee3d2b35"
 )
