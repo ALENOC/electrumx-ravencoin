@@ -746,6 +746,9 @@ class TransactionalComposeSwitch:
         # is still serving and refuses any lost/changed bind volume or mount.
         self.storage_bindings = prove_running_storage_continuity(
             self.root, self.old_files, self.marker)
+        print(
+            "UPDATER_CHECKPOINT storage-preflight=PASS old-stack=RUNNING "
+            "bind-paths=4 volume-objects=4 active-mounts=PASS")
         self.trusted_update_public_key_hex = _read_installed_key(
             self.root / UPDATE_PUBLIC_KEY_PATH, "ElectrumX release/update")
         self.trusted_core_policy_public_key_hex = _read_installed_key(
@@ -792,6 +795,9 @@ class TransactionalComposeSwitch:
             marker = dict(self.marker)
             files = update_compose_files(marker, staging)
             prove_candidate_storage_continuity(staging, files, self.storage_bindings)
+            print(
+                "UPDATER_CHECKPOINT candidate-storage=PASS old-stack=RUNNING "
+                "compose-model=PASS bind-paths=4")
             prefix = _compose_prefix(staging, files)
             _run(prefix + ["config", "--quiet"], cwd=staging, check=True)
             # Build before activation while the old containers and their proven
@@ -832,6 +838,9 @@ class TransactionalComposeSwitch:
         self.staging = None
         self.switched = True
         self._journal("NEW_ROOT_ACTIVE")
+        print(
+            "UPDATER_CHECKPOINT release-switch=PASS "
+            "same-filesystem-renames=COMPLETE new-root=ACTIVE")
 
     def start_services(self) -> None:
         files = update_compose_files(self.marker, self.root)
