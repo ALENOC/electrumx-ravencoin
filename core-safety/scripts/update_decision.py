@@ -24,7 +24,7 @@ from typing import Optional
 
 from packaging.version import InvalidVersion, Version
 
-import artifact_revision
+from electrumx_core_safety import artifact_revision
 
 AUTO_UPDATE_MODES = ("off", "notify", "stable", "security")
 EligibilityVerdict = artifact_revision.EligibilityVerdict
