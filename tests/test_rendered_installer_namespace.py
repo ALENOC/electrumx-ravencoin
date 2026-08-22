@@ -10,6 +10,8 @@ import importlib.util
 import pathlib
 import sys
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "core-safety" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -57,3 +59,29 @@ def test_embedded_revision_payload_is_byte_identical_to_source_tree_module(tmp_p
     # refactor from silently introducing drift.
     embedded = base64.b64decode(module._REVISION_MODULE_B64, validate=True)
     assert embedded == render_installer_v2.REVISION_MODULE.read_bytes()
+
+
+def test_qualification_candidate_mode_uses_only_embedded_production_roots(tmp_path):
+    module = _load_rendered_installer(tmp_path)
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    (candidate / module.QUALIFICATION_MANIFEST_FILE).write_text("{}", encoding="utf-8")
+    (candidate / module.QUALIFICATION_BUNDLE_FILE).write_bytes(b"bundle")
+
+    update_key, core_key, manifest_fetch, bundle_fetch = \
+        module.load_qualification_candidate(candidate)
+    assert update_key == module.RELEASE_PUBLIC_KEY_HEX
+    assert core_key == module.PRODUCTION_CORE_POLICY_PUBLIC_KEY_HEX
+    assert manifest_fetch("unused") == b"{}"
+    assert bundle_fetch("unused") == b"bundle"
+    assert "contrib/bootstrap/chainstrap_runtime.py" in module.REQUIRED_BUNDLE_PATHS
+    assert "docker/bootstrap/Dockerfile" in module.REQUIRED_BUNDLE_PATHS
+
+
+def test_qualification_and_ephemeral_local_validation_are_mutually_exclusive(tmp_path):
+    module = _load_rendered_installer(tmp_path)
+    with pytest.raises(SystemExit):
+        module.parse_args([
+            "--qualification-candidate-dir", str(tmp_path),
+            "--local-release-validation-dir", str(tmp_path),
+        ])
