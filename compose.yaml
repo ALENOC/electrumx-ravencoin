@@ -50,7 +50,7 @@ services:
       RAVEN_RPC_USER_FILE: /run/raven-secrets/raven_rpc_user
       RAVEN_RPC_PASSWORD_FILE: /run/raven-secrets/raven_rpc_password
       # This healthcheck is a readiness gate for ElectrumX, not merely an RPC
-      # liveness probe.  Defaults keep ElectrumX stopped/retrying until Core
+      # liveness probe. Defaults keep ElectrumX stopped/retrying until Core
       # has peers, a fresh tip, and is within two blocks of its best headers.
       RAVENCOIN_HEALTH_MAX_BLOCK_LAG: ${RAVENCOIN_HEALTH_MAX_BLOCK_LAG:-2}
       RAVENCOIN_HEALTH_MAX_TIP_AGE: ${RAVENCOIN_HEALTH_MAX_TIP_AGE:-1800}
@@ -64,8 +64,6 @@ services:
       - ravencoin-data:/var/lib/ravencoin
       - ravencoin-config:/var/lib/ravencoin-config
       - rpc-secrets:/run/raven-secrets:ro
-    # Reboot resilience: unlike on-failure:N, this survives daemon/host
-    # restarts and does not exhaust a finite retry budget after a blackout.
     restart: unless-stopped
     stop_grace_period: 30m
     init: true
@@ -87,7 +85,7 @@ services:
     build:
       context: .
       dockerfile: contrib/Dockerfile
-    image: alenoc/electrumx-ravencoin:1.13.1
+    image: alenoc/electrumx-ravencoin:1.13.2
     depends_on:
       ravencoin-core:
         condition: service_healthy
@@ -99,15 +97,6 @@ services:
       SERVICES: tcp://:50001,rpc://127.0.0.1:8000,rpc://${ELECTRUMX_MONITOR_ADMIN_IP:-172.29.81.2}:8001
       EVENT_LOOP_POLICY: uvloop
       CACHE_MB: ${ELECTRUMX_CACHE_MB:-1200}
-      # ElectrumX charges one cost unit per BANDWIDTH_UNIT_COST bytes sent and
-      # aggregates that cost per /24 client group.  At the upstream default of
-      # 500 a single large blockchain.scripthash.get_history reply (2.5 MB)
-      # costs 5,000, so two of them cross COST_SOFT_LIMIT and the server starts
-      # inserting REQUEST_SLEEP delays into ordinary wallet traffic.  Measured
-      # on the reference deployment: five consecutive 2.5 MB history queries
-      # held round-trip latency at 10 ms with this value, against 87 ms to
-      # 227 ms and no recovery at the default.  Request, subscription and
-      # merkle costs are untouched, so the CPU-side DoS ceiling is unchanged.
       BANDWIDTH_UNIT_COST: ${ELECTRUMX_BANDWIDTH_UNIT_COST:-5000}
       COST_SOFT_LIMIT: ${ELECTRUMX_COST_SOFT_LIMIT:-10000}
       COST_HARD_LIMIT: ${ELECTRUMX_COST_HARD_LIMIT:-100000}
@@ -117,11 +106,6 @@ services:
       RAVEN_RPC_PASSWORD_FILE: /run/raven-secrets/raven_rpc_password
       RAVENCOIN_DAEMON_HOST: ravencoin-core
       RAVENCOIN_DAEMON_PORT: 8766
-      # Where the bundled Core came from.  These values are the same ones the
-      # Core image build verifies by digest, so this deployment can honestly
-      # publish BUILD_IDENTITY_VERIFIED.  They are configuration, never read
-      # back from the running daemon, so a compromised daemon cannot choose its
-      # own identity.
       RAVENCOIN_SOURCE_REPOSITORY: RavenProject/Ravencoin
       RAVENCOIN_SOURCE_TAG: v4.8.0
       RAVENCOIN_SOURCE_COMMIT: 22549129888d02e0e08fcdb9f96f3c699167e774
@@ -137,9 +121,6 @@ services:
     volumes:
       - electrumx-data:/var/lib/electrumx/db
       - rpc-secrets:/run/raven-secrets:ro
-    # ElectrumX can legitimately exit while Core catches up after an abrupt
-    # reboot.  Retry indefinitely with Docker's backoff instead of giving up
-    # after five starts; the Core readiness gate prevents this on normal up.
     restart: unless-stopped
     stop_grace_period: 15m
     init: true
