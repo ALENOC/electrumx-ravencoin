@@ -102,22 +102,18 @@ class ReleaseSource:
     reachable: bool = True
 
 
-def _candidate_revision(body: Optional[dict]) -> Optional[int]:
-    if not isinstance(body, dict):
-        return None
-    value = body.get("artifact_revision")
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        return None
-    return value
-
-
 def run_check(*, state: UpdateState, source: ReleaseSource, host: HostFacts,
               trusted_keys: dict, safe_core_certified_commits: frozenset,
-              auto_update_mode: str, pre_pull: Callable[[dict], None] = None,
+              auto_update_mode: str, artifact_high_water: dict,
+              pre_pull: Callable[[dict], None] = None,
               safe_core_certification_digests: Optional[dict] = None,
-              verified_core_policy_version: Optional[int] = None,
-              artifact_high_water: Optional[dict] = None) -> UpdateState:
-    """Discover and verify candidates. Never installs or stops services."""
+              verified_core_policy_version: Optional[int] = None) -> UpdateState:
+    """Discover and verify candidates. Never installs or stops services.
+
+    Revision ordering is evaluated only after a schema-v2 manifest has
+    authenticated the candidate revision and digests. The host-wide high-water
+    is mandatory and is checked before operational HostFacts are consulted.
+    """
     if not source.reachable:
         record_check_result(
             state, pending_candidate=None,
@@ -127,70 +123,42 @@ def run_check(*, state: UpdateState, source: ReleaseSource, host: HostFacts,
     considered = []
     refused_reason = None
     for candidate in source.list_candidates():
-        # Cheap channel/version filter first. Same-version candidates are kept
-        # long enough to authenticate their artifact_revision from the manifest.
-        version_gate = evaluate_eligibility(
-            auto_update_mode=auto_update_mode,
-            channel=candidate.channel,
-            current_version=host.current_electrumx_version,
-            candidate_version=candidate.version,
-            candidate_is_prerelease=candidate.is_prerelease,
-        )
-        if version_gate.verdict not in (
-                EligibilityVerdict.ELIGIBLE,
-                EligibilityVerdict.IGNORED_SAME_VERSION):
-            continue
-
         manifest_body = None
-        signature_valid = False
         if candidate.signed_manifest_document is not None:
             try:
-                manifest_body = verify_manifest(candidate.signed_manifest_document, trusted_keys)
-                signature_valid = True
+                manifest_body = verify_manifest(
+                    candidate.signed_manifest_document, trusted_keys)
             except ManifestError as exc:
                 refused_reason = f"manifest verification failed: {exc}"
-
         if manifest_body is None:
-            verification = evaluate_verification(
-                manifest=None, signature_valid=False,
-                downloaded_artifact_digest=candidate.artifact_digest,
-                host=host, safe_core_certified_commits=safe_core_certified_commits,
-                safe_core_certification_digests=safe_core_certification_digests,
-                verified_core_policy_version=verified_core_policy_version)
-            considered.append((candidate, version_gate, verification, None))
             continue
 
         if manifest_body.get("electrumxVersion") != candidate.version:
             refused_reason = "release tag version disagrees with signed manifest"
             continue
-        if artifact_high_water is not None:
-            try:
-                artifact_revision.enforce_high_water(artifact_high_water, manifest_body)
-            except artifact_revision.RevisionSecurityError as exc:
-                refused_reason = str(exc)
-                continue
+        try:
+            artifact_revision.enforce_high_water(artifact_high_water, manifest_body)
+        except artifact_revision.RevisionSecurityError as exc:
+            refused_reason = str(exc)
+            continue
 
         eligibility = evaluate_eligibility(
             auto_update_mode=auto_update_mode,
             channel=manifest_body.get("channel"),
-            current_version=host.current_electrumx_version,
+            host=host,
             candidate_version=manifest_body.get("electrumxVersion"),
             candidate_is_prerelease=candidate.is_prerelease,
-            current_revision=host.current_artifact_revision,
-            candidate_revision=_candidate_revision(manifest_body),
-            current_artifact_digest=host.current_artifact_digest,
+            candidate_revision=manifest_body.get("artifact_revision"),
             candidate_artifact_digest=manifest_body.get("artifactDigest"),
+            candidate_provenance_digest=manifest_body.get("provenanceDigest"),
         )
         if eligibility.verdict != EligibilityVerdict.ELIGIBLE:
-            if eligibility.verdict in (
-                    EligibilityVerdict.REFUSED_OLDER_REVISION,
-                    EligibilityVerdict.REFUSED_ARTIFACT_EQUIVOCATION):
-                refused_reason = eligibility.reason or eligibility.verdict.value
+            refused_reason = eligibility.reason or eligibility.verdict.value
             continue
 
         verification = evaluate_verification(
             manifest=manifest_body,
-            signature_valid=signature_valid,
+            signature_valid=True,
             downloaded_artifact_digest=candidate.artifact_digest,
             host=host,
             safe_core_certified_commits=safe_core_certified_commits,
@@ -211,8 +179,8 @@ def run_check(*, state: UpdateState, source: ReleaseSource, host: HostFacts,
     best_candidate, eligibility, verification, manifest_body = max(
         pool,
         key=lambda item: (
-            Version(item[0].version),
-            _candidate_revision(item[3]) if _candidate_revision(item[3]) is not None else -1,
+            Version(item[3]["electrumxVersion"]),
+            item[3]["artifact_revision"],
         ))
 
     pending = {
@@ -430,18 +398,15 @@ def _load_current_host_facts(state: UpdateState) -> HostFacts:
     schema = db.get("schemaVersion", 1)
     if not isinstance(schema, int) or isinstance(schema, bool) or schema < 1:
         schema = 1
-    revision = current.get("artifact_revision", 0)
-    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
-        revision = 0
-    digest = current.get("artifactDigest")
     return HostFacts(
         architecture=_detected_architecture(),
         installed_updater_version=UPDATER_VERSION,
         current_electrumx_version=current.get("electrumxVersion", "0.0.0"),
         current_core_commit=current.get("coreCommit", ""),
         current_db_schema=schema,
-        current_artifact_revision=revision,
-        current_artifact_digest=digest if isinstance(digest, str) else None,
+        current_artifact_revision=current.get("artifact_revision"),
+        current_artifact_digest=current.get("artifactDigest"),
+        current_provenance_digest=current.get("provenanceDigest"),
     )
 
 
@@ -525,13 +490,12 @@ def _revalidate_pending_for_apply(state: UpdateState, resolved_policy,
     eligibility = evaluate_eligibility(
         auto_update_mode="stable",
         channel=fresh_body.get("channel"),
-        current_version=host.current_electrumx_version,
+        host=host,
         candidate_version=fresh_body.get("electrumxVersion"),
         candidate_is_prerelease=False,
-        current_revision=host.current_artifact_revision,
         candidate_revision=fresh_body.get("artifact_revision"),
-        current_artifact_digest=host.current_artifact_digest,
         candidate_artifact_digest=fresh_body.get("artifactDigest"),
+        candidate_provenance_digest=fresh_body.get("provenanceDigest"),
     )
     if eligibility.verdict != EligibilityVerdict.ELIGIBLE:
         raise ManifestError(
