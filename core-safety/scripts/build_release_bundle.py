@@ -6,8 +6,9 @@
 
 The bundle is not trusted by itself. Its SHA-256 becomes ``artifactDigest`` in
 our separately signed ElectrumX release manifest. The optional Node Monitor is
-vendored at one exact reviewed commit so installation never executes the head
-of a mutable branch.
+vendored at one exact reviewed commit. For the 1.13.2 trust-root migration the
+builder may replace only the bundled copy of the release/update public key; the
+tracked repository trust-root file remains untouched and historical.
 """
 
 from __future__ import annotations
@@ -18,13 +19,16 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import stat
 import subprocess
 import tarfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PIN_FILE = ROOT / "release" / "install-sources.json"
+UPDATE_KEY_PATH = "core-safety/production/update-signing-public-key.hex"
 MAX_FILE_BYTES = 256 * 1024 * 1024
+RAW_KEY_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class BundleError(RuntimeError):
@@ -100,18 +104,17 @@ def load_pin() -> dict:
 
 
 def build_bundle(*, monitor_dir: pathlib.Path, output: pathlib.Path,
-                 version: str) -> tuple[str, dict]:
+                 version: str, update_public_key_hex: str | None = None) -> tuple[str, dict]:
     pin = load_pin()
     monitor = pin["nodeMonitor"]
+    if update_public_key_hex is not None and not RAW_KEY_RE.fullmatch(update_public_key_hex):
+        raise BundleError("replacement update public key is malformed")
 
     repo_head = run_git(ROOT, "rev-parse", "HEAD")
     monitor_head = run_git(monitor_dir, "rev-parse", "HEAD")
     if monitor_head != monitor["commit"]:
         raise BundleError(
             f"Node Monitor checkout is {monitor_head}, expected {monitor['commit']}")
-
-    # A dirty tracked tree would make the bundle bytes differ from the commit
-    # identity recorded below. Untracked files are excluded by git ls-files.
     if run_git(ROOT, "status", "--porcelain", "--untracked-files=no"):
         raise BundleError("ElectrumX tracked worktree is dirty")
     if run_git(monitor_dir, "status", "--porcelain", "--untracked-files=no"):
@@ -135,14 +138,15 @@ def build_bundle(*, monitor_dir: pathlib.Path, output: pathlib.Path,
         with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as zipped:
             with tarfile.open(fileobj=zipped, mode="w", format=tarfile.PAX_FORMAT) as archive:
                 for relative in repo_files:
-                    # The bundle receives generated metadata with the final
-                    # source/monitor identities; do not allow a tracked file to
-                    # shadow that synthetic trust record.
-                    if relative.as_posix() == "release-install-metadata.json":
+                    relative_name = relative.as_posix()
+                    if relative_name == "release-install-metadata.json":
                         raise BundleError("tracked file shadows generated release metadata")
                     source = ROOT / relative
+                    data = source.read_bytes()
+                    if relative_name == UPDATE_KEY_PATH and update_public_key_hex is not None:
+                        data = (update_public_key_hex + "\n").encode("ascii")
                     add_bytes(
-                        archive, relative.as_posix(), source.read_bytes(),
+                        archive, relative_name, data,
                         mode=normalized_mode(source))
 
                 prefix = monitor["bundledPath"].rstrip("/")
@@ -166,11 +170,12 @@ def main() -> int:
     parser.add_argument("--monitor-dir", required=True, type=pathlib.Path)
     parser.add_argument("--output", required=True, type=pathlib.Path)
     parser.add_argument("--version", required=True)
+    parser.add_argument("--update-public-key-hex")
     args = parser.parse_args()
 
     digest, metadata = build_bundle(
         monitor_dir=args.monitor_dir.resolve(), output=args.output.resolve(),
-        version=args.version)
+        version=args.version, update_public_key_hex=args.update_public_key_hex)
     print(f"bundle={args.output}")
     print(f"sha256={digest}")
     print(f"sourceCommit={metadata['sourceCommit']}")
