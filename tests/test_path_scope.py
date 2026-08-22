@@ -42,6 +42,8 @@ ALLOWED_GATEWAY_HOSTS = frozenset((\"ipfs.io\",))
     write(tmp_path, "docker/core/Dockerfile", "FROM scratch\n")
     write(tmp_path, "core-safety/production/update-signing-public-key.hex", "a" * 64 + "\n")
     write(tmp_path, "core-safety/production/core-policy-signing-public-key.hex", "b" * 64 + "\n")
+    write(tmp_path, "compose.yaml", "services: {}\n")
+    write(tmp_path, "compose.storage.yaml", "volumes: {}\n")
     base = commit(tmp_path, "base")
     monkeypatch.chdir(tmp_path)
     return tmp_path, base
@@ -100,6 +102,75 @@ ALLOWED_GATEWAY_HOSTS = frozenset((\"dweb.link\",))
     head = commit(repo, "change gateway policy")
     with pytest.raises(scope.ScopeViolation, match="gateway allowlist"):
         scope.verify(base, head)
+
+
+def test_compose_change_is_refused_until_exact_logged_approval(repository, monkeypatch):
+    repo, base = repository
+    write(repo, "compose.yaml", "services:\n  electrumx: {}\n")
+    head = commit(repo, "change protected compose")
+
+    monkeypatch.setattr(scope, "find_maintainer_approval", lambda _base, _digest: None)
+    with pytest.raises(scope.ScopeViolation, match="no matching logged maintainer approval"):
+        scope.verify(base, head)
+
+    digest = scope.protected_diff_digest(base, head, {"compose.yaml"})
+    approval = scope.MaintainerApproval(
+        login="ALENOC", url="https://github.invalid/comment/1", base=base, digest=digest)
+    monkeypatch.setattr(
+        scope, "find_maintainer_approval",
+        lambda candidate_base, candidate_digest: approval
+        if candidate_base == base and candidate_digest == digest else None)
+    scope.verify(base, head)
+
+
+def test_protected_diff_change_invalidates_prior_approval(repository, monkeypatch):
+    repo, base = repository
+    write(repo, "compose.yaml", "services:\n  electrumx: {}\n")
+    first = commit(repo, "first protected compose")
+    first_digest = scope.protected_diff_digest(base, first, {"compose.yaml"})
+    approval = scope.MaintainerApproval(
+        login="ALENOC", url="https://github.invalid/comment/1",
+        base=base, digest=first_digest)
+    monkeypatch.setattr(
+        scope, "find_maintainer_approval",
+        lambda candidate_base, candidate_digest: approval
+        if candidate_base == base and candidate_digest == first_digest else None)
+    scope.verify(base, first)
+
+    write(repo, "compose.yaml", "services:\n  electrumx:\n    restart: always\n")
+    second = commit(repo, "change protected diff after approval")
+    assert scope.protected_diff_digest(base, second, {"compose.yaml"}) != first_digest
+    with pytest.raises(scope.ScopeViolation, match="no matching logged maintainer approval"):
+        scope.verify(base, second)
+
+
+def test_storage_overlay_is_protected(repository, monkeypatch):
+    repo, base = repository
+    write(repo, "compose.storage.yaml", "volumes:\n  ravencoin-data: {}\n")
+    head = commit(repo, "change storage compose")
+    monkeypatch.setattr(scope, "find_maintainer_approval", lambda _base, _digest: None)
+    with pytest.raises(scope.ScopeViolation, match="no matching logged maintainer approval"):
+        scope.verify(base, head)
+
+
+def test_verifier_policy_change_is_in_approval_digest(repository, monkeypatch):
+    repo, base = repository
+    write(repo, scope.SCRIPT_PATH, "# new policy\n")
+    write(repo, "compose.yaml", "services:\n  electrumx: {}\n")
+    head = commit(repo, "change gate and compose")
+    paths = {scope.SCRIPT_PATH, "compose.yaml"}
+    digest = scope.protected_diff_digest(base, head, paths)
+    observed = []
+
+    def approve(candidate_base, candidate_digest):
+        observed.append((candidate_base, candidate_digest))
+        return scope.MaintainerApproval(
+            login="ALENOC", url="https://github.invalid/comment/2",
+            base=candidate_base, digest=candidate_digest)
+
+    monkeypatch.setattr(scope, "find_maintainer_approval", approve)
+    scope.verify(base, head)
+    assert observed == [(base, digest)]
 
 
 def test_unrelated_regular_file_change_is_allowed(repository):
