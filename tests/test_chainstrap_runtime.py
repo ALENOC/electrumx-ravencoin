@@ -226,8 +226,13 @@ def test_core_reindex_script_requires_release_floor_ancestry():
     assert script.count("-connect=0") >= 2
 
 
-def test_bootstrap_image_uses_runtime_resolver_not_pinned_manifest():
+def test_bootstrap_image_uses_runtime_resolver_with_bound_release_floor():
     dockerfile = (ROOT / "docker" / "bootstrap" / "Dockerfile").read_text(encoding="utf-8")
     assert "chainstrap_runtime.py" in dockerfile
-    assert "rvn-mainnet-2026-08-19.json" not in dockerfile
+    assert "chainstrap_entrypoint.py" in dockerfile
+    assert "manifests/rvn-mainnet-2026-08-19.json" in dockerfile
+    assert "/opt/electrumx-ravencoin/bootstrap/release-floor.json" in dockerfile
+    assert "CHAINSTRAP_RELEASE_FLOOR=/opt/electrumx-ravencoin/bootstrap/release-floor.json" in dockerfile
+    assert 'ENTRYPOINT ["chainstrap-bootstrap"]' in dockerfile
     assert 'CMD ["--datadir", "/var/lib/ravencoin"]' in dockerfile
+    assert "--manifest" not in dockerfile
