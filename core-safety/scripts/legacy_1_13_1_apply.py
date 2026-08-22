@@ -31,6 +31,7 @@ import electrumx_update_cli as cli
 import update_runtime as runtime
 
 LEGACY_ELECTRUMX_VERSION = "1.13.1"
+TARGET_ELECTRUMX_VERSION = "1.13.2"
 LEGACY_CORE_VERSION = "4.8.0"
 CONSENT_TEXT = "ADOPT LEGACY 1.13.1"
 LEGACY_STORAGE_MODE = "named-volumes"
@@ -124,7 +125,8 @@ def _rendered_named_model(root: Path) -> dict:
     volumes = model.get("volumes")
     if not isinstance(volumes, dict):
         raise LegacyAdoptionError("legacy Compose model has no volumes object")
-    for logical in set(LEGACY_DATA_MOUNTS["ravencoin-core"]) | set(LEGACY_DATA_MOUNTS["electrumx"]):
+    required = set(LEGACY_DATA_MOUNTS["ravencoin-core"]) | set(LEGACY_DATA_MOUNTS["electrumx"])
+    for logical in required:
         definition = volumes.get(logical)
         if definition is None:
             raise LegacyAdoptionError(f"legacy Compose model lost volume {logical}")
@@ -199,10 +201,10 @@ def discover_legacy_install(root: Path) -> dict:
     }
 
 
-def _write_adoption_marker(root: Path) -> None:
+def _write_adoption_marker(root: Path, *, electrumx_version: str = LEGACY_ELECTRUMX_VERSION) -> None:
     runtime._write_private_json(root / runtime.INSTALL_MARKER, {
         "schemaVersion": 1,
-        "electrumxVersion": LEGACY_ELECTRUMX_VERSION,
+        "electrumxVersion": electrumx_version,
         "bootstrapChoice": "p2p",
         "nodeMonitorEnabled": False,
         "monitorControllerEnabled": False,
@@ -261,6 +263,10 @@ def _prove_candidate_named_storage(root: Path, files: Sequence[str], expected: d
     if expected != _expected_data_volumes():
         raise LegacyAdoptionError("candidate named-volume identities differ from the running node")
     _prove_named_volume_objects(expected)
+    # setup.sh may emit its own marker in the staged tree. Replace only the
+    # staged marker after storage proof so the activated 1.13.2 root retains
+    # the explicit legacy storage mode for rollback and future updates.
+    _write_adoption_marker(root, electrumx_version=TARGET_ELECTRUMX_VERSION)
 
 
 def install_runtime_compatibility_hooks() -> None:
