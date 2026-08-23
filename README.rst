@@ -7,6 +7,15 @@ asset support, an exact official Ravencoin Core trust model, verified bootstrap
 options, deployment tooling and additional safety checks introduced after the
 August 2026 consensus incident.
 
+**Current release: 1.13.5.** It supersedes 1.13.1, which is no longer the
+recommended release. New installations should use the 1.13.5 installer, and
+existing 1.13.1 nodes should move to 1.13.5. A 1.13.1 node installed with the
+historical ``setup.sh`` path needs the one-time adoption step in
+`Legacy adoption`_ before the normal updater can be used; a 1.13.1 node
+installed with the release installer updates directly with
+``electrumx-update apply``. Later releases keep the same Ravencoin Core 4.8.0
+identity, so this is a software update and not a change of Core trust root.
+
 ElectrumX-RVN 1.13.1 is the first release line in this repository that combines
 all of the following in one maintained deployment path:
 
@@ -428,6 +437,7 @@ Start with the guide that matches the task:
 * `Electrum monitor`_: peer discovery and backend/operator evidence;
 * `August 2026 incident guide`_: incident and recovery background;
 * `Validation status`_: current test, architecture and release evidence;
+* `Legacy adoption`_: one-time adoption of a ``setup.sh`` 1.13.1 node;
 * `Troubleshooting`_: operational diagnosis;
 * `Documentation index`_: full documentation map.
 
@@ -459,5 +469,6 @@ process documented in ``SECURITY.md``.
 .. _Electrum monitor: docs/electrum-monitor.md
 .. _August 2026 incident guide: docs/incident-2026.md
 .. _Validation status: docs/validation-status.md
+.. _Legacy adoption: docs/LEGACY_1.13.1_ADOPTION.md
 .. _Troubleshooting: docs/troubleshooting.md
 .. _Upstream and credits: docs/upstream-and-credits.md
