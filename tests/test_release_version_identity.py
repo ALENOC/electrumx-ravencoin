@@ -1,8 +1,8 @@
-"""Guard the 1.13.5 release identity.
+"""Guard the 1.13.6 release identity.
 
 1.13.2 and 1.13.3 were built, failed real hardware qualification and were
 withdrawn. Historical qualification/signing material may name those candidates;
-release identity surfaces for the replacement candidate must pin 1.13.5.
+release identity surfaces for the replacement candidate must pin 1.13.6.
 """
 import re
 import subprocess
@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE_VERSION = "1.13.5"
+RELEASE_VERSION = "1.13.6"
 WITHDRAWN_VERSION = "1.13.2"
 PREVIOUS_WITHDRAWN_VERSION = "1.13.3"
 
@@ -65,14 +65,14 @@ def test_no_release_executable_reference_to_1_13_2_candidate():
 
 
 @pytest.mark.parametrize("relative,pattern", [
-    ("electrumx/__init__.py", r"^version = 'ElectrumX-RVN 1\.13\.5'$"),
-    ("compose.yaml", r"image: alenoc/electrumx-ravencoin:1\.13\.5$"),
-    ("compose.existing-core.yaml", r"image: alenoc/electrumx-ravencoin:1\.13\.5$"),
+    ("electrumx/__init__.py", r"^version = 'ElectrumX-RVN 1\.13\.6'$"),
+    ("compose.yaml", r"image: alenoc/electrumx-ravencoin:1\.13\.6$"),
+    ("compose.existing-core.yaml", r"image: alenoc/electrumx-ravencoin:1\.13\.6$"),
     ("core-safety/scripts/legacy_1_13_1_apply.py",
-     r'^TARGET_ELECTRUMX_VERSION = "1\.13\.5"$'),
+     r'^TARGET_ELECTRUMX_VERSION = "1\.13\.6"$'),
     ("core-safety/scripts/render_installer_v2.py",
-     r"'\"alenoc/electrumx-ravencoin:1\.13\.5\", \"-ec\",'"),
-    (".github/workflows/release.yml", r"default: v1\.13\.5$"),
+     r"'\"alenoc/electrumx-ravencoin:1\.13\.6\", \"-ec\",'"),
+    (".github/workflows/release.yml", r"default: v1\.13\.6$"),
 ])
 def test_release_identity_is_pinned_to_current_version(relative, pattern):
     text = (ROOT / relative).read_text(encoding="utf-8")

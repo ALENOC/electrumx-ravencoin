@@ -6,6 +6,25 @@ This document defines the release/update trust model introduced by ElectrumX-RVN
 
 Release 1.13.2 was built and offered as a candidate but failed real hardware qualification during the staged apply of the legacy 1.13.1 upgrade. Its GitHub Release was deleted and 1.13.2 was never published as an installable release. The git tag `v1.13.2` is retained only as a historical trace of that failed candidate. No operator should ever install, target or trust 1.13.2, and the version number is not reused. The first published release carrying the manifest-v2 trust root is 1.13.3.
 
+## 1.13.6
+
+`v1.13.6` exists because the published 1.13.5 installer aborts a fresh
+installation whenever the advanced host controller is requested. It created the
+root-owned trusted controller directory with `mkdir -p -o root -g root -m 0755`,
+and `mkdir` has no ownership flags, so the run ends with
+`mkdir: invalid option -- 'o'`. 1.13.6 uses `install -d -o root -g root -m 0755`.
+
+That is a change of installer behaviour, so it could not ship as another
+artifact revision of 1.13.5: the frozen-scope rule below protects operators of
+1.13.5 `artifact_revision 1`, which was qualified and published as installable,
+and requires a version bump for a behavioural change. 1.13.6 starts again at
+`artifact_revision 0`.
+
+1.13.5 `artifact_revision 1` remains the last installable 1.13.5 artifact. It is
+not withdrawn, but it cannot install the advanced host controller.
+
+Qualification evidence is recorded in `docs/HARDWARE_QUALIFICATION_1.13.6.md`.
+
 ## 1.13.5 artifact revisions
 
 `v1.13.5` carries two artifact revisions. Only revision 1 is qualified and installable.

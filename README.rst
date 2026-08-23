@@ -1,5 +1,5 @@
 ============================================
-ElectrumX for Ravencoin 1.13.5
+ElectrumX for Ravencoin 1.13.6
 ============================================
 
 Community-maintained ElectrumX server for Ravencoin, with Ravencoin-specific
@@ -7,9 +7,9 @@ asset support, an exact official Ravencoin Core trust model, verified bootstrap
 options, deployment tooling and additional safety checks introduced after the
 August 2026 consensus incident.
 
-**Current release: 1.13.5.** It supersedes 1.13.1, which is no longer the
-recommended release. New installations should use the 1.13.5 installer, and
-existing 1.13.1 nodes should move to 1.13.5. A 1.13.1 node installed with the
+**Current release: 1.13.6.** It supersedes 1.13.1, which is no longer the
+recommended release. New installations should use the 1.13.6 installer, and
+existing 1.13.1 nodes should move to 1.13.6. A 1.13.1 node installed with the
 historical ``setup.sh`` path needs the one-time adoption step in
 `Legacy adoption`_ before the normal updater can be used; a 1.13.1 node
 installed with the release installer updates directly with
@@ -74,7 +74,7 @@ The normal trust/data path is::
    wallet / Electrum client
             |
             v
-   ElectrumX-RVN 1.13.5
+   ElectrumX-RVN 1.13.6
             |
             v
    Ravencoin Core 4.8.0
@@ -273,23 +273,23 @@ owning identity before installing.
 
    error: command failed with exit code 1: /usr/bin/sudo mkdir -p -o root -g root -m 0755 /usr/local/lib/electrumx-ravencoin
 
-The 1.13.5 installer creates the root-owned controller directory with ``mkdir``
-and ownership flags that ``mkdir`` does not accept, so a fresh install aborts
-whenever the advanced bandwidth/connection controller is requested. The failed
-install is cleaned up: no installation directory, no project data and no
-recorded anti-rollback state are left behind, and the run can simply be
-repeated.
+This affects the 1.13.5 installer only. It creates the root-owned controller
+directory with ``mkdir`` and ownership flags that ``mkdir`` does not accept, so
+a fresh 1.13.5 install aborts whenever the advanced bandwidth/connection
+controller is requested. The failed install is cleaned up: no installation
+directory, no project data and no recorded anti-rollback state are left behind,
+and the run can simply be repeated.
 
-Install without the advanced controller, which is the default and is not
-required for normal monitoring:
+1.13.6 replaces that call with ``install -d`` and creates the directory
+correctly, so the advanced controller can be enabled during a normal
+installation. Operators still on the 1.13.5 installer either move to the 1.13.6
+installer, or install without the advanced controller, which is the default and
+is not required for normal monitoring:
 
 .. code-block:: sh
 
    python3 electrumx-ravencoin-install.py --storage-root /path/to/data
    # answer N at step 4/4
-
-The fix replaces that call with ``install -d``. It ships in the next release;
-the controller can be enabled then.
 
 Supported deployment targets
 ============================
