@@ -131,9 +131,17 @@ def preflight_archive(archive_path: Path, *,
                     "ChainStrap ZIP expands beyond per-archive safety cap")
             vetted.append(info)
 
-        if not vetted:
-            raise RuntimeBootstrapError(
-                "ChainStrap ZIP contains no allowlisted raw block members")
+        # A part carrying no raw block members is accepted here and extracts
+        # nothing.  Current upstream snapshots legitimately split derived
+        # material (blocks/index/*.ldb, blocks/rev*.dat) into whole parts that
+        # contain no blk*.dat at all, and part contents are pinned by the
+        # resolved metadata digest and SHA-256 verified before this point, so a
+        # block-free part cannot be attacker substituted.  The zero-raw-block
+        # refusal that matters is snapshot wide and still fail closed: the
+        # blocks-ready marker is only written after
+        # transport.validate_contiguous_blocks(), which raises when the datadir
+        # holds no blk*.dat and when the final sequence is not gap free from
+        # blk00000.dat.
         if ignored:
             # Bounded output: report only a count, never attacker/upstream-
             # controlled names one by one.

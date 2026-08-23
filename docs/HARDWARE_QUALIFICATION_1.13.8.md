@@ -60,9 +60,15 @@ boundary is unchanged:
 - unsafe paths, traversal, absolute paths, symlinks/special files, encrypted
   entries, duplicate paths, duplicate block indexes, unsupported compression and
   size/cap violations remain fail-closed;
-- a ChainStrap part containing no accepted raw block files is refused;
+- a snapshot that yields no accepted raw block file is refused. Current
+  upstream snapshots split derived material into whole parts that carry no
+  `blk*.dat` at all (observed on part 15/17 of the 2026-08-19 snapshot:
+  `blocks/index/*.ldb` and `blocks/rev*.dat` only), so this refusal is enforced
+  snapshot wide rather than part by part. Part contents are pinned by the
+  resolved metadata digest and SHA-256 verified before preflight;
 - the complete raw-block set must still satisfy the existing contiguous block
-  sequence validation before the blocks-ready marker is written;
+  sequence validation before the blocks-ready marker is written, which is where
+  an empty or gapped raw-block set fails closed;
 - Ravencoin Core still performs a local full reindex/revalidation with
   `-assumevalid=0`.
 
@@ -131,7 +137,8 @@ The suite must also prove fail-closed handling for:
 - unsupported raw-block compression/type;
 - oversized block members;
 - archive/uncompressed/aggregate caps;
-- parts with zero accepted raw blocks;
+- unsafe paths and unsafe entry types inside a block-free part;
+- a snapshot with zero accepted raw blocks across all parts;
 - missing `blk00000.dat`;
 - gaps in the final raw-block sequence.
 

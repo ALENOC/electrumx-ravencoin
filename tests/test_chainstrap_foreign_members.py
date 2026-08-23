@@ -60,14 +60,26 @@ def test_current_upstream_shape_ignores_assets_and_extracts_only_raw_blocks(tmp_
     assert not (datadir / "assets").exists()
 
 
-def test_archive_with_only_foreign_members_is_refused(tmp_path):
+def test_archive_with_only_foreign_members_extracts_nothing(tmp_path):
+    """A block-free part is accepted and yields no extraction.
+
+    Zero raw blocks is refused snapshot wide, not part by part: see
+    test_snapshot_without_any_raw_block_still_fails_closed.
+    """
     archive = tmp_path / "part.zip"
     _zip(archive, [
         ("assets/000111.ldb", b"derived"),
         ("assets/CURRENT", b"MANIFEST-000001\n"),
     ])
-    with pytest.raises(runtime.RuntimeBootstrapError, match="no allowlisted raw block"):
-        runtime.preflight_archive(archive, already_claimed=set())
+    vetted = runtime.preflight_archive(archive, already_claimed=set())
+    assert vetted == []
+
+    datadir = tmp_path / "data"
+    extracted = runtime.extract_preflighted_archive(
+        archive, datadir, vetted, existing_uncompressed=0)
+    assert extracted == []
+    assert not (datadir / "assets").exists()
+    assert list(datadir.rglob("*")) == []
 
 
 def test_foreign_traversal_is_refused_before_ignore(tmp_path):
@@ -186,13 +198,100 @@ def test_all_safe_foreign_shapes_together_still_extract_only_raw_blocks(tmp_path
     ) == ["blocks/blk00000.dat", "blocks/blk00001.dat", "blocks/blk00002.dat"]
 
 
-def test_archive_with_only_blocks_index_members_is_refused(tmp_path):
+def test_upstream_block_free_part_shape_is_accepted_and_extracts_nothing(tmp_path):
+    """Observed upstream part 15/17: only blocks/index/*.ldb and blocks/rev*.dat.
+
+    Real current ChainStrap snapshots split derived material into whole parts
+    carrying no blk*.dat at all.  Refusing such a part made a fresh install
+    impossible, so the zero-raw-block refusal is enforced snapshot wide
+    instead.
+    """
     archive = tmp_path / "part.zip"
     _zip(archive, [
         ("blocks/index/004089.ldb", b"derived"),
         ("blocks/index/CURRENT", b"MANIFEST-000001\n"),
+        ("blocks/index/MANIFEST-000001", b"manifest"),
+        ("blocks/rev00089.dat", b"undo"),
     ])
-    with pytest.raises(runtime.RuntimeBootstrapError, match="no allowlisted raw block"):
+    vetted = runtime.preflight_archive(archive, already_claimed=set())
+    assert vetted == []
+
+    datadir = tmp_path / "data"
+    extracted = runtime.extract_preflighted_archive(
+        archive, datadir, vetted, existing_uncompressed=0)
+    assert extracted == []
+    assert not (datadir / "blocks" / "index").exists()
+    assert list(datadir.rglob("*")) == []
+
+
+def test_block_free_part_between_block_parts_keeps_a_contiguous_sequence(tmp_path):
+    """A block-free middle part must not break the snapshot-wide validation."""
+    datadir = tmp_path / "data"
+    parts = [
+        [("blocks/blk00000.dat", b"zero"), ("blocks/index/004001.ldb", b"derived")],
+        [("blocks/index/004102.ldb", b"derived"), ("blocks/rev00089.dat", b"undo")],
+        [("blocks/blk00001.dat", b"one")],
+    ]
+    for number, members in enumerate(parts):
+        archive = tmp_path / f"part{number}.zip"
+        _zip(archive, members)
+        claimed = {path.name for path in (datadir / "blocks").glob("blk*.dat")}
+        vetted = runtime.preflight_archive(archive, already_claimed=claimed)
+        runtime.extract_preflighted_archive(
+            archive, datadir, vetted,
+            existing_uncompressed=sum(
+                path.stat().st_size
+                for path in (datadir / "blocks").glob("blk*.dat")))
+
+    block_files = runtime.transport.validate_contiguous_blocks(datadir)
+    assert [path.name for path in block_files] == [
+        "blk00000.dat", "blk00001.dat"]
+    assert sorted(
+        str(path.relative_to(datadir))
+        for path in datadir.rglob("*") if path.is_file()
+    ) == ["blocks/blk00000.dat", "blocks/blk00001.dat"]
+
+
+def test_snapshot_without_any_raw_block_still_fails_closed(tmp_path):
+    """Relocated, not removed: a snapshot yielding no raw block is refused.
+
+    The blocks-ready marker is written only after this validation, so a
+    snapshot made entirely of block-free parts can never complete.
+    """
+    datadir = tmp_path / "data"
+    archive = tmp_path / "part.zip"
+    _zip(archive, [
+        ("blocks/index/004089.ldb", b"derived"),
+        ("blocks/rev00089.dat", b"undo"),
+    ])
+    vetted = runtime.preflight_archive(archive, already_claimed=set())
+    runtime.extract_preflighted_archive(
+        archive, datadir, vetted, existing_uncompressed=0)
+    with pytest.raises(RuntimeError, match="no blk\\*\\.dat"):
+        runtime.transport.validate_contiguous_blocks(datadir)
+
+
+@pytest.mark.parametrize("member", [
+    ("../blocks/index/004089.ldb", b"derived"),
+    ("/blocks/index/004089.ldb", b"derived"),
+    ("blocks/index/../../../004089.ldb", b"derived"),
+])
+def test_unsafe_member_in_a_block_free_part_still_fails_closed(tmp_path, member):
+    """Accepting block-free parts must not turn them into a soft path."""
+    archive = tmp_path / "part.zip"
+    _zip(archive, [("blocks/index/CURRENT", b"MANIFEST-000001\n"), member])
+    with pytest.raises(runtime.RuntimeBootstrapError, match="unsafe.*path"):
+        runtime.preflight_archive(archive, already_claimed=set())
+
+
+def test_unsafe_entry_type_in_a_block_free_part_still_fails_closed(tmp_path):
+    archive = tmp_path / "part.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("blocks/index/CURRENT", b"MANIFEST-000001\n")
+        info = zipfile.ZipInfo("blocks/index/link")
+        info.external_attr = (stat.S_IFLNK | 0o777) << 16
+        handle.writestr(info, "../../../etc/passwd")
+    with pytest.raises(runtime.RuntimeBootstrapError, match="unsafe.*member type"):
         runtime.preflight_archive(archive, already_claimed=set())
 
 
