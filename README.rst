@@ -121,8 +121,12 @@ datadir/index material, both beside the raw blocks (``assets/*.ldb``) and inside
 the blocks namespace (``blocks/index/*.ldb``). Since **1.13.8**, ElectrumX-RVN
 ignores such safe derived members wherever they appear and allows only
 ``blocks/blk*.dat`` files to enter the raw-block staging path. Ignored members
-are never extracted and never reach the Ravencoin datadir. Unsafe paths, unsafe
-entry types, malformed archives, and zero-raw-block parts remain fail-closed.
+are never extracted and never reach the Ravencoin datadir. Current snapshots
+also split derived material into whole parts that carry no ``blk*.dat`` at all;
+such a part is accepted and extracts nothing. Unsafe paths, unsafe entry types
+and malformed archives remain fail-closed, and a snapshot that yields no raw
+block file, or a gapped raw-block sequence, is still refused before the
+blocks-ready marker is written.
 
 If ChainStrap fails, the installer does not silently switch to another bootstrap
 method. Traditional Ravencoin P2P synchronization can be selected explicitly:
