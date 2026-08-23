@@ -291,6 +291,36 @@ is not required for normal monitoring:
    python3 electrumx-ravencoin-install.py --storage-root /path/to/data
    # answer N at step 4/4
 
+``fresh install storage root already exists``
+""""""""""""""""""""""""""""""""""""""""""""
+
+.. code-block:: text
+
+   error: fresh install storage root already exists: /mnt/data/electrumx-ravencoin-storage; preserve or remove it explicitly before retrying
+
+A fresh installation never writes into an existing storage root, so a directory
+left by an earlier attempt is refused instead of being reused or overwritten.
+The installer suggests ``<mountpoint>/electrumx-ravencoin-storage`` on each
+writable mounted filesystem it discovers, and that suggestion is what collides.
+
+Decide explicitly what the old directory is. If it holds chain data worth
+keeping, rename it and reuse the suggested path:
+
+.. code-block:: sh
+
+   mv /mnt/data/electrumx-ravencoin-storage /mnt/data/electrumx-storage-old
+
+If it is disposable, remove it. Subdirectories are owned by the container UIDs,
+so this needs ``sudo`` and it discards any synced chain data:
+
+.. code-block:: sh
+
+   sudo rm -rf /mnt/data/electrumx-ravencoin-storage
+
+Alternatively choose ``C`` at step 1/4, or pass ``--storage-root DIR``, and
+name a different directory. The path must be a dedicated child directory: not
+``/``, not ``$HOME``, and not a filesystem mountpoint itself.
+
 Supported deployment targets
 ============================
 
