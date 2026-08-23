@@ -3,10 +3,11 @@
 
 The reviewed resolver/downloader implementation lives in
 ``chainstrap_runtime_base``.  Current ChainStrap RVN archives may also contain
-derived Ravencoin datadir material (for example ``assets/*.ldb``).  This module
-keeps the production trust boundary unchanged: only allowlisted raw
-``blocks/blk*.dat`` members are accepted for extraction; safe foreign members
-are ignored and never written to the datadir.
+derived Ravencoin datadir material (for example ``assets/*.ldb`` or
+``blocks/index/*.ldb``).  This module keeps the production trust boundary
+unchanged: only allowlisted raw ``blocks/blk*.dat`` members are accepted for
+extraction; safe foreign members are ignored and never written to the datadir,
+regardless of where they sit inside the archive.
 
 The split keeps the original reviewed implementation byte-for-byte available
 while making the archive-selection policy explicit and independently testable.
@@ -53,10 +54,11 @@ def preflight_archive(archive_path: Path, *,
                       already_claimed: set[str]) -> list[zipfile.ZipInfo]:
     """Validate a ChainStrap ZIP and select raw block members only.
 
-    Path safety is global.  Anything under ``blocks/`` that is not an
-    allowlisted raw block remains fail-closed.  Safe members outside that
-    namespace are ignored without being decompressed or counted toward raw
-    block extraction limits.  Unsafe/special foreign entries still fail.
+    Path safety is global.  Members are classified structurally: an
+    allowlisted raw ``blocks/blk*.dat`` member is eligible for extraction, any
+    other safe regular member is ignored without being decompressed or counted
+    toward raw block extraction limits, and unsafe/special entries fail closed
+    wherever they appear.  Ignored members are never written to disk.
     """
     try:
         archive = zipfile.ZipFile(archive_path)
@@ -93,12 +95,12 @@ def preflight_archive(archive_path: Path, *,
 
             match = BLOCK_RE.fullmatch(raw_name)
             if match is None:
-                # The blocks namespace is security-sensitive.  rev*.dat and any
-                # future unexpected block-adjacent object must never be silently
-                # reclassified as harmless upstream metadata.
-                if raw_name == "blocks" or raw_name.startswith("blocks/"):
-                    raise RuntimeBootstrapError(
-                        f"non-allowlisted member in ChainStrap ZIP: {raw_name!r}")
+                # Classification is structural, not location based.  Upstream
+                # snapshots also carry derived datadir material inside the
+                # blocks namespace (for example blocks/index/*.ldb).  Such
+                # members are inert here precisely because they are never
+                # extracted: only allowlisted raw blocks/blk*.dat members are
+                # ever written into the Ravencoin datadir.
                 if not _foreign_member_is_safe_to_ignore(info):
                     raise RuntimeBootstrapError(
                         f"unsafe ChainStrap ZIP member type: {raw_name}")
