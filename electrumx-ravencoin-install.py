@@ -1537,7 +1537,7 @@ def install_trusted_controller(source: Path, expected_sha256: str) -> None:
     prefix = _sudo_prefix()
     staged = TRUSTED_CONTROLLER_PATH.with_name(
         TRUSTED_CONTROLLER_PATH.name + f".new.{secrets.token_hex(8)}")
-    run_checked(prefix + ["mkdir", "-p", "-o", "root", "-g", "root", "-m", "0755",
+    run_checked(prefix + ["install", "-d", "-o", "root", "-g", "root", "-m", "0755",
                           str(TRUSTED_CONTROLLER_DIR)])
     try:
         run_checked(prefix + ["install", "-o", "root", "-g", "root", "-m", "0755",

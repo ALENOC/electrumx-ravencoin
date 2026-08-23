@@ -188,6 +188,109 @@ The release installer is recommended for production because it is designed to
 bind the downloaded bundle, release manifest and independent Core policy to
 separate verification keys.
 
+Installation FAQ
+----------------
+
+Where does the installer put things?
+""""""""""""""""""""""""""""""""""""
+
+Three independent locations, and only one of them is large:
+
+* the **installation directory** holds the Compose files, ``.env`` and the
+  install marker. It defaults to ``electrumx-ravencoin`` resolved against the
+  *current working directory*, not against the home directory, so running the
+  installer from ``~/electrumx-deploy`` creates
+  ``~/electrumx-deploy/electrumx-ravencoin``. Override it with
+  ``--install-dir``;
+* the **project data directory** holds the Ravencoin chain data and the
+  ElectrumX index. It is selected explicitly with ``--storage-root`` and is the
+  only location that grows to hundreds of gigabytes;
+* **Docker images** stay in the existing Docker data-root. The installer does
+  not move them, so the filesystem holding ``/var/lib/docker`` still needs
+  free space even when ``--storage-root`` points at another disk.
+
+The installer prints all three on success.
+
+``host anti-rollback preflight failed: root-owned security-state locator is missing``
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+The full message is:
+
+.. code-block:: text
+
+   error: host anti-rollback preflight failed: root-owned security-state locator is missing: /var/lib/electrumx-ravencoin/security-state.locator
+
+This is expected on a first installation performed as an unprivileged user, and
+it is not a defect. The host-wide anti-rollback floor lives outside the
+installation directory so that reinstalling into another directory cannot reset
+it. An unprivileged process is deliberately never allowed to create that
+root-owned locator itself, because that would let a local user lower the floor
+and re-offer a withdrawn release. An administrator provisions it once.
+
+Note that ``--check-only`` does not touch persistent state, so a successful
+preflight does not imply that the locator exists.
+
+To keep the node owned by the current unprivileged user, provision the locator
+once and then re-run the installer unchanged:
+
+.. code-block:: sh
+
+   sudo install -d -o root -g root -m 0755 /var/lib/electrumx-ravencoin
+
+   printf '{\n  "schemaVersion": 1,\n  "ownerUid": %s,\n  "path": "%s"\n}\n' \
+     "$(id -u)" \
+     "${XDG_STATE_HOME:-$HOME/.local/state}/electrumx-ravencoin/security-state.json" \
+     | sudo tee /var/lib/electrumx-ravencoin/security-state.locator >/dev/null
+
+   sudo chmod 0644 /var/lib/electrumx-ravencoin/security-state.locator
+
+The locator must end up as a regular non-symlink file, owned by root, mode
+``0644``. The state file it names is created later by the installer itself,
+owned by that same user and mode ``0600``.
+
+Running the installer under ``sudo`` instead is also supported. Root
+provisions the locator itself, but it binds the root namespace
+``/var/lib/electrumx-ravencoin/security-state.json``, and the installation and
+its data become root-owned, so every later ``docker compose`` and
+``electrumx-update apply`` needs ``sudo`` as well.
+
+The two options are mutually exclusive. The locator fixes exactly one owning
+UID, so a locator provisioned for an unprivileged user makes a later root
+invocation fail with:
+
+.. code-block:: text
+
+   security-state namespace belongs to uid 1000, not caller uid 0
+
+Changing that decision afterwards means removing the root-owned locator and its
+state file, which discards the recorded anti-rollback high-water. Choose the
+owning identity before installing.
+
+``mkdir: invalid option -- 'o'`` when advanced host controls are enabled
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+.. code-block:: text
+
+   error: command failed with exit code 1: /usr/bin/sudo mkdir -p -o root -g root -m 0755 /usr/local/lib/electrumx-ravencoin
+
+The 1.13.5 installer creates the root-owned controller directory with ``mkdir``
+and ownership flags that ``mkdir`` does not accept, so a fresh install aborts
+whenever the advanced bandwidth/connection controller is requested. The failed
+install is cleaned up: no installation directory, no project data and no
+recorded anti-rollback state are left behind, and the run can simply be
+repeated.
+
+Install without the advanced controller, which is the default and is not
+required for normal monitoring:
+
+.. code-block:: sh
+
+   python3 electrumx-ravencoin-install.py --storage-root /path/to/data
+   # answer N at step 4/4
+
+The fix replaces that call with ``install -d``. It ships in the next release;
+the controller can be enabled then.
+
 Supported deployment targets
 ============================
 
