@@ -4,8 +4,15 @@
 
 This document is the qualification plan for the 1.13.6 candidate. It becomes a
 PASS only after every gate below is executed on real hardware and its evidence
-is recorded here. No 1.13.6 artifact may be published while this file says
-PENDING.
+is recorded here.
+
+Publication of the candidate is part of the qualification, not a statement that
+it passed. The installer resolves the release through
+`releases/latest/download`, so the signed bytes must be published before any
+fresh-install gate can run against them. While this file says PENDING the
+release is a candidate under qualification: it is not announced as the
+recommended release, and if it fails it is withdrawn and replaced in place, as
+1.13.5 `artifact_revision 0` was.
 
 ## Why 1.13.6 exists
 
@@ -53,18 +60,19 @@ failing on an operator's host.
 
 ## Artifact identity of the qualified revision
 
-To be filled in from the signed manifest before publication:
-
 - `artifact_revision`: `0`
-- manifest `releaseTimestamp`: TBD
-- `artifactDigest`: TBD
-- `provenanceDigest`: TBD
-- provenance `sourceCommit`: TBD
+- manifest `releaseTimestamp`: `2026-08-23T13:59:25Z`
+- `artifactDigest`: `sha256:7ef4723c07b0ac518e8aeab1adae596e724139aa93fced80fea9fb747b4a9903`
+- `installerDigest`: `sha256:a54fe6f0dae0f96939ab0b85fec10b880980bab2090b3fbb1a18dcc0f7da0e77`
+- `provenanceDigest`: `sha256:24eed223b068253103bee3ccc6bdf2b26666886d076a0d6cb86ba5dc9b596066`
+- provenance `sourceCommit`: `9ce6d93dd139e9491f1b2a955467ce967c0385c1`
+- signed manifest SHA-256: `76f1b2338269ea557855849ca145602de9bdd5e667263ba9ae2e848f205152ba`
+
+The `v1.13.6` tag points at that same `sourceCommit`, so the tag does identify
+the published bytes for this release.
 
 Release identity is the signed manifest with its `artifactDigest` and
-`provenanceDigest`. If the `v1.13.6` tag does not point at the exact commit
-recorded as provenance `sourceCommit`, that discrepancy must be stated here, as
-it was for 1.13.5.
+`provenanceDigest`.
 
 ## Scope
 
@@ -191,5 +199,6 @@ A failed rollback must leave the controller stopped.
 
 ## Publication decision
 
-Not yet taken. 1.13.6 may be published only after this file records a PASS with
-the artifact identity of the candidate actually tested.
+The candidate was published on the `v1.13.6` release for qualification. It
+becomes the recommended release only when this file records a PASS with the
+artifact identity below. Until then it must not be announced as recommended.
