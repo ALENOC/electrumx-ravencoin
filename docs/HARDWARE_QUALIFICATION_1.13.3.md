@@ -1,4 +1,4 @@
-# ElectrumX-Ravencoin 1.13.2 — hardware qualification procedure
+# ElectrumX-Ravencoin 1.13.3 — hardware qualification procedure
 
 This procedure is the merge gate for PR3. It is written for an executor running
 commands on real Linux hardware. Do not improvise around a failed checkpoint.
@@ -6,15 +6,15 @@ Do not merge any PR in the stack until both scenarios are PASS and the maintaine
 has reviewed both evidence bundles.
 
 The executor never receives or handles the release/update private key. Signing
-is maintainer-only and is performed with `docs/OFFLINE_RELEASE_SIGNING_1.13.2.md`.
+is maintainer-only and is performed with `docs/OFFLINE_RELEASE_SIGNING_1.13.3.md`.
 
 ## Fixed release facts
 
 The following facts are release policy and must not be changed during
 qualification:
 
-- ElectrumX release: `1.13.2`
-- qualification release tag: `v1.13.2`
+- ElectrumX release: `1.13.3`
+- qualification release tag: `v1.13.3`
 - artifact revision: `0`
 - Ravencoin Core: `4.8.0`
 - Ravencoin Core commit: `22549129888d02e0e08fcdb9f96f3c699167e774`
@@ -39,13 +39,13 @@ strictly greater than the reviewed release floor.
 Hardware qualification uses the real production trust path, not a local
 qualification bypass.
 
-1. **Before the 1.13.2 candidate is published**, prepare Scenario B as a real,
+1. **Before the 1.13.3 candidate is published**, prepare Scenario B as a real,
    fully working 1.13.1 node and capture its baseline evidence and B0.5 rollback
    checkpoint.
-2. The maintainer signs the exact 1.13.2 candidate offline and runs the mandatory
+2. The maintainer signs the exact 1.13.3 candidate offline and runs the mandatory
    `--verify-only` command. The executor is not involved.
 3. The maintainer makes those exact verified bytes available under the exact
-   GitHub Release tag `v1.13.2`. `releases/latest/download` is never used for
+   GitHub Release tag `v1.13.3`. `releases/latest/download` is never used for
    qualification.
 4. The maintainer gives the executor only:
    - the independently authenticated **new public key**;
@@ -54,6 +54,32 @@ qualification bypass.
 
 Because 1.13.1 cannot authenticate the new schema-v2/new-key release, this is a
 manual trust-root transition rather than an automatic 1.13.1 update.
+
+## Prior 1.13.2 candidate: qualification result carried forward
+
+The withdrawn 1.13.2 candidate was executed against this exact procedure on real
+hardware. Scenario B failed at B4 (staged apply) with:
+
+```text
+stat .../compose.local-core-identity.yaml: no such file or directory
+```
+
+The mandatory abort/restore path was then exercised for real and passed:
+
+```text
+UPDATER_CHECKPOINT legacy-adoption-rollback=PASS marker=REMOVED old-stack=PRESERVED
+```
+
+Two results from that run are carried forward as verified evidence and are not
+re-derived by this document: the rollback/restore path is proven on real
+hardware, and the legacy adoption marker is proven to be removed on a failed
+pre-promotion attempt without touching the old 1.13.1 stack.
+
+Everything else must be re-executed. 1.13.3 changes executable updater behavior
+(explicit resolution of staged Compose files), so the B3-B6 checkpoints from the
+1.13.2 run carry no qualification value. The GitHub Release for 1.13.2 was
+deleted; the tag `v1.13.2` is retained only as a historical trace and must never
+be used as a qualification target.
 
 ## Common rules for both scenarios
 
@@ -78,7 +104,7 @@ For each scenario create a fresh evidence directory and capture terminal output:
 
 ```sh
 set -euo pipefail
-export EVIDENCE="$HOME/rvn-1.13.2-qualification/$(date -u +%Y%m%dT%H%M%SZ)"
+export EVIDENCE="$HOME/rvn-1.13.3-qualification/$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$EVIDENCE"
 exec > >(tee -a "$EVIDENCE/executor.log") 2>&1
 printf 'qualification_start=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -96,26 +122,26 @@ failure.
 
 ---
 
-# Scenario A — fresh 1.13.2 ChainStrap installation
+# Scenario A — fresh 1.13.3 ChainStrap installation
 
 ## A0. Preconditions
 
 Use a clean host/project namespace with no prior `electrumx-ravencoin` Compose
-resources and no prior 1.13.2 high-water state.
+resources and no prior 1.13.3 high-water state.
 
 Choose explicit paths. The examples below use:
 
 ```sh
 export INSTALL_ROOT=/opt/electrumx-ravencoin
 export STORAGE_ROOT=/srv/electrumx-ravencoin-storage
-export RELEASE_TAG=v1.13.2
+export RELEASE_TAG=v1.13.3
 export RELEASE_BASE="https://github.com/ALENOC/electrumx-ravencoin/releases/download/$RELEASE_TAG"
 ```
 
 The storage filesystem must have enough free space for the installer bootstrap
 check. Do not override or suppress the disk-space check.
 
-Qualification is pinned to `v1.13.2`. If that exact tag or any required asset is
+Qualification is pinned to `v1.13.3`. If that exact tag or any required asset is
 absent, `curl -f` in A1 fails and Scenario A stops. If GitHub's `latest` release
 points to another tag, that has no effect because `latest` is never consulted.
 
@@ -157,7 +183,7 @@ sudo -H python3 ./electrumx-ravencoin-install.py \
 
 PASS requires exit code `0` and both of these semantic outcomes in the log:
 
-- the signed 1.13.2 release and independent safe-Core policy verify;
+- the signed 1.13.3 release and independent safe-Core policy verify;
 - final line includes `check-only complete: no persistent changes were made`.
 
 ## A2. Install using ChainStrap
@@ -298,7 +324,7 @@ for i in $(seq 1 120); do
   if [ -n "$CORE_HEIGHT" ] && [ -n "$INFO" ] && python3 - "$CORE_HEIGHT" "$INFO" <<'PY'
 import json, sys
 h=int(sys.argv[1]); info=json.loads(sys.argv[2])
-assert str(info.get('version','')).endswith('1.13.2')
+assert str(info.get('version','')).endswith('1.13.3')
 assert info.get('db height') == h
 assert info.get('daemon height') == h
 PY
@@ -312,7 +338,7 @@ done
 ```
 
 PASS: loop exits through the success branch and stores
-`electrumx-getinfo.json` with version ending in `1.13.2`, DB height equal to
+`electrumx-getinfo.json` with version ending in `1.13.3`, DB height equal to
 Core height and daemon height equal to Core height.
 
 ## A6. Prove completed bootstrap immutability
@@ -340,15 +366,15 @@ sudo python3 - <<'PY' | tee "$EVIDENCE/high-water.json"
 import json
 p='/var/lib/electrumx-ravencoin/security-state.json'
 s=json.load(open(p, encoding='utf-8'))
-assert s['highestAcceptedVersion'] == '1.13.2'
-r=s['releases']['1.13.2']
+assert s['highestAcceptedVersion'] == '1.13.3'
+r=s['releases']['1.13.3']
 assert r['artifact_revision'] == 0
 print(json.dumps(s, indent=2, sort_keys=True))
 PY
 ```
 
 PASS requires locator ownership/mode `root:root 644`, state ownership/mode
-`root:root 600`, highest version `1.13.2`, revision `0`.
+`root:root 600`, highest version `1.13.3`, revision `0`.
 
 ### Scenario A PASS
 
@@ -362,22 +388,36 @@ printf 'scenario=A\nresult=PASS\nfinished=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 ---
 
-# Scenario B — real 1.13.1 to 1.13.2 manual trust transition + updater apply
+# Scenario B — real 1.13.1 to 1.13.3 manual trust transition + updater apply
 
 Scenario B must start from a real working 1.13.1 installation created **before**
-the 1.13.2 qualification release is published. Do not emulate the old release
+the 1.13.3 qualification release is published. Do not emulate the old release
 with a rebuilt source tree.
 
 The purpose is to prove two things simultaneously:
 
 1. the old release cannot silently grant trust to the new key; the public-key
    transition is explicit and out-of-band;
-2. after that manual trust reset, the 1.13.2 updater performs the actual
+2. after that manual trust reset, the 1.13.3 updater performs the actual
    transactional software update while preserving the four bind-backed data
    locations and without running ChainStrap again.
 
 The examples assume the existing install root is `/opt/electrumx-ravencoin`.
 Adjust only `INSTALL_ROOT` if the real 1.13.1 node uses another location.
+
+Before starting B0, confirm the host anti-rollback high-water still reflects
+1.13.1 and was never advanced by the withdrawn 1.13.2 attempt:
+
+```bash
+sudo cat /var/lib/electrumx-ravencoin/security-state.json 2>/dev/null || \
+  echo "ABSENT (expected on a 1.13.1-only host)"
+```
+
+The file must be absent, or must record `highestAcceptedVersion` `1.13.1`. A
+recorded `1.13.2` means an earlier attempt advanced further than its checkpoints
+reported. Because 1.13.3 is greater than 1.13.2 the updater would accept it
+silently, so this host is not a valid Scenario B starting point: rebuild the
+1.13.1 node before continuing.
 
 ## B0. Capture the live 1.13.1 baseline before candidate publication
 
@@ -557,7 +597,7 @@ Expected output includes exactly `prequal_backup_and_restart=PASS`. Do not
 continue to B1 without it and the `VERIFIED` marker.
 
 Do not continue with B1 until the maintainer has completed offline signing,
-verification and publication of the exact candidate under tag `v1.13.2`.
+verification and publication of the exact candidate under tag `v1.13.3`.
 
 ## B1. Authenticate the new trust root out of band and verify the exact tagged release
 
@@ -567,7 +607,7 @@ from the release being authenticated**.
 
 ```sh
 export NEW_PUBLIC_KEY_HEX='<NEW_PUBLIC_KEY_HEX>'
-export RELEASE_TAG=v1.13.2
+export RELEASE_TAG=v1.13.3
 export RELEASE_BASE="https://github.com/ALENOC/electrumx-ravencoin/releases/download/$RELEASE_TAG"
 export TRANSITION="$EVIDENCE/candidate-tree"
 cd "$EVIDENCE"
@@ -581,7 +621,7 @@ curl -fL --proto '=https' --tlsv1.2 -o electrumx-ravencoin-bundle.tar.gz \
   "$RELEASE_BASE/electrumx-ravencoin-bundle.tar.gz"
 ```
 
-If the exact `v1.13.2` qualification assets are absent, any `curl -f` failure is
+If the exact `v1.13.3` qualification assets are absent, any `curl -f` failure is
 Scenario B FAIL/STOP before trust mutation. A different `latest` release is
 irrelevant because this procedure never follows `latest`.
 
@@ -633,7 +673,7 @@ maintainer for qualification:
 python3 - release-provenance.json '<EXPECTED_PR3_HEAD_SHA>' <<'PY'
 import json, sys
 p=json.load(open(sys.argv[1], encoding='utf-8'))
-assert p['electrumxVersion'] == '1.13.2'
+assert p['electrumxVersion'] == '1.13.3'
 assert p['artifact_revision'] == 0
 assert p['sourceCommit'] == sys.argv[2]
 print('candidate_source_identity=PASS')
@@ -684,7 +724,7 @@ import electrumx_update_cli as cli
 from update_state import UpdateState, save_state
 p=Path(cli.DEFAULT_STATE_PATH)
 p.parent.mkdir(parents=True, exist_ok=True)
-save_state(str(p), UpdateState(failure_reason='manual 1.13.1 -> 1.13.2 trust-root transition'))
+save_state(str(p), UpdateState(failure_reason='manual 1.13.1 -> 1.13.3 trust-root transition'))
 print(f'v3_state={p}')
 PY
 ```
@@ -835,14 +875,14 @@ Failure-specific rule:
 - **B3 FAIL:** B2 has already changed the public trust root and operational/high-
   water state. Run the full restore above. Do not reuse `$TRANSITION`, the v3
   pending/check state, the new high-water namespace, or the overwritten key.
-- **B4 FAIL:** the updater may have built 1.13.2, stopped the old stack, switched
+- **B4 FAIL:** the updater may have built 1.13.3, stopped the old stack, switched
   roots, or performed its own rollback. Regardless of its verdict, run the full
   restore above. Do not reuse any release-staging, last-known-good, failed-update
   directory, transaction journal, v3 state, or candidate runtime as a retry base.
-- **B5 FAIL:** 1.13.2 may already be promoted and high-water may have advanced.
+- **B5 FAIL:** 1.13.3 may already be promoted and high-water may have advanced.
   Run the full restore above, including all four bind directories and control
   state. Do not reuse the promoted install root or high-water state.
-- **B6 FAIL:** treat the running 1.13.2 node as unqualified. Run the full restore
+- **B6 FAIL:** treat the running 1.13.3 node as unqualified. Run the full restore
   above, including all four bind directories and control state. Do not reuse its
   ElectrumX DB/runtime state for another qualification attempt.
 
@@ -863,7 +903,7 @@ sudo -H env \
   | tee "$EVIDENCE/update-check.txt"
 ```
 
-PASS requires exit `0` and a pending 1.13.2 candidate that verified under the
+PASS requires exit `0` and a pending 1.13.3 candidate that verified under the
 new key and safe-Core policy. Confirm from the persisted v3 state rather than
 relying only on display text:
 
@@ -875,7 +915,7 @@ from update_state import load_state
 s=load_state(cli.DEFAULT_STATE_PATH)
 p=s.pending_candidate
 assert p is not None
-assert p['manifest']['electrumxVersion'] == '1.13.2'
+assert p['manifest']['electrumxVersion'] == '1.13.3'
 assert p['manifest']['artifact_revision'] == 0
 assert p['_verificationVerdict'] == 'VERIFIED'
 print('pending_candidate=VERIFIED')
@@ -924,13 +964,13 @@ PASS also requires promotion to current. The updater itself must:
 - prove all four existing host bind paths before stopping the old node;
 - prove Docker volume objects point to those paths;
 - prove active old containers are mounted on those exact volume objects;
-- stage/build 1.13.2 while the old node is still running;
+- stage/build 1.13.3 while the old node is still running;
 - copy only the allowlisted operator state;
 - prove the candidate Compose model resolves to the same four host paths;
 - stop the old stack;
 - perform the transactional same-filesystem release-directory switch;
 - re-prove storage before starting the new stack;
-- start 1.13.2 without running the ChainStrap one-shot again;
+- start 1.13.3 without running the ChainStrap one-shot again;
 - pass Core/ElectrumX health gates;
 - advance the host-global high-water only after promotion.
 
@@ -985,7 +1025,7 @@ PY
 Expected output: `docker_volume_bindings=UNCHANGED`. Any B5 failure invokes the
 mandatory Scenario B abort-and-restore procedure.
 
-## B6. Prove chain continuity and 1.13.2 service identity
+## B6. Prove chain continuity and 1.13.3 service identity
 
 ```sh
 POST_COMPOSE='docker compose -p electrumx-ravencoin -f compose.yaml -f compose.storage.yaml'
@@ -1007,7 +1047,7 @@ for i in $(seq 1 120); do
   if [ -n "$CORE_HEIGHT" ] && [ -n "$INFO" ] && python3 - "$CORE_HEIGHT" "$INFO" <<'PY'
 import json, sys
 h=int(sys.argv[1]); info=json.loads(sys.argv[2])
-assert str(info.get('version','')).endswith('1.13.2')
+assert str(info.get('version','')).endswith('1.13.3')
 assert info.get('db height') == h
 assert info.get('daemon height') == h
 PY
@@ -1020,7 +1060,7 @@ PY
 done
 ```
 
-PASS: version ends in 1.13.2 and ElectrumX DB/daemon heights equal Core. Any B6
+PASS: version ends in 1.13.3 and ElectrumX DB/daemon heights equal Core. Any B6
 failure invokes the mandatory Scenario B abort-and-restore procedure.
 
 ## B7. Prove ChainStrap did not run during the software update
@@ -1050,15 +1090,15 @@ sudo stat -c '%U:%G %a %n' \
 sudo python3 - <<'PY' | tee "$EVIDENCE/after-high-water.json"
 import json
 s=json.load(open('/var/lib/electrumx-ravencoin/security-state.json', encoding='utf-8'))
-assert s['highestAcceptedVersion'] == '1.13.2'
-r=s['releases']['1.13.2']
+assert s['highestAcceptedVersion'] == '1.13.3'
+r=s['releases']['1.13.3']
 assert r['artifact_revision'] == 0
 print(json.dumps(s, indent=2, sort_keys=True))
 PY
 ```
 
 PASS requires the installed public key to equal the out-of-band key, locator
-`root:root 644`, state `root:root 600`, highest version 1.13.2 and revision 0.
+`root:root 644`, state `root:root 600`, highest version 1.13.3 and revision 0.
 
 ### Scenario B PASS
 
@@ -1084,7 +1124,7 @@ Scenario A: PASS|FAIL
 Scenario B: PASS|FAIL
 A evidence: <path/archive>
 B evidence: <path/archive>
-Qualified release: 1.13.2 artifact_revision=0 tag=v1.13.2
+Qualified release: 1.13.3 artifact_revision=0 tag=v1.13.3
 Qualified source commit: <release-provenance sourceCommit>
 Resolved ChainStrap snapshot in A: <sourceCommit> <metadata_sha256> <height> <blockhash>
 Failure checkpoint: <none or exact A#/B# checkpoint>

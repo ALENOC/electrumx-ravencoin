@@ -117,7 +117,7 @@ def _fetch_bounded(url: str, *, host: str, path_prefix: str, max_bytes: int,
     request = Request(
         url,
         headers={
-            "User-Agent": "electrumx-ravencoin-chainstrap-resolver/1.13.2",
+            "User-Agent": "electrumx-ravencoin-chainstrap-resolver/1.13.3",
             "Accept": "application/vnd.github+json" if host == UPSTREAM_API_HOST else "application/json",
         },
     )

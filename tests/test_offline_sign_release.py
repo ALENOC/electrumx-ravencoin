@@ -41,7 +41,7 @@ def _candidate(tmp_path: Path):
     (tmp_path / offline.PROVENANCE_NAME).write_bytes(b"{\"provenance\":1}\n")
 
     body = update_manifest.build_manifest(
-        electrumx_version="1.13.2",
+        electrumx_version="1.13.3",
         artifact_revision=0,
         channel="stable",
         artifact_digest="sha256:" + offline.sha256(tmp_path / offline.BUNDLE_NAME),
@@ -69,8 +69,8 @@ def _candidate(tmp_path: Path):
     key_id = update_manifest.key_id_for(bytes.fromhex(public_hex))
     inputs = {
         "schemaVersion": 1,
-        "tag": "v1.13.2",
-        "electrumxVersion": "1.13.2",
+        "tag": "v1.13.3",
+        "electrumxVersion": "1.13.3",
         "artifact_revision": 0,
         "expectedPublicKeyHex": public_hex,
         "expectedKeyId": key_id,
@@ -91,7 +91,7 @@ def test_offline_sign_then_verify_only(tmp_path):
     assert signed == tmp_path / offline.SIGNED_NAME
 
     result = offline.verify_signed(tmp_path, public_hex)
-    assert result["version"] == "1.13.2"
+    assert result["version"] == "1.13.3"
     assert result["artifactRevision"] == 0
     assert result["keyId"] == update_manifest.key_id_for(bytes.fromhex(public_hex))
     assert (tmp_path / offline.CHECKSUMS_NAME).is_file()

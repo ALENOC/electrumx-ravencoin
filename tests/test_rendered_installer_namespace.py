@@ -1,7 +1,7 @@
 # Copyright (c) 2026, the ElectrumX-RVN community maintainers
 # The MIT License (MIT). See LICENCE for details.
 
-"""Regression coverage for the standalone 1.13.2 embedded-module boundary."""
+"""Regression coverage for the standalone 1.13.3 embedded-module boundary."""
 
 from __future__ import annotations
 
@@ -71,7 +71,10 @@ def test_released_installer_has_no_qualification_transport_by_argument_environme
     assert "qualification-candidate" not in source
     assert "QUALIFICATION_MANIFEST_FILE" not in source
     assert "load_qualification_candidate" not in source
-    assert "PRE-PUBLICATION 1.13.2 HARDWARE QUALIFICATION" not in source
+    # Version-agnostic on purpose: pinning the banner to one release makes
+    # this assertion vacuous the moment the release version is bumped.
+    assert "PRE-PUBLICATION" not in source
+    assert "HARDWARE QUALIFICATION" not in source
 
     # Plausible local candidate filenames and environment variables must not
     # create an alternate release-acceptance path because production code has

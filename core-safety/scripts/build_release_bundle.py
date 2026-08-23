@@ -6,7 +6,7 @@
 
 The bundle is not trusted by itself. Its SHA-256 becomes ``artifactDigest`` in
 our separately signed ElectrumX release manifest. The optional Node Monitor is
-vendored at one exact reviewed commit. For the 1.13.2 trust-root migration the
+vendored at one exact reviewed commit. For the 1.13.3 trust-root migration the
 builder may replace only the bundled copy of the release/update public key; the
 tracked repository trust-root file remains untouched and historical.
 

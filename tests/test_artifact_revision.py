@@ -19,7 +19,7 @@ SPEC.loader.exec_module(ar)
 import update_decision as ud  # noqa: E402
 
 
-def manifest(version="1.13.2", revision=0,
+def manifest(version="1.13.3", revision=0,
              digest="sha256:" + "a" * 64,
              provenance="sha256:" + "b" * 64):
     return {
@@ -56,9 +56,9 @@ def eligibility(current, candidate):
 
 
 @pytest.mark.parametrize("current,candidate,expected", [
-    (manifest(version="1.13.2"), manifest(version="1.13.1"),
+    (manifest(version="1.13.3"), manifest(version="1.13.2"),
      ar.EligibilityVerdict.REFUSED_OLDER_VERSION),
-    (manifest(version="1.13.2"), manifest(version="1.13.3"),
+    (manifest(version="1.13.3"), manifest(version="1.13.4"),
      ar.EligibilityVerdict.ELIGIBLE),
     ({**manifest(), "artifact_revision": None}, manifest(),
      ar.EligibilityVerdict.REFUSED_MISSING_REVISION_DATA),
@@ -96,7 +96,7 @@ def test_ordering_entry_points_agree_on_full_matrix(current, candidate, expected
     assert via_eligibility.reason == direct.reason
 
 
-def high_water(version="1.13.2", revision=3,
+def high_water(version="1.13.3", revision=3,
                digest="sha256:" + "a" * 64,
                provenance="sha256:" + "b" * 64):
     return {

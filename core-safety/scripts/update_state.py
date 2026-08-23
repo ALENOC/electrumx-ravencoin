@@ -65,7 +65,7 @@ class UpdateState:
             if schema_version < STATE_SCHEMA_VERSION:
                 raise ValueError(
                     "legacy updater state lacks authenticated revision-aware release identity; "
-                    "manual 1.13.1 -> 1.13.2 trust transition is required")
+                    "manual 1.13.1 -> 1.13.3 trust transition is required")
             raise ValueError(f"release state is missing identity field(s): {missing}")
 
         version = migrated["electrumxVersion"]

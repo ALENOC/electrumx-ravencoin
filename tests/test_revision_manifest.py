@@ -10,7 +10,7 @@ import update_manifest as um  # noqa: E402
 
 def body(**overrides):
     values = dict(
-        electrumx_version="1.13.2",
+        electrumx_version="1.13.3",
         artifact_revision=0,
         channel="stable",
         artifact_digest="sha256:" + "a" * 64,
@@ -22,7 +22,7 @@ def body(**overrides):
         core_commit="22549129888d02e0e08fcdb9f96f3c699167e774",
         certification_report_digest="c" * 64,
         safe_core_policy_version=3,
-        required_updater_version="1.13.2",
+        required_updater_version="1.13.3",
         config_compatibility={},
         db_compatibility={"schemaVersion": 1},
         rollback_safe=True,

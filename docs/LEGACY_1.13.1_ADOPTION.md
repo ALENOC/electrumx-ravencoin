@@ -1,4 +1,4 @@
-# Legacy 1.13.1 adoption for the 1.13.2 transactional updater
+# Legacy 1.13.1 adoption for the 1.13.3 transactional updater
 
 This procedure exists only for production ElectrumX-RVN 1.13.1 nodes that were installed with the historical `setup.sh` path and therefore predate both `.electrumx-ravencoin-installed.json` and the bind-backed `compose.storage.yaml` layout.
 
@@ -40,12 +40,12 @@ The adoption marker is **not** written merely because the legacy node is valid.
 
 Before any install-root mutation, `apply` requires an already discovered pending candidate and revalidates the exact tagged signed manifest, artifact revision/high-water constraints, eligibility and safe-Core policy. It then downloads the exact artifact, verifies its SHA-256, verifies the signed provenance binding, validates the release bundle and proves both installed trust roots are continuous with the candidate.
 
-The candidate must be exactly ElectrumX-RVN `1.13.2`. If no verified pending 1.13.2 candidate exists, adoption refuses with the old 1.13.1 install root untouched and no marker created.
+The candidate must be exactly ElectrumX-RVN `1.13.3`. If no verified pending 1.13.3 candidate exists, adoption refuses with the old 1.13.1 install root untouched and no marker created.
 
 A successful preflight ends with:
 
 ```text
-UPDATER_CHECKPOINT legacy-candidate-preflight=PASS version=1.13.2 marker=UNTOUCHED old-stack=RUNNING
+UPDATER_CHECKPOINT legacy-candidate-preflight=PASS version=1.13.3 marker=UNTOUCHED old-stack=RUNNING
 ```
 
 The normal updater deliberately performs its own candidate revalidation again after adoption and immediately before the transaction. The duplicate verification is intentional: the first pass protects the adoption boundary; the second protects the transactional apply boundary.
@@ -68,7 +68,7 @@ The default is refusal.
 
 ## Apply
 
-After the replacement 1.13.2 trust root has been authenticated out-of-band, `electrumx-update check` has recorded the signed v2 candidate, and the candidate-first preflight can succeed, invoke the one-time wrapper from the exact reviewed/signed 1.13.2 candidate tree:
+After the replacement 1.13.3 trust root has been authenticated out-of-band, `electrumx-update check` has recorded the signed v2 candidate, and the candidate-first preflight can succeed, invoke the one-time wrapper from the exact reviewed/signed 1.13.3 candidate tree:
 
 ```bash
 python3 core-safety/scripts/legacy_1_13_1_apply.py apply
@@ -82,13 +82,13 @@ python3 core-safety/scripts/legacy_1_13_1_apply.py apply --yes-adopt-legacy
 
 Only after candidate preflight and operator consent does the wrapper write the private schema-v1 adoption marker atomically. It then delegates the transactional switch, health evaluation, rollback, high-water advancement and audit recording to the normal v2 updater.
 
-If this invocation created the adoption marker but the normal updater returns without promotion, the wrapper removes the marker again only when the restored install root still contains the exact legacy 1.13.1 adoption marker. It refuses to delete a marker that identifies a promoted 1.13.2 tree or any unknown state. This prevents a failed pre-promotion attempt from leaving the production node silently half-adopted while avoiding destructive cleanup after an ambiguous switch/recovery state.
+If this invocation created the adoption marker but the normal updater returns without promotion, the wrapper removes the marker again only when the restored install root still contains the exact legacy 1.13.1 adoption marker. It refuses to delete a marker that identifies a promoted 1.13.3 tree or any unknown state. This prevents a failed pre-promotion attempt from leaving the production node silently half-adopted while avoiding destructive cleanup after an ambiguous switch/recovery state.
 
 The process-local compatibility hooks change only the storage proof model for this legacy transaction: candidate and restored stacks use `compose.yaml` without `compose.storage.yaml`, retaining the exact existing project-scoped named-volume identities. The normal new-installer/bind-backed updater remains unchanged.
 
 ## Safety invariants
 
-- no adoption marker before a completely revalidated/downloaded/verified 1.13.2 candidate;
+- no adoption marker before a completely revalidated/downloaded/verified 1.13.3 candidate;
 - no `docker compose down -v`;
 - no named-volume deletion or recreation;
 - no conversion of Docker private mountpoints into host bind-storage API;

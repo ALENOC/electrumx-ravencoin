@@ -93,7 +93,7 @@ def test_legacy_state_migrates_with_zero_policy_floor(tmp_path):
         "schemaVersion": 1,
         "currentRelease": {"electrumxVersion": "1.13.0"},
     }), encoding="utf-8")
-    with pytest.raises(ValueError, match="manual 1.13.1 -> 1.13.2 trust transition"):
+    with pytest.raises(ValueError, match="manual 1.13.1 -> 1.13.3 trust transition"):
         load_state(str(path))
 
 

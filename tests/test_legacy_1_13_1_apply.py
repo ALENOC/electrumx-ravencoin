@@ -167,7 +167,7 @@ def test_apply_preflights_candidate_before_any_marker_mutation(monkeypatch, tmp_
     monkeypatch.setattr(legacy.cli, "DEFAULT_INSTALL_ROOT", tmp_path)
     monkeypatch.setattr(
         legacy, "_preflight_pending_candidate",
-        lambda: events.append("candidate-preflight") or {"electrumxVersion": "1.13.2"})
+        lambda: events.append("candidate-preflight") or {"electrumxVersion": "1.13.3"})
     monkeypatch.setattr(
         legacy, "discover_legacy_install",
         lambda root: events.append("discovery") or _discovery(tmp_path))
@@ -212,7 +212,7 @@ def test_missing_candidate_refuses_before_marker_write(monkeypatch, tmp_path):
 
 def test_failed_apply_removes_marker_created_by_same_invocation(monkeypatch, tmp_path):
     monkeypatch.setattr(legacy.cli, "DEFAULT_INSTALL_ROOT", tmp_path)
-    monkeypatch.setattr(legacy, "_preflight_pending_candidate", lambda: {"electrumxVersion": "1.13.2"})
+    monkeypatch.setattr(legacy, "_preflight_pending_candidate", lambda: {"electrumxVersion": "1.13.3"})
     monkeypatch.setattr(legacy, "discover_legacy_install", lambda root: _discovery(tmp_path))
     monkeypatch.setattr(legacy, "_confirm", lambda discovery, assume_yes: None)
     monkeypatch.setattr(legacy, "install_runtime_compatibility_hooks", lambda: None)

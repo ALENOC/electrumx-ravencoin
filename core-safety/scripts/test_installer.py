@@ -48,7 +48,7 @@ TEST_PROVENANCE_BYTES = (
 ).encode("utf-8")
 TEST_PROVENANCE_DIGEST = "sha256:" + hashlib.sha256(TEST_PROVENANCE_BYTES).hexdigest()
 
-# Manifest-v2 tests exercise the real rendered 1.13.2 installer, not a
+# Manifest-v2 tests exercise the real rendered 1.13.3 installer, not a
 # compatibility mode added to the historical v1 source template.
 _RENDERED_DIR = pathlib.Path(tempfile.mkdtemp(prefix="electrumx-installer-v2-test-"))
 RENDERED_INSTALLER_PATH = _RENDERED_DIR / "electrumx-ravencoin-install.py"

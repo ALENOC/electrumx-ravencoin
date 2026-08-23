@@ -99,7 +99,7 @@ def _host(arch):
     return ud.HostFacts(
         architecture=arch,
         installed_updater_version="2.0.0",
-        current_electrumx_version="1.13.2",
+        current_electrumx_version="1.13.3",
         current_core_commit="c" * 40,
         current_db_schema=1,
         current_artifact_revision=0,

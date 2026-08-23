@@ -32,11 +32,19 @@ def test_signing_workflow_is_handoff_only():
     assert "release-manifest.canonical" in text
 
 
-def test_docs_state_manual_1_13_1_to_1_13_2_transition():
+def test_docs_state_manual_1_13_1_to_1_13_3_transition():
     text = DOC.read_text(encoding="utf-8")
-    assert "1.13.1 node **cannot and must not auto-update to 1.13.2**" in text
+    assert "1.13.1 node **cannot and must not auto-update to 1.13.3**" in text
     assert "out-of-band" in text
     assert "retired key does not sign, certify, endorse, or attest its own replacement" in text
+
+
+def test_docs_record_withdrawn_1_13_2_candidate():
+    text = DOC.read_text(encoding="utf-8")
+    assert "## Withdrawn 1.13.2 candidate" in text
+    assert "failed real hardware qualification" in text
+    assert "was never published as an installable release" in text
+    assert "`v1.13.2` is retained only as a historical trace" in text
 
 
 def test_docs_bind_one_root_owned_high_water_locator():

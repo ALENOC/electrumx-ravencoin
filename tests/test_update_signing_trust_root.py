@@ -5,7 +5,7 @@
 
 The checked-in v1 public key and its attestation are retained only as historical
 evidence. The attestation must continue to verify under its original v1 domain,
-but it is not authority for the 1.13.2 replacement key. Manifest-v2 tests use
+but it is not authority for the 1.13.3 replacement key. Manifest-v2 tests use
 the current v2 domain and strict schema.
 """
 
@@ -99,7 +99,7 @@ def test_historical_attestation_does_not_verify_under_v2_domain():
 def _sample_body():
     return {
         "schemaVersion": update_manifest.SCHEMA_VERSION,
-        "electrumxVersion": "1.13.2",
+        "electrumxVersion": "1.13.3",
         "artifact_revision": 0,
         "channel": "stable",
         "releaseTimestamp": "2026-08-22T00:00:00Z",

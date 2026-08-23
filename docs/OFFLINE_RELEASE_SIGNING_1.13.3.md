@@ -1,6 +1,6 @@
-# ElectrumX-Ravencoin 1.13.2 — offline release signing
+# ElectrumX-Ravencoin 1.13.3 — offline release signing
 
-This is the complete maintainer signing procedure for the 1.13.2 release candidate.
+This is the complete maintainer signing procedure for the 1.13.3 release candidate.
 It is deliberately limited to **two commands**. The Ed25519 private key never enters
 GitHub Actions, the repository, an executor host, or any remote session.
 
@@ -32,7 +32,7 @@ Do not copy the private key to the candidate directory.
 
 ## Command 1 — sign
 
-From the reviewed 1.13.2 source checkout, run exactly:
+From the reviewed 1.13.3 source checkout, run exactly:
 
 ```sh
 python3 core-safety/scripts/offline_sign_release.py \
@@ -70,7 +70,7 @@ Successful exit code: **0**.
 Expected output shape:
 
 ```text
-version=1.13.2
+version=1.13.3
 artifactRevision=0
 keyId=<16-lowercase-hex-key-id>
 bundleSha256=<64-lowercase-hex>
@@ -94,7 +94,7 @@ following against the independently supplied public key:
 ## Publication decision
 
 Publish **nothing** unless command 2 exits `0`, the final line is exactly
-`status=VERIFIED`, `version=1.13.2`, `artifactRevision=0`, and the printed `keyId`
+`status=VERIFIED`, `version=1.13.3`, `artifactRevision=0`, and the printed `keyId`
 matches the maintainer's independently recorded identity for
 `<NEW_PUBLIC_KEY_HEX>`.
 
