@@ -61,7 +61,30 @@ STORAGE_OVERLAY = "compose.storage.yaml"
 MONITOR_OVERLAY = "compose.monitor.yaml"
 MONITOR_CONTROLLER_OVERLAY = "compose.monitor-controller.yaml"
 CHAINSTRAP_OVERLAY = "compose.chainstrap.yaml"
+TLS_OVERLAY = "compose.tls.yaml"
+EXISTING_CORE_COMPOSE = "compose.existing-core.yaml"
 BUNDLE_METADATA = "release-install-metadata.json"
+
+#: Every Compose file a signed release ships. A COMPOSE_FILE selection in the
+#: operator's .env may only name files from this set: anything else is a
+#: host-local overlay that no release carries, so it cannot survive a release
+#: switch and it silently detaches the model the operator's stack runs from the
+#: model this updater proves.
+RELEASE_COMPOSE_FILES = frozenset({
+    BASE_COMPOSE,
+    STORAGE_OVERLAY,
+    MONITOR_OVERLAY,
+    MONITOR_CONTROLLER_OVERLAY,
+    CHAINSTRAP_OVERLAY,
+    TLS_OVERLAY,
+    EXISTING_CORE_COMPOSE,
+})
+
+#: Compose reads these from the process environment and from .env. The updater
+#: pins project name and file set explicitly on every call it makes, and the
+#: staged setup.sh must be equally independent of the invoking environment.
+COMPOSE_ENV_OVERRIDES = ("COMPOSE_FILE", "COMPOSE_PROFILES", "COMPOSE_PROJECT_NAME",
+                         "COMPOSE_PATH_SEPARATOR")
 MONITOR_PATH = "vendor/ravencoin-node-monitor"
 UPDATE_PUBLIC_KEY_PATH = "core-safety/production/update-signing-public-key.hex"
 CORE_POLICY_PATH = "core-safety/production/safe-core-policy.json"
@@ -102,6 +125,7 @@ REQUIRED_BUNDLE_PATHS = frozenset({
     STORAGE_OVERLAY,
     CHAINSTRAP_OVERLAY,
     MONITOR_OVERLAY,
+    MONITOR_CONTROLLER_OVERLAY,
     "setup.sh",
     ".env.example",
     "docker/core/bootstrap-reindex.sh",
@@ -513,6 +537,60 @@ def update_compose_files(marker: dict, root: Path) -> list[str]:
     return files
 
 
+def _env_compose_selection(root: Path) -> list[str]:
+    """Return the COMPOSE_FILE entries declared in the installed .env."""
+    env_path = root / ".env"
+    if env_path.is_symlink() or not env_path.is_file():
+        raise UpdateRuntimeError("installer .env is missing or is a symlink")
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise UpdateRuntimeError(f"cannot read installer .env: {exc}") from exc
+    raw: Optional[str] = None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key.strip() != "COMPOSE_FILE":
+            continue
+        if raw is not None:
+            raise UpdateRuntimeError("installer .env contains duplicate COMPOSE_FILE")
+        raw = value.strip()
+    if raw is None:
+        return []
+    separator = "," if ("," in raw and ":" not in raw) else ":"
+    return [entry.strip() for entry in raw.split(separator) if entry.strip()]
+
+
+def prove_env_compose_selection(root: Path) -> list[str]:
+    """Refuse to update a node whose .env selects non-release Compose files.
+
+    A COMPOSE_FILE naming a host-local overlay breaks two invariants at once.
+    The overlay is in no release, so any implicit ``docker compose`` resolution
+    in the staged release tree stats a file that does not exist there, and the
+    running stack's real model differs from the model this updater proves with
+    its own explicit ``-f`` selection. Both are caught here, before the update
+    mutates anything.
+    """
+    entries = _env_compose_selection(root)
+    unknown = [entry for entry in entries if entry not in RELEASE_COMPOSE_FILES]
+    if unknown:
+        raise UpdateRuntimeError(
+            "installer .env selects Compose file(s) that no release ships: "
+            + ", ".join(sorted(unknown))
+            + "; these cannot survive a release switch. Remove them from "
+              "COMPOSE_FILE in .env (and fold any required setting into the "
+              "release Compose model) before updating")
+    missing = [entry for entry in entries
+               if (root / entry).is_symlink() or not (root / entry).is_file()]
+    if missing:
+        raise UpdateRuntimeError(
+            "installer .env selects Compose file(s) absent or unsafe in the "
+            "installed release: " + ", ".join(sorted(missing)))
+    return entries
+
+
 def _read_storage_env(root: Path) -> dict[str, Path]:
     env_path = root / ".env"
     if env_path.is_symlink() or not env_path.is_file():
@@ -561,11 +639,21 @@ def _read_storage_env(root: Path) -> dict[str, Path]:
     return result
 
 
+def _child_environment() -> dict[str, str]:
+    # Compose honours COMPOSE_FILE and friends from the inherited environment.
+    # Nothing the updater runs may take its file set, profiles or project
+    # namespace from whatever shell or unit invoked the update.
+    environment = dict(os.environ)
+    for name in COMPOSE_ENV_OVERRIDES:
+        environment.pop(name, None)
+    return environment
+
+
 def _run(argv: Sequence[str], *, cwd: Path, timeout: int = 1800,
          check: bool = False) -> subprocess.CompletedProcess:
     completed = subprocess.run(
         list(argv), cwd=cwd, check=False, capture_output=True, text=True,
-        timeout=timeout)
+        timeout=timeout, env=_child_environment())
     if check and completed.returncode != 0:
         tail = (completed.stdout + "\n" + completed.stderr)[-2000:]
         raise UpdateRuntimeError(
@@ -742,6 +830,10 @@ class TransactionalComposeSwitch:
         self.health_timeout = health_timeout
         self.marker = read_install_marker(self.root)
         self.old_files = update_compose_files(self.marker, self.root)
+        # The operator's .env crosses into the staged release, so its Compose
+        # selection must name release files only. Proven before any staging so
+        # a host-local overlay aborts the update instead of failing an apply.
+        prove_env_compose_selection(self.root)
         # This is the first mutating-upgrade gate. It runs while the old stack
         # is still serving and refuses any lost/changed bind volume or mount.
         self.storage_bindings = prove_running_storage_continuity(

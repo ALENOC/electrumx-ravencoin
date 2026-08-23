@@ -103,6 +103,7 @@ def _bundle_files(*, policy_document, core_key_hex,
             b"    cap_drop:\n      - ALL\n"
             b'    ports:\n      - "127.0.0.1:8899:8899/tcp"\n'
         ),
+        "compose.monitor-controller.yaml": b"services:\n  monitor-controller: {}\n",
         "setup.sh": b"#!/bin/sh\nexit 0\n",
         ".env.example": b"EXAMPLE=1\n",
         "docker/core/bootstrap-reindex.sh": (
