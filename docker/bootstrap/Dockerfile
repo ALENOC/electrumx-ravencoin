@@ -15,6 +15,8 @@ RUN groupadd --gid 10001 ravencoin \
 # unless the committed reviewed floor manifest exactly matches compiled policy.
 COPY --chmod=0444 contrib/bootstrap/chainstrap_bootstrap.py \
     /opt/electrumx-ravencoin/bootstrap/chainstrap_bootstrap.py
+COPY --chmod=0444 contrib/bootstrap/chainstrap_runtime_base.py \
+    /opt/electrumx-ravencoin/bootstrap/chainstrap_runtime_base.py
 COPY --chmod=0444 contrib/bootstrap/chainstrap_runtime.py \
     /opt/electrumx-ravencoin/bootstrap/chainstrap_runtime.py
 COPY --chmod=0444 contrib/bootstrap/manifests/rvn-mainnet-2026-08-19.json \

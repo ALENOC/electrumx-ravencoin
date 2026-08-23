@@ -82,19 +82,41 @@ def test_verify_snapshot_emits_reviewed_floor_and_evidence(tmp_path):
     assert evidence_doc["reviewedManifestSha256"] == hashlib.sha256(floor.read_bytes()).hexdigest()
 
 
-def test_verify_snapshot_rejects_foreign_member(tmp_path):
+def test_verify_snapshot_ignores_safe_foreign_members(tmp_path):
     archives = tmp_path / "archives"
     archives.mkdir()
     cid = "Qm" + "C" * 44
     size, digest = make_zip(
         archives / f"{cid}.zip",
-        {"blocks/blk00000.dat": b"ok", "wallet.dat": b"forbidden"},
+        {
+            "assets/000111.ldb": b"derived",
+            "assets/CURRENT": b"MANIFEST-000001\n",
+            "wallet.dat": b"foreign-but-never-opened",
+            "blocks/blk00000.dat": b"ok",
+        },
+    )
+    upstream = tmp_path / "upstream.json"
+    write_upstream(upstream, [{"cid": cid, "bytes": size, "sha256": digest}])
+    result = verify_snapshot.verify_snapshot(
+        upstream, "b" * 40, archives, tmp_path / "floor.json", tmp_path / "evidence.json")
+    assert result["blockFileCount"] == 1
+    assert result["firstBlock"] == 0
+    assert result["lastBlock"] == 0
+
+
+def test_verify_snapshot_rejects_non_allowlisted_blocks_member(tmp_path):
+    archives = tmp_path / "archives"
+    archives.mkdir()
+    cid = "Qm" + "E" * 44
+    size, digest = make_zip(
+        archives / f"{cid}.zip",
+        {"blocks/blk00000.dat": b"ok", "blocks/rev00000.dat": b"forbidden"},
     )
     upstream = tmp_path / "upstream.json"
     write_upstream(upstream, [{"cid": cid, "bytes": size, "sha256": digest}])
     with pytest.raises(verify_snapshot.VerificationError, match="non-allowlisted ZIP member"):
         verify_snapshot.verify_snapshot(
-            upstream, "b" * 40, archives, tmp_path / "floor.json", tmp_path / "evidence.json")
+            upstream, "e" * 40, archives, tmp_path / "floor.json", tmp_path / "evidence.json")
 
 
 def test_verify_snapshot_rejects_non_contiguous_global_blocks(tmp_path):
