@@ -190,6 +190,48 @@ following on the update path:
 - Node Monitor remains healthy and external;
 - no `No such container` error occurs during promotion or rollback paths.
 
+## Update-path evidence: 1.13.5 -> 1.13.6 on ARM64 (192.168.1.244)
+
+Executed 2026-08-23 on the production Raspberry Pi 5 node, an installation
+adopted from legacy 1.13.1 and therefore carrying `storageMode: named-volumes`.
+Apply was performed with the normal updater only
+(`electrumx_update_cli.py apply`); no `ADOPT LEGACY` prompt appeared.
+
+```text
+UPDATER_CHECKPOINT storage-preflight=PASS old-stack=RUNNING storage-model=named-volumes volume-objects=3 active-mounts=PASS
+UPDATER_CHECKPOINT external-mutator-suspend=PASS service=ravencoin-bandwidth-controller.service
+UPDATER_CHECKPOINT candidate-storage=PASS old-stack=RUNNING compose-model=PASS storage-model=named-volumes volume-objects=3
+UPDATER_CHECKPOINT release-switch=PASS same-filesystem-renames=COMPLETE new-root=ACTIVE
+UPDATER_CHECKPOINT external-mutator-resume=PASS service=ravencoin-bandwidth-controller.service
+HealthVerdict.PROMOTE_TO_CURRENT: post-update health gates passed
+```
+
+Post-promotion evidence:
+
+- install marker: `1.13.6 named-volumes`;
+- the same named volumes remain attached: `electrumx-ravencoin_electrumx-data`,
+  `electrumx-ravencoin_ravencoin-data`, `electrumx-ravencoin_ravencoin-config`,
+  `electrumx-ravencoin_rpc-secrets`;
+- Docker still publishes `50002/tcp -> 0.0.0.0:50002` and `[::]:50002`;
+- all three containers report healthy;
+- `ravencoin-bandwidth-controller.service` is active and its journal contains
+  zero `No such container` events;
+- TLS handshake on port 50002 negotiates TLSv1.3 with
+  `subject=CN=electrumx.raventag.com` and `Verify return code: 0 (ok)`;
+- `server.version` returns `["ElectrumX-RVN 1.13.6","1.4"]`;
+- ElectrumX chain tip height `4506637` equals Ravencoin Core `getblockcount`
+  `4506637`.
+
+Not yet evidenced on this path, so the update path is not marked PASS:
+
+- external TLS verification from outside the host. Handshakes to
+  `electrumx.raventag.com:50002` and to `192.168.1.244:50002` time out from the
+  maintainer workstation, while the identical handshake succeeds on the node
+  itself. This looks like a NAT-hairpin limitation of that vantage point rather
+  than an ElectrumX fault, but it has not been confirmed from a genuinely
+  external network.
+- the controlled failing-health rollback regression below.
+
 ## Rollback regression
 
 Also execute a controlled failing-health test with the external controller
