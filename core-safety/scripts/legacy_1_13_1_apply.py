@@ -291,6 +291,31 @@ def _legacy_compose_files(marker: dict) -> list[str]:
     return [runtime.BASE_COMPOSE]
 
 
+def _validate_legacy_runtime_compose_files(files: Sequence[str]) -> list[str]:
+    """Accept the legacy named-volume model plus safe runtime-only overlays.
+
+    Legacy storage must remain the original plain Docker named-volume model,
+    so compose.storage.yaml, ChainStrap and in-project monitor overlays are
+    forbidden.  compose.tls.yaml is runtime-only and must be preserved when
+    the legacy operator .env selected it.
+    """
+    selected = list(files)
+    allowed = {runtime.BASE_COMPOSE, runtime.TLS_OVERLAY}
+    if not selected or selected[0] != runtime.BASE_COMPOSE:
+        raise LegacyAdoptionError(
+            "legacy named-volume adoption lost the base Compose file")
+    unexpected = sorted(set(selected) - allowed)
+    if runtime.STORAGE_OVERLAY in unexpected:
+        raise LegacyAdoptionError(
+            "legacy candidate unexpectedly selected a storage overlay: "
+            + runtime.STORAGE_OVERLAY)
+    if unexpected:
+        raise LegacyAdoptionError(
+            "legacy named-volume adoption selected incompatible Compose file(s): "
+            + ", ".join(unexpected))
+    return selected
+
+
 def _expected_data_volumes() -> dict[str, str]:
     return {
         logical: f"{runtime.COMPOSE_PROJECT_NAME}_{logical}"
@@ -308,8 +333,9 @@ def _prove_named_volume_objects(expected: dict[str, str]) -> None:
 
 
 def _prove_running_named_storage(root: Path, files: Sequence[str], marker: dict) -> dict[str, str]:
-    if list(files) != [runtime.BASE_COMPOSE] or marker.get("storageMode") != LEGACY_STORAGE_MODE:
+    if marker.get("storageMode") != LEGACY_STORAGE_MODE:
         raise LegacyAdoptionError("legacy running storage proof received the wrong Compose mode")
+    _validate_legacy_runtime_compose_files(files)
     _rendered_named_model(root)
     expected = _expected_data_volumes()
     _prove_named_volume_objects(expected)
@@ -318,8 +344,7 @@ def _prove_running_named_storage(root: Path, files: Sequence[str], marker: dict)
 
 
 def _prove_candidate_named_storage(root: Path, files: Sequence[str], expected: dict[str, str]) -> None:
-    if list(files) != [runtime.BASE_COMPOSE]:
-        raise LegacyAdoptionError("legacy candidate unexpectedly selected a storage overlay")
+    _validate_legacy_runtime_compose_files(files)
     _rendered_named_model(root)
     if expected != _expected_data_volumes():
         raise LegacyAdoptionError("candidate named-volume identities differ from the running node")

@@ -96,6 +96,8 @@ STORAGE_BIND_ENV = {
     "electrumx-data": "ELECTRUMX_DATA_HOST_DIR",
     "monitor-data": "MONITOR_DATA_HOST_DIR",
 }
+LEGACY_NAMED_VOLUME_STORAGE_MODE = "named-volumes"
+
 ACTIVE_STORAGE_MOUNTS = {
     "ravencoin-core": {
         "ravencoin-data": "/var/lib/ravencoin",
@@ -126,6 +128,8 @@ REQUIRED_BUNDLE_PATHS = frozenset({
     CHAINSTRAP_OVERLAY,
     MONITOR_OVERLAY,
     MONITOR_CONTROLLER_OVERLAY,
+    TLS_OVERLAY,
+    EXISTING_CORE_COMPOSE,
     "setup.sh",
     ".env.example",
     "docker/core/bootstrap-reindex.sh",
@@ -517,9 +521,22 @@ def read_install_marker(root: Path) -> dict:
 
 def _required_update_compose_files(marker: dict) -> list[str]:
     # ChainStrap is a completed one-shot bootstrap and intentionally does not
-    # run during software updates. Every Compose file that the *running* node
-    # still depends on is carried forward, including the storage overlay.
-    files = [BASE_COMPOSE, STORAGE_OVERLAY]
+    # run during software updates.
+    #
+    # Modern installs use compose.storage.yaml for bind-backed named volumes.
+    # A node adopted from legacy 1.13.1 deliberately preserves Docker-managed
+    # named volumes instead.  That storage mode is persistent installation
+    # state and must survive every later normal update without another legacy
+    # adoption prompt.
+    if marker.get("storageMode") == LEGACY_NAMED_VOLUME_STORAGE_MODE:
+        if marker.get("nodeMonitorEnabled") or marker.get("monitorControllerEnabled"):
+            raise UpdateRuntimeError(
+                "named-volume legacy storage cannot implicitly absorb "
+                "an in-project monitor/controller")
+        files = [BASE_COMPOSE]
+    else:
+        files = [BASE_COMPOSE, STORAGE_OVERLAY]
+
     if marker.get("nodeMonitorEnabled"):
         files.append(MONITOR_OVERLAY)
     if marker.get("monitorControllerEnabled"):
@@ -528,7 +545,22 @@ def _required_update_compose_files(marker: dict) -> list[str]:
 
 
 def update_compose_files(marker: dict, root: Path) -> list[str]:
-    files = _required_update_compose_files(marker)
+    # Start with the files implied by the signed installer marker, then carry
+    # forward any release-owned overlays explicitly selected by COMPOSE_FILE
+    # in the operator .env.  The .env is persistent across the atomic release
+    # switch, so silently dropping one of its release overlays would recreate
+    # a different runtime model after promotion (for example, losing
+    # compose.tls.yaml and therefore the public ElectrumX TLS listener).
+    #
+    # ChainStrap is deliberately excluded: it is a completed one-shot
+    # bootstrap and must never be re-run by a software update.
+    files = list(_required_update_compose_files(marker))
+    for filename in prove_env_compose_selection(root):
+        if filename == CHAINSTRAP_OVERLAY:
+            continue
+        if filename not in files:
+            files.append(filename)
+
     for filename in files:
         path = root / filename
         if path.is_symlink() or not path.is_file():
@@ -784,8 +816,88 @@ def _verify_active_storage_mounts(root: Path, files: Sequence[str], marker: dict
                     f"{volume_name} at {destination}")
 
 
+def _expected_named_volume_storage() -> dict[str, str]:
+    return {
+        logical: f"{COMPOSE_PROJECT_NAME}_{logical}"
+        for logical in ("ravencoin-data", "ravencoin-config", "electrumx-data")
+    }
+
+
+def _prove_named_volume_objects(expected: dict[str, str]) -> None:
+    for logical, volume_name in expected.items():
+        wanted = f"{COMPOSE_PROJECT_NAME}_{logical}"
+        if volume_name != wanted:
+            raise UpdateRuntimeError(
+                f"named-volume identity changed for {logical}: {volume_name!r}")
+        completed = subprocess.run(
+            ["docker", "volume", "inspect", volume_name],
+            check=False, capture_output=True, text=True, timeout=60)
+        if completed.returncode != 0:
+            raise UpdateRuntimeError(
+                f"existing named volume {volume_name} is missing; refusing update")
+        try:
+            payload = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            raise UpdateRuntimeError(
+                f"docker volume inspect returned invalid JSON for {volume_name}") from exc
+        if not isinstance(payload, list) or len(payload) != 1:
+            raise UpdateRuntimeError(
+                f"docker volume inspect returned unexpected data for {volume_name}")
+
+
+def _prove_candidate_named_volume_model(
+        root: Path, files: Sequence[str], expected: dict[str, str]) -> None:
+    if STORAGE_OVERLAY in files:
+        raise UpdateRuntimeError(
+            "named-volume installation unexpectedly selected compose.storage.yaml")
+    if BASE_COMPOSE not in files:
+        raise UpdateRuntimeError(
+            "named-volume installation lost compose.yaml")
+    if expected != _expected_named_volume_storage():
+        raise UpdateRuntimeError(
+            "candidate named-volume identities differ from running installation")
+
+    completed = _run(
+        _compose_prefix(root, files) + ["config", "--format", "json"],
+        cwd=root, timeout=120)
+    if completed.returncode != 0:
+        detail = (completed.stdout + "\n" + completed.stderr)[-2000:]
+        raise UpdateRuntimeError(
+            f"cannot render candidate named-volume Compose model:\n{detail}")
+    try:
+        config = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise UpdateRuntimeError(
+            "docker compose config did not return valid JSON") from exc
+
+    volumes = config.get("volumes")
+    if not isinstance(volumes, dict):
+        raise UpdateRuntimeError("candidate Compose model has no volumes object")
+
+    for logical, wanted in expected.items():
+        definition = volumes.get(logical)
+        if not isinstance(definition, dict):
+            raise UpdateRuntimeError(
+                f"candidate Compose model lost named volume {logical}")
+        rendered_name = definition.get("name")
+        if rendered_name is not None and rendered_name != wanted:
+            raise UpdateRuntimeError(
+                f"candidate named volume {logical} resolves to "
+                f"{rendered_name!r}, expected {wanted!r}")
+        options = definition.get("driver_opts")
+        if options:
+            raise UpdateRuntimeError(
+                f"candidate named volume {logical} unexpectedly has driver_opts")
+
+
 def prove_running_storage_continuity(
-        root: Path, files: Sequence[str], marker: dict) -> dict[str, Path]:
+        root: Path, files: Sequence[str], marker: dict):
+    if marker.get("storageMode") == LEGACY_NAMED_VOLUME_STORAGE_MODE:
+        expected = _expected_named_volume_storage()
+        _prove_named_volume_objects(expected)
+        _verify_active_storage_mounts(root, files, marker)
+        return expected
+
     expected = _read_storage_env(root)
     rendered = _compose_storage_bindings(root, files)
     if rendered != expected:
@@ -797,7 +909,11 @@ def prove_running_storage_continuity(
 
 
 def prove_candidate_storage_continuity(
-        root: Path, files: Sequence[str], expected: dict[str, Path]) -> None:
+        root: Path, files: Sequence[str], expected) -> None:
+    if expected and all(isinstance(value, str) for value in expected.values()):
+        _prove_candidate_named_volume_model(root, files, expected)
+        return
+
     candidate = _read_storage_env(root)
     if candidate != expected:
         raise UpdateRuntimeError(
@@ -889,7 +1005,17 @@ class TransactionalComposeSwitch:
             extract_bundle_file(self.artifact_path, staging)
             copy_persistent_state(self.root, staging)
             _run(["sh", "./setup.sh", "--bundled-core"], cwd=staging, check=True)
+
+            # Installation identity is persistent operator state.  Preserve the
+            # verified marker across the release-directory switch and update
+            # only the release version.  This keeps storageMode=named-volumes
+            # durable after the one-time legacy adoption, so subsequent
+            # 1.13.x -> 1.13.y updates use the normal updater with no new
+            # legacy consent step.
             marker = dict(self.marker)
+            marker["electrumxVersion"] = self.manifest["electrumxVersion"]
+            _write_private_json(staging / INSTALL_MARKER, marker)
+
             files = update_compose_files(marker, staging)
             prove_candidate_storage_continuity(staging, files, self.storage_bindings)
             print(

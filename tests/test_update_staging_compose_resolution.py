@@ -236,6 +236,67 @@ def test_preflight_accepts_release_compose_selection(tmp_path):
         runtime.BASE_COMPOSE, runtime.CHAINSTRAP_OVERLAY]
 
 
+def test_update_compose_files_preserves_tls_overlay_from_env(tmp_path):
+    root = _install_root(
+        tmp_path,
+        compose_file=f"{runtime.BASE_COMPOSE}:{runtime.TLS_OVERLAY}",
+        extra_files=[runtime.TLS_OVERLAY],
+    )
+    marker = {
+        "schemaVersion": 1,
+        "bootstrapChoice": "p2p",
+        "nodeMonitorEnabled": False,
+        "monitorControllerEnabled": False,
+    }
+
+    assert runtime.update_compose_files(marker, root) == [
+        runtime.BASE_COMPOSE,
+        runtime.STORAGE_OVERLAY,
+        runtime.TLS_OVERLAY,
+    ]
+
+
+def test_update_compose_files_never_reactivates_chainstrap(tmp_path):
+    root = _install_root(
+        tmp_path,
+        compose_file=(
+            f"{runtime.BASE_COMPOSE}:"
+            f"{runtime.CHAINSTRAP_OVERLAY}:"
+            f"{runtime.TLS_OVERLAY}"
+        ),
+        extra_files=[runtime.CHAINSTRAP_OVERLAY, runtime.TLS_OVERLAY],
+    )
+    marker = {
+        "schemaVersion": 1,
+        "bootstrapChoice": "chainstrap",
+        "nodeMonitorEnabled": False,
+        "monitorControllerEnabled": False,
+    }
+
+    files = runtime.update_compose_files(marker, root)
+
+    assert runtime.TLS_OVERLAY in files
+    assert runtime.CHAINSTRAP_OVERLAY not in files
+
+
+def test_legacy_named_volume_runtime_accepts_tls_overlay():
+    assert legacy._validate_legacy_runtime_compose_files([
+        runtime.BASE_COMPOSE,
+        runtime.TLS_OVERLAY,
+    ]) == [
+        runtime.BASE_COMPOSE,
+        runtime.TLS_OVERLAY,
+    ]
+
+
+def test_legacy_named_volume_runtime_rejects_storage_overlay():
+    with pytest.raises(legacy.LegacyAdoptionError):
+        legacy._validate_legacy_runtime_compose_files([
+            runtime.BASE_COMPOSE,
+            runtime.STORAGE_OVERLAY,
+        ])
+
+
 def test_preflight_accepts_absent_compose_file(tmp_path):
     root = _install_root(tmp_path, compose_file=None)
     assert runtime.prove_env_compose_selection(root) == []
@@ -284,9 +345,7 @@ def test_release_compose_files_are_tracked_sources():
 
 
 def test_required_bundle_paths_cover_the_release_compose_model():
-    for name in (runtime.BASE_COMPOSE, runtime.STORAGE_OVERLAY,
-                 runtime.CHAINSTRAP_OVERLAY, runtime.MONITOR_OVERLAY,
-                 runtime.MONITOR_CONTROLLER_OVERLAY):
+    for name in runtime.RELEASE_COMPOSE_FILES:
         assert name in runtime.REQUIRED_BUNDLE_PATHS
 
 

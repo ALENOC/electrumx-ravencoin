@@ -36,10 +36,20 @@ def _marker(*, monitor=False, controller=False):
 
 
 def _write_files(root: pathlib.Path, names):
+    names = list(names)
     for name in names:
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("# test\n", encoding="utf-8")
+
+    env_path = root / ".env"
+    existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+    lines = [
+        line for line in existing.splitlines()
+        if not line.startswith("COMPOSE_FILE=")
+    ]
+    lines.append("COMPOSE_FILE=" + ":".join(names))
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 @pytest.mark.parametrize("bootstrap", ["chainstrap", "p2p"])

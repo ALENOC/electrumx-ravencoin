@@ -104,6 +104,18 @@ def _bundle_files(*, policy_document, core_key_hex,
             b'    ports:\n      - "127.0.0.1:8899:8899/tcp"\n'
         ),
         "compose.monitor-controller.yaml": b"services:\n  monitor-controller: {}\n",
+        "compose.tls.yaml": (
+            b"services:\n"
+            b"  electrumx:\n"
+            b"    ports:\n"
+            b'      - "50002:50002/tcp"\n'
+        ),
+        "compose.existing-core.yaml": (
+            b"services:\n"
+            b"  electrumx:\n"
+            b"    environment:\n"
+            b"      RAVENCOIN_DAEMON_HOST: host.docker.internal\n"
+        ),
         "setup.sh": b"#!/bin/sh\nexit 0\n",
         ".env.example": b"EXAMPLE=1\n",
         "docker/core/bootstrap-reindex.sh": (
