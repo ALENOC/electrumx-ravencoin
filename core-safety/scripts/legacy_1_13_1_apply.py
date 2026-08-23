@@ -35,7 +35,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Sequence
+from typing import Optional, Sequence
 
 import electrumx_update_cli as cli
 import update_runtime as runtime
@@ -343,7 +343,8 @@ def _prove_running_named_storage(root: Path, files: Sequence[str], marker: dict)
     return expected
 
 
-def _prove_candidate_named_storage(root: Path, files: Sequence[str], expected: dict[str, str]) -> None:
+def _prove_candidate_named_storage(
+        root: Path, files: Sequence[str], expected: dict[str, str]) -> None:
     _validate_legacy_runtime_compose_files(files)
     _rendered_named_model(root)
     if expected != _expected_data_volumes():
@@ -359,7 +360,6 @@ def install_runtime_compatibility_hooks() -> None:
     original_required = runtime._required_update_compose_files
     original_running = runtime.prove_running_storage_continuity
     original_candidate = runtime.prove_candidate_storage_continuity
-    original_objects = runtime._docker_volume_bindings
 
     def required(marker: dict) -> list[str]:
         if marker.get("storageMode") == LEGACY_STORAGE_MODE:
@@ -371,20 +371,24 @@ def install_runtime_compatibility_hooks() -> None:
             return _prove_running_named_storage(root, files, marker)
         return original_running(root, files, marker)
 
-    def candidate(root: Path, files: Sequence[str], expected):
-        if expected and all(isinstance(value, str) for value in expected.values()):
+    def candidate(root: Path, files: Sequence[str], expected, *,
+                  storage_mode: Optional[str] = None):
+        if storage_mode is None:
+            storage_mode = (
+                LEGACY_STORAGE_MODE
+                if expected and all(isinstance(value, str) for value in expected.values())
+                else None)
+        if storage_mode == LEGACY_STORAGE_MODE:
             return _prove_candidate_named_storage(root, files, expected)
-        return original_candidate(root, files, expected)
+        return original_candidate(root, files, expected, storage_mode=storage_mode)
 
-    def objects(expected):
-        if expected and all(isinstance(value, str) for value in expected.values()):
-            return _prove_named_volume_objects(expected)
-        return original_objects(expected)
-
+    # Docker volume-object proofs are deliberately NOT hooked.  update_runtime
+    # dispatches on the persistent marker storage mode by itself, so the normal
+    # updater never depends on a process-local rebinding to validate an adopted
+    # named-volume installation.
     runtime._required_update_compose_files = required
     runtime.prove_running_storage_continuity = running
     runtime.prove_candidate_storage_continuity = candidate
-    runtime._docker_volume_bindings = objects
 
 
 def _confirm(discovery: dict, *, assume_yes: bool) -> None:

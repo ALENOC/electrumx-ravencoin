@@ -97,6 +97,7 @@ STORAGE_BIND_ENV = {
     "monitor-data": "MONITOR_DATA_HOST_DIR",
 }
 LEGACY_NAMED_VOLUME_STORAGE_MODE = "named-volumes"
+BIND_BACKED_STORAGE_MODE = "bind-backed"
 
 ACTIVE_STORAGE_MOUNTS = {
     "ravencoin-core": {
@@ -840,9 +841,18 @@ def _prove_named_volume_objects(expected: dict[str, str]) -> None:
         except json.JSONDecodeError as exc:
             raise UpdateRuntimeError(
                 f"docker volume inspect returned invalid JSON for {volume_name}") from exc
-        if not isinstance(payload, list) or len(payload) != 1:
+        if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], dict):
             raise UpdateRuntimeError(
                 f"docker volume inspect returned unexpected data for {volume_name}")
+        volume = payload[0]
+        options = volume.get("Options")
+        # An adopted legacy installation keeps plain Docker-managed named
+        # volumes.  Docker reports those with no driver options at all, so a
+        # volume that suddenly carries bind driver_opts is not the object this
+        # installation was adopted with and must not be accepted silently.
+        if volume.get("Driver") != "local" or options not in (None, {}):
+            raise UpdateRuntimeError(
+                f"existing named volume {volume_name} is not a plain local named volume")
 
 
 def _prove_candidate_named_volume_model(
@@ -890,9 +900,36 @@ def _prove_candidate_named_volume_model(
                 f"candidate named volume {logical} unexpectedly has driver_opts")
 
 
+def storage_mode_of(marker: dict) -> str:
+    """Return the persistent storage model of an installation.
+
+    ``named-volumes`` is durable installation state written once by the legacy
+    1.13.1 adoption.  Every later normal update must read it from the marker
+    and validate storage natively, without any process-local hook from
+    legacy_1_13_1_apply.
+    """
+    if marker.get("storageMode") == LEGACY_NAMED_VOLUME_STORAGE_MODE:
+        return LEGACY_NAMED_VOLUME_STORAGE_MODE
+    return BIND_BACKED_STORAGE_MODE
+
+
+def prove_storage_volume_objects(expected, *, storage_mode: str) -> None:
+    """Prove the Docker volume objects for the installation's storage model.
+
+    Every runtime phase after the release switch (candidate start, health
+    gate, rollback) must go through here.  Calling the bind-backed primitive
+    directly is what made an adopted named-volume node fail post-switch while
+    its preflight passed.
+    """
+    if storage_mode == LEGACY_NAMED_VOLUME_STORAGE_MODE:
+        _prove_named_volume_objects(expected)
+        return
+    _docker_volume_bindings(expected)
+
+
 def prove_running_storage_continuity(
         root: Path, files: Sequence[str], marker: dict):
-    if marker.get("storageMode") == LEGACY_NAMED_VOLUME_STORAGE_MODE:
+    if storage_mode_of(marker) == LEGACY_NAMED_VOLUME_STORAGE_MODE:
         expected = _expected_named_volume_storage()
         _prove_named_volume_objects(expected)
         _verify_active_storage_mounts(root, files, marker)
@@ -909,8 +946,14 @@ def prove_running_storage_continuity(
 
 
 def prove_candidate_storage_continuity(
-        root: Path, files: Sequence[str], expected) -> None:
-    if expected and all(isinstance(value, str) for value in expected.values()):
+        root: Path, files: Sequence[str], expected, *,
+        storage_mode: Optional[str] = None) -> None:
+    if storage_mode is None:
+        storage_mode = (
+            LEGACY_NAMED_VOLUME_STORAGE_MODE
+            if expected and all(isinstance(value, str) for value in expected.values())
+            else BIND_BACKED_STORAGE_MODE)
+    if storage_mode == LEGACY_NAMED_VOLUME_STORAGE_MODE:
         _prove_candidate_named_volume_model(root, files, expected)
         return
 
@@ -950,6 +993,9 @@ class TransactionalComposeSwitch:
         self.manifest = manifest
         self.health_timeout = health_timeout
         self.marker = read_install_marker(self.root)
+        # Persistent installation state, read once from the verified marker and
+        # used by every storage proof in this transaction, including rollback.
+        self.storage_mode = storage_mode_of(self.marker)
         self.old_files = update_compose_files(self.marker, self.root)
         # The operator's .env crosses into the staged release, so its Compose
         # selection must name release files only. Proven before any staging so
@@ -959,9 +1005,15 @@ class TransactionalComposeSwitch:
         # is still serving and refuses any lost/changed bind volume or mount.
         self.storage_bindings = prove_running_storage_continuity(
             self.root, self.old_files, self.marker)
-        print(
-            "UPDATER_CHECKPOINT storage-preflight=PASS old-stack=RUNNING "
-            "bind-paths=4 volume-objects=4 active-mounts=PASS")
+        if self.storage_mode == LEGACY_NAMED_VOLUME_STORAGE_MODE:
+            print(
+                "UPDATER_CHECKPOINT storage-preflight=PASS old-stack=RUNNING "
+                f"storage-model=named-volumes volume-objects={len(self.storage_bindings)} "
+                "active-mounts=PASS")
+        else:
+            print(
+                "UPDATER_CHECKPOINT storage-preflight=PASS old-stack=RUNNING "
+                "bind-paths=4 volume-objects=4 active-mounts=PASS")
         self.trusted_update_public_key_hex = _read_installed_key(
             self.root / UPDATE_PUBLIC_KEY_PATH, "ElectrumX release/update")
         self.trusted_core_policy_public_key_hex = _read_installed_key(
@@ -985,6 +1037,7 @@ class TransactionalComposeSwitch:
             "failed": str(self.failed) if self.failed else None,
             "candidateVersion": self.manifest.get("electrumxVersion"),
             "artifactDigest": self.manifest.get("artifactDigest"),
+            "storageMode": self.storage_mode,
             "storageBindings": {
                 name: str(path) for name, path in self.storage_bindings.items()
             },
@@ -1017,10 +1070,17 @@ class TransactionalComposeSwitch:
             _write_private_json(staging / INSTALL_MARKER, marker)
 
             files = update_compose_files(marker, staging)
-            prove_candidate_storage_continuity(staging, files, self.storage_bindings)
-            print(
-                "UPDATER_CHECKPOINT candidate-storage=PASS old-stack=RUNNING "
-                "compose-model=PASS bind-paths=4")
+            prove_candidate_storage_continuity(
+                staging, files, self.storage_bindings, storage_mode=self.storage_mode)
+            if self.storage_mode == LEGACY_NAMED_VOLUME_STORAGE_MODE:
+                print(
+                    "UPDATER_CHECKPOINT candidate-storage=PASS old-stack=RUNNING "
+                    "compose-model=PASS storage-model=named-volumes "
+                    f"volume-objects={len(self.storage_bindings)}")
+            else:
+                print(
+                    "UPDATER_CHECKPOINT candidate-storage=PASS old-stack=RUNNING "
+                    "compose-model=PASS bind-paths=4")
             prefix = _compose_prefix(staging, files)
             _run(prefix + ["config", "--quiet"], cwd=staging, check=True)
             # Build before activation while the old containers and their proven
@@ -1070,8 +1130,9 @@ class TransactionalComposeSwitch:
         # Recheck the candidate tree after the atomic rename and before Docker
         # can create/attach anything. A missing storage overlay therefore can
         # never silently fall through to fresh named volumes.
-        prove_candidate_storage_continuity(self.root, files, self.storage_bindings)
-        _docker_volume_bindings(self.storage_bindings)
+        prove_candidate_storage_continuity(
+            self.root, files, self.storage_bindings, storage_mode=self.storage_mode)
+        prove_storage_volume_objects(self.storage_bindings, storage_mode=self.storage_mode)
         prefix = _compose_prefix(self.root, files)
         _run(prefix + ["up", "-d", "--no-build"], cwd=self.root,
              timeout=1800, check=True)
@@ -1125,9 +1186,10 @@ class TransactionalComposeSwitch:
         if manifest != self.manifest:
             raise UpdateRuntimeError("health-check manifest changed after switch")
 
-        # The new services must still be attached to the same bind-backed
-        # volume objects before a release can be promoted to current.
-        _docker_volume_bindings(self.storage_bindings)
+        # The new services must still be attached to the exact same volume
+        # objects, in this installation's own storage model, before a release
+        # can be promoted to current.
+        prove_storage_volume_objects(self.storage_bindings, storage_mode=self.storage_mode)
         _verify_active_storage_mounts(
             self.root, update_compose_files(self.marker, self.root), self.marker)
 
@@ -1244,8 +1306,9 @@ class TransactionalComposeSwitch:
         # The restored release directory still carries the previously proven
         # storage overlay and .env. Recheck the Docker volume objects before
         # bringing the old stack back.
-        prove_candidate_storage_continuity(self.root, self.old_files, self.storage_bindings)
-        _docker_volume_bindings(self.storage_bindings)
+        prove_candidate_storage_continuity(
+            self.root, self.old_files, self.storage_bindings, storage_mode=self.storage_mode)
+        prove_storage_volume_objects(self.storage_bindings, storage_mode=self.storage_mode)
         _run(prefix + ["up", "-d", "--no-build"], cwd=self.root,
              timeout=1800, check=True)
         self.journal.unlink(missing_ok=True)

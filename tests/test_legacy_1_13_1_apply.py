@@ -137,6 +137,16 @@ def test_noninteractive_adoption_defaults_to_refusal(monkeypatch, tmp_path):
 
 def test_runtime_hooks_route_string_storage_identity_to_named_volume_proofs(monkeypatch, tmp_path):
     calls = []
+    # install_runtime_compatibility_hooks() rebinds module-level attributes of
+    # update_runtime for the rest of the process. Record the originals through
+    # monkeypatch first so pytest restores them at teardown; leaking them made
+    # later tests exercise the hooks instead of the native updater code, which
+    # is exactly what hid the named-volume post-switch failure.
+    for name in ("_required_update_compose_files",
+                 "prove_running_storage_continuity",
+                 "prove_candidate_storage_continuity",
+                 "_docker_volume_bindings"):
+        monkeypatch.setattr(legacy.runtime, name, getattr(legacy.runtime, name))
     monkeypatch.setattr(legacy, "_prove_candidate_named_storage",
                         lambda root, files, expected: calls.append((tuple(files), dict(expected))))
     legacy.install_runtime_compatibility_hooks()
