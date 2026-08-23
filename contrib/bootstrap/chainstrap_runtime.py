@@ -23,6 +23,23 @@ import chainstrap_runtime_base as _base
 from chainstrap_runtime_base import *  # noqa: F401,F403 - compatibility surface
 
 
+def __getattr__(name: str):
+    """Preserve the complete legacy module surface, including private helpers.
+
+    Existing regression tests and maintenance tooling intentionally exercise a
+    few underscored helpers.  Star-import does not re-export those names, so
+    delegate unknown attributes to the byte-for-byte reviewed base module.
+    """
+    try:
+        return getattr(_base, name)
+    except AttributeError as exc:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from exc
+
+
+def __dir__():
+    return sorted(set(globals()) | set(dir(_base)))
+
+
 def _foreign_member_is_safe_to_ignore(info: zipfile.ZipInfo) -> bool:
     """Return True only for inert foreign members that will never be extracted."""
     if info.is_dir():
