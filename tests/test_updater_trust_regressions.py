@@ -23,6 +23,11 @@ from update_state import (  # noqa: E402
     record_verified_core_policy, save_state,
 )
 
+ARTIFACT_DIGEST = "sha256:" + "d" * 64
+CURRENT_ARTIFACT_DIGEST = "sha256:" + "a" * 64
+CURRENT_PROVENANCE_DIGEST = "sha256:" + "b" * 64
+PROVENANCE_DIGEST = "sha256:" + "c" * 64
+
 
 def _host():
     return HostFacts(
@@ -30,12 +35,19 @@ def _host():
         installed_updater_version="1.0.0",
         current_electrumx_version="1.0.0",
         current_core_commit="a" * 40,
+        current_artifact_revision=0,
+        current_artifact_digest=CURRENT_ARTIFACT_DIGEST,
+        current_provenance_digest=CURRENT_PROVENANCE_DIGEST,
     )
 
 
-def _manifest(commit="c" * 40, cert_digest="sha256:cert"):
+def _manifest(commit="c" * 40, cert_digest="e" * 64):
     return {
-        "artifactDigest": "sha256:artifact",
+        "schemaVersion": 2,
+        "electrumxVersion": "1.1.0",
+        "artifact_revision": 0,
+        "artifactDigest": ARTIFACT_DIGEST,
+        "provenanceDigest": PROVENANCE_DIGEST,
         "architecture": "linux/amd64",
         "coreCommit": commit,
         "certificationReportDigest": cert_digest,
@@ -48,12 +60,12 @@ def _manifest(commit="c" * 40, cert_digest="sha256:cert"):
 def test_certification_digest_must_match_verified_policy():
     commit = "c" * 40
     decision = evaluate_verification(
-        manifest=_manifest(commit, "sha256:wrong"),
+        manifest=_manifest(commit, "f" * 64),
         signature_valid=True,
-        downloaded_artifact_digest="sha256:artifact",
+        downloaded_artifact_digest=ARTIFACT_DIGEST,
         host=_host(),
         safe_core_certified_commits=frozenset({commit}),
-        safe_core_certification_digests={commit: "sha256:expected"},
+        safe_core_certification_digests={commit: "e" * 64},
     )
     assert decision.verdict is VerificationVerdict.REFUSED_CERTIFICATION_DIGEST_MISMATCH
 
@@ -61,12 +73,12 @@ def test_certification_digest_must_match_verified_policy():
 def test_matching_certification_digest_can_verify():
     commit = "c" * 40
     decision = evaluate_verification(
-        manifest=_manifest(commit, "sha256:expected"),
+        manifest=_manifest(commit, "e" * 64),
         signature_valid=True,
-        downloaded_artifact_digest="sha256:artifact",
+        downloaded_artifact_digest=ARTIFACT_DIGEST,
         host=_host(),
         safe_core_certified_commits=frozenset({commit}),
-        safe_core_certification_digests={commit: "sha256:expected"},
+        safe_core_certification_digests={commit: "e" * 64},
     )
     assert decision.verdict is VerificationVerdict.VERIFIED
 
@@ -81,12 +93,8 @@ def test_legacy_state_migrates_with_zero_policy_floor(tmp_path):
         "schemaVersion": 1,
         "currentRelease": {"electrumxVersion": "1.13.0"},
     }), encoding="utf-8")
-    state = load_state(str(path))
-    assert state.minimum_core_policy_version == 0
-    save_state(str(path), state)
-    persisted = json.loads(path.read_text(encoding="utf-8"))
-    assert persisted["schemaVersion"] == 2
-    assert persisted["minimumCorePolicyVersion"] == 0
+    with pytest.raises(ValueError, match="manual 1.13.1 -> 1.13.3 trust transition"):
+        load_state(str(path))
 
 
 def test_schema_v2_missing_policy_floor_fails_closed(tmp_path):

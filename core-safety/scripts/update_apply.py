@@ -5,16 +5,17 @@
 """Orchestrates ``electrumx-update apply``: the only code path allowed to
 change what is running.
 
-``check`` / ``status`` / ``show`` never call anything in this module. This
-module is entered only from an explicit operator command and refuses unless the
-pending candidate is both ELIGIBLE and VERIFIED. A consensus-changing manifest
-also requires ``--approve-consensus-change``.
+A higher ``artifact_revision`` under the *same* ElectrumX version is metadata
+only: applying it advances verified release state without stopping services,
+rebuilding images, reindexing Core, or touching the running node. A version
+change retains the existing transactional switch and health-gate behavior.
 
-Production hooks stage/build before stopping the old node, atomically switch a
-same-filesystem release directory, start the new stack, run real health gates,
-and either restore the exact previous release or return a promotion decision.
-The caller durably saves the promoted UpdateState *before* invoking the optional
-``finalize_success`` hook that deletes the last-known-good directory/journal.
+Version-changing transactions also coordinate with the known host-side
+Ravencoin bandwidth controller.  That controller can legitimately recreate the
+ElectrumX container while reconciling ``MAX_SESSIONS``; doing so concurrently
+with the updater's Compose transaction races container identity and can make
+both promotion and rollback fail.  The controller is therefore suspended before
+runtime mutation and restored only after successful promotion or exact rollback.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from __future__ import annotations
 import dataclasses
 from typing import Callable, Optional
 
+import external_mutation_guard
 from update_decision import (
     ApplyVerdict, EligibilityVerdict, HealthGateResult, HealthVerdict,
     VerificationVerdict, evaluate_apply, evaluate_health,
@@ -38,8 +40,6 @@ class ApplyHooks:
     start_services: Callable[[], None]
     run_health_checks: Callable[[dict], HealthGateResult]
     rollback_to: Callable[[Optional[dict]], None]
-    # Deliberately not invoked inside apply_pending_candidate. The production
-    # CLI invokes it only after save_state() has durably recorded promotion.
     finalize_success: Optional[Callable[[], None]] = None
 
 
@@ -49,30 +49,52 @@ class ApplyResult:
     detail: str = ""
 
 
+def _resume_external_mutator(suspended: bool) -> str:
+    """Best-effort restore after the transaction has reached a safe state."""
+    if not suspended:
+        return ""
+    try:
+        external_mutation_guard.resume_if_suspended(True)
+    except external_mutation_guard.ExternalMutationGuardError as exc:
+        return f"; warning: external controller restart failed: {exc}"
+    return ""
+
+
 def _rollback_after_failure(state: UpdateState, hooks: ApplyHooks, *,
-                            previous: Optional[dict], reason: str) -> ApplyResult:
+                            previous: Optional[dict], reason: str,
+                            external_mutator_suspended: bool = False) -> ApplyResult:
     try:
         hooks.rollback_to(previous)
     except Exception as rollback_exc:  # noqa: BLE001 - operational boundary
         detail = (
             f"{reason}; automatic rollback also failed: "
             f"{type(rollback_exc).__name__}: {rollback_exc}; operator intervention required")
+        if external_mutator_suspended:
+            detail += "; external container reconciler intentionally remains suspended"
         record_stuck(state, reason=detail)
         return ApplyResult(HealthVerdict.STUCK_NO_BLIND_ROLLBACK, detail)
 
     detail = f"{reason}; exact previous release restored"
+    detail += _resume_external_mutator(external_mutator_suspended)
     record_rollback(state, reason=detail, restored_release=previous)
     return ApplyResult(HealthVerdict.ROLLBACK_TO_LAST_KNOWN_GOOD, detail)
 
 
+def _revision_only(previous: Optional[dict], manifest: dict) -> bool:
+    if not previous:
+        return False
+    if previous.get("electrumxVersion") != manifest.get("electrumxVersion"):
+        return False
+    current_revision = previous.get("artifact_revision")
+    candidate_revision = manifest.get("artifact_revision")
+    return isinstance(current_revision, int) and not isinstance(current_revision, bool) and \
+        isinstance(candidate_revision, int) and not isinstance(candidate_revision, bool) and \
+        candidate_revision > current_revision
+
+
 def apply_pending_candidate(state: UpdateState, hooks: ApplyHooks, *,
                             approve_consensus_change: bool) -> ApplyResult:
-    """Run the explicit apply transaction after discovery/trust revalidation.
-
-    The caller is responsible for re-fetching and re-verifying the signed
-    manifest and artifact immediately before entering this function. The
-    persisted verdict is still checked here as defence in depth.
-    """
+    """Run an explicit apply after immediate trust revalidation."""
     candidate = state.pending_candidate
     eligibility = candidate.get("_eligibilityVerdict") if candidate else None
     verification = candidate.get("_verificationVerdict") if candidate else None
@@ -96,12 +118,24 @@ def apply_pending_candidate(state: UpdateState, hooks: ApplyHooks, *,
 
     manifest = candidate["manifest"]
     previous = state.current_release
-    rollback_safe = manifest.get("rollbackSafe", False)
+
+    # Artifact revision is deliberately informational for a running node.
+    # The signed release identity/high-water advances, but no runtime hooks run.
+    if _revision_only(previous, manifest):
+        record_promotion(state, applied_release=manifest)
+        return ApplyResult(
+            HealthVerdict.PROMOTE_TO_CURRENT,
+            "revision-only promotion: running services, images and databases unchanged")
 
     try:
-        # Production ``stop_services`` performs/statically validates staging and
-        # the new image build before stopping the old node. This preserves the
-        # small, testable hook API while minimizing downtime.
+        external_mutator_suspended = external_mutation_guard.suspend_if_active()
+    except external_mutation_guard.ExternalMutationGuardError as exc:
+        reason = f"external container reconciler could not be suspended before mutation: {exc}"
+        record_stuck(state, reason=reason)
+        return ApplyResult(HealthVerdict.STUCK_NO_BLIND_ROLLBACK, reason)
+
+    rollback_safe = manifest.get("rollbackSafe", False)
+    try:
         hooks.stop_services()
         hooks.switch_atomically(manifest)
         hooks.start_services()
@@ -110,7 +144,10 @@ def apply_pending_candidate(state: UpdateState, hooks: ApplyHooks, *,
         reason = f"update runtime failed: {type(exc).__name__}: {exc}"
         if rollback_safe:
             return _rollback_after_failure(
-                state, hooks, previous=previous, reason=reason)
+                state, hooks, previous=previous, reason=reason,
+                external_mutator_suspended=external_mutator_suspended)
+        if external_mutator_suspended:
+            reason += "; external container reconciler intentionally remains suspended"
         record_stuck(
             state, reason=reason +
             "; rollbackSafe=false, automatic rollback intentionally suppressed")
@@ -119,19 +156,21 @@ def apply_pending_candidate(state: UpdateState, hooks: ApplyHooks, *,
             state.failure_reason or reason)
 
     health_decision = evaluate_health(health, rollback_safe=rollback_safe)
-
     if health_decision.verdict == HealthVerdict.PROMOTE_TO_CURRENT:
-        # Only in-memory state changes here. The CLI must fsync this state before
-        # calling hooks.finalize_success / TransactionalComposeSwitch.finalize_success.
+        detail = health_decision.reason or "post-update health gates passed"
+        detail += _resume_external_mutator(external_mutator_suspended)
         record_promotion(state, applied_release=manifest)
-        return ApplyResult(health_decision.verdict, health_decision.reason)
+        return ApplyResult(health_decision.verdict, detail)
 
     if health_decision.verdict == HealthVerdict.ROLLBACK_TO_LAST_KNOWN_GOOD:
         return _rollback_after_failure(
             state, hooks, previous=previous,
-            reason=health_decision.reason or "post-update health gates failed")
+            reason=health_decision.reason or "post-update health gates failed",
+            external_mutator_suspended=external_mutator_suspended)
 
-    # STUCK_NO_BLIND_ROLLBACK: leave the switched unhealthy state and exact
-    # backup/journal in place so an operator can choose a migration-safe action.
-    record_stuck(state, reason=health_decision.reason)
-    return ApplyResult(health_decision.verdict, health_decision.reason)
+    detail = health_decision.reason
+    if external_mutator_suspended:
+        detail = (detail or "post-update health state is indeterminate") + \
+            "; external container reconciler intentionally remains suspended"
+    record_stuck(state, reason=detail)
+    return ApplyResult(health_decision.verdict, detail)

@@ -297,7 +297,15 @@ else
     printf '%s\n' 'Generated private RPC credential files without displaying their values.'
 fi
 
-docker compose config --quiet
+# Validate the release's own Compose model explicitly. A bare
+# 'docker compose config' resolves its file set implicitly from COMPOSE_FILE in
+# the environment or in .env, so an operator's host-local overlay that is not
+# part of a signed release makes this check stat a file the release tree does
+# not contain. The updater stages a release with the operator's .env copied in,
+# which turned that into an apply-time staging failure. An explicit -f matches
+# the default resolution for a clean install and is independent of both
+# COMPOSE_FILE channels; --existing-core above already validates this way.
+docker compose -f compose.yaml config --quiet
 
 if [ "$enable_reboot" = true ]; then
     command -v systemctl >/dev/null 2>&1 \

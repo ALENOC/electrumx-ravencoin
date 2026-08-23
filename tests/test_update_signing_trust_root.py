@@ -1,14 +1,12 @@
 # Copyright (c) 2026, the ElectrumX-RVN community maintainers
 # The MIT License (MIT). See LICENCE for details.
 
-"""Regression tests for the production ElectrumX release/update trust root.
+"""Regression tests for release/update signing trust migration.
 
-The private half of this key exists only in the protected release-signing
-environment, so these tests never see it.  What they do prove is that the
-public key published in the repository is the one the ceremony actually
-generated (via a signature that only the protected private key could have
-produced), that the key is bound to the ElectrumX update-manifest domain,
-and that a manifest signed by any other key fails closed.
+The checked-in v1 public key and its attestation are retained only as historical
+evidence. The attestation must continue to verify under its original v1 domain,
+but it is not authority for the 1.13.3 replacement key. Manifest-v2 tests use
+the current v2 domain and strict schema.
 """
 
 from __future__ import annotations
@@ -18,21 +16,23 @@ import pathlib
 import sys
 
 import pytest
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey, Ed25519PublicKey,
 )
-from cryptography.exceptions import InvalidSignature
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "core-safety" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+import render_installer_v2  # noqa: E402
 import update_manifest  # noqa: E402
 
 PUBLIC_KEY_PATH = ROOT / "core-safety" / "production" / \
     "update-signing-public-key.hex"
 ATTESTATION_PATH = ROOT / "core-safety" / "production" / \
     "update-signing-key-attestation.json"
+HISTORICAL_V1_DOMAIN = b"ALENOC-RVN-ELECTRUMX-UPDATE-MANIFEST-v1\x00"
 
 
 def _published_public_bytes() -> bytes:
@@ -44,43 +44,40 @@ def _attestation() -> dict:
 
 
 def _attestation_message(statement: dict) -> bytes:
-    return update_manifest.SIGNATURE_DOMAIN + json.dumps(
+    return HISTORICAL_V1_DOMAIN + json.dumps(
         statement, sort_keys=True, separators=(",", ":"),
         ensure_ascii=True).encode("utf-8")
 
 
-def test_published_public_key_is_well_formed():
+def test_retired_public_key_is_well_formed_and_explicitly_denied_by_v2_renderer():
     public_bytes = _published_public_bytes()
     assert len(public_bytes) == 32
-    trusted = update_manifest.load_trusted_key(str(PUBLIC_KEY_PATH))
-    assert list(trusted) == [update_manifest.key_id_for(public_bytes)]
+    assert public_bytes.hex() == render_installer_v2.RETIRED_UPDATE_PUBLIC_KEY_HEX
+    assert update_manifest.key_id_for(public_bytes) == render_installer_v2.RETIRED_UPDATE_KEY_ID
 
 
-def test_attestation_proves_possession_of_the_protected_private_key():
-    """Only the holder of the protected private key can produce this."""
+def test_historical_v1_attestation_still_verifies_under_its_original_domain():
     document = _attestation()
     statement = document["statement"]
     public_bytes = _published_public_bytes()
-
     assert statement["publicKey"] == public_bytes.hex()
     assert statement["keyId"] == update_manifest.key_id_for(public_bytes)
     assert document["signature"]["keyId"] == statement["keyId"]
     assert document["signature"]["algorithm"] == "ed25519"
     assert statement["domain"] == "ALENOC-RVN-ELECTRUMX-UPDATE-MANIFEST-v1"
-
     Ed25519PublicKey.from_public_bytes(public_bytes).verify(
         bytes.fromhex(document["signature"]["value"]),
         _attestation_message(statement))
 
 
-def test_attestation_records_the_protected_secret_location():
+def test_historical_attestation_records_why_ci_key_is_retired():
     statement = _attestation()["statement"]
     assert statement["secretName"] == "ELECTRUMX_UPDATE_SIGNING_KEY"
     assert statement["secretEnvironment"] == "electrumx-release-signing"
     assert statement["operator"] == "ALENOC"
 
 
-def test_attestation_fails_closed_under_any_other_key():
+def test_historical_attestation_fails_under_foreign_key():
     document = _attestation()
     message = _attestation_message(document["statement"])
     signature = bytes.fromhex(document["signature"]["value"])
@@ -89,24 +86,25 @@ def test_attestation_fails_closed_under_any_other_key():
         foreign_public.verify(signature, message)
 
 
-def test_attestation_signature_is_domain_bound():
-    """The same bytes without the update-manifest domain must not verify."""
+def test_historical_attestation_does_not_verify_under_v2_domain():
     document = _attestation()
-    undomained = json.dumps(
+    v2_message = update_manifest.SIGNATURE_DOMAIN + json.dumps(
         document["statement"], sort_keys=True, separators=(",", ":"),
         ensure_ascii=True).encode("utf-8")
     with pytest.raises(InvalidSignature):
         Ed25519PublicKey.from_public_bytes(_published_public_bytes()).verify(
-            bytes.fromhex(document["signature"]["value"]), undomained)
+            bytes.fromhex(document["signature"]["value"]), v2_message)
 
 
 def _sample_body():
     return {
         "schemaVersion": update_manifest.SCHEMA_VERSION,
-        "electrumxVersion": "1.13.1",
+        "electrumxVersion": "1.13.3",
+        "artifact_revision": 0,
         "channel": "stable",
-        "releaseTimestamp": "2026-08-21T00:00:00Z",
+        "releaseTimestamp": "2026-08-22T00:00:00Z",
         "artifactDigest": "sha256:" + "a" * 64,
+        "provenanceDigest": "sha256:" + "d" * 64,
         "architecture": "linux/arm64",
         "coreVersion": "4.8.0",
         "coreRepository": "RavenProject/Ravencoin",
@@ -114,7 +112,7 @@ def _sample_body():
         "coreCommit": "22549129888d02e0e08fcdb9f96f3c699167e774",
         "certificationReportDigest": "b" * 64,
         "safeCorePolicyVersion": 3,
-        "requiredUpdaterVersion": "1.13.1",
+        "requiredUpdaterVersion": "2.0.0",
         "configCompatibility": {"breakingChanges": []},
         "dbCompatibility": {"schemaVersion": 1},
         "rollbackSafe": True,
@@ -137,9 +135,8 @@ def test_manifest_signed_by_a_foreign_key_is_rejected():
 
 
 def test_release_timestamp_accepts_the_utc_designator():
-    """Manifests stamp times with "Z"; Python 3.10 needs it normalised."""
-    for stamp in ("2026-08-21T00:00:00Z", "2026-08-21T00:00:00+00:00",
-                  "2026-08-21T02:00:00+02:00"):
+    for stamp in ("2026-08-22T00:00:00Z", "2026-08-22T00:00:00+00:00",
+                  "2026-08-22T02:00:00+02:00"):
         body = _sample_body()
         body["releaseTimestamp"] = stamp
         update_manifest.validate_body(body)
@@ -147,6 +144,6 @@ def test_release_timestamp_accepts_the_utc_designator():
 
 def test_release_timestamp_without_a_timezone_is_rejected():
     body = _sample_body()
-    body["releaseTimestamp"] = "2026-08-21T00:00:00"
+    body["releaseTimestamp"] = "2026-08-22T00:00:00"
     with pytest.raises(update_manifest.ManifestError):
         update_manifest.validate_body(body)

@@ -23,6 +23,8 @@ import update_decision as ud  # noqa: E402
 KEY_PRIVATE, KEY_PUBLIC = policy.generate_keypair()
 KEY_ID = policy.key_id_for(KEY_PUBLIC)
 TRUSTED = {KEY_ID: KEY_PUBLIC}
+CURRENT_ARTIFACT_DIGEST = "sha256:" + "b" * 64
+CURRENT_PROVENANCE_DIGEST = "sha256:" + "c" * 64
 
 
 def _policy_document(key_id):
@@ -94,14 +96,42 @@ def test_policy_wrong_length_signature_is_policy_error():
 
 
 def _host(arch):
-    return SimpleNamespace(architecture=arch)
+    return ud.HostFacts(
+        architecture=arch,
+        installed_updater_version="2.0.0",
+        current_electrumx_version="1.13.3",
+        current_core_commit="c" * 40,
+        current_db_schema=1,
+        current_artifact_revision=0,
+        current_artifact_digest=CURRENT_ARTIFACT_DIGEST,
+        current_provenance_digest=CURRENT_PROVENANCE_DIGEST,
+    )
 
 
 def _manifest(arch):
     return {
-        "architecture": arch,
+        "schemaVersion": 2,
+        "electrumxVersion": "1.13.3",
+        "artifact_revision": 0,
+        "channel": "stable",
+        "releaseTimestamp": "2026-08-22T00:00:00Z",
         "artifactDigest": "sha256:" + "a" * 64,
+        "provenanceDigest": "sha256:" + "d" * 64,
+        "architecture": arch,
+        "coreVersion": "4.8.0",
+        "coreRepository": "RavenProject/Ravencoin",
+        "coreTag": "v4.8.0",
+        "coreCommit": "c" * 40,
+        "certificationReportDigest": "e" * 64,
         "safeCorePolicyVersion": 3,
+        "requiredUpdaterVersion": "2.0.0",
+        "configCompatibility": {},
+        "dbCompatibility": {"schemaVersion": 1},
+        "rollbackSafe": True,
+        "consensusImpact": False,
+        "autoUpdateEligible": True,
+        "installerFilename": "electrumx-ravencoin-install.py",
+        "installerDigest": "sha256:" + "f" * 64,
     }
 
 

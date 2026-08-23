@@ -1,288 +1,125 @@
-name: Publish signed ElectrumX release
+name: Build ElectrumX release candidate
 
 on:
   workflow_dispatch:
     inputs:
-      tag:
-        description: Annotated, verified tag to publish
+      source_ref:
+        description: Exact reviewed branch, tag or commit to build
         required: true
-        default: v1.13.1
+      tag:
+        description: Release identity
+        required: true
+        default: v1.13.6
+      artifact_revision:
+        description: Monotonic artifact revision for this version
+        required: true
+        default: "0"
+      release_timestamp:
+        description: Reviewed ISO-8601 timestamp with timezone
+        required: true
+      update_public_key_hex:
+        description: Out-of-band authenticated replacement Ed25519 public key (hex)
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: production-release-${{ inputs.tag }}
+  group: release-candidate-${{ inputs.tag }}-r${{ inputs.artifact_revision }}
   cancel-in-progress: false
 
-env:
-  RELEASE_TAG: ${{ inputs.tag }}
-  MONITOR_COMMIT: b59e7efdea2fe8c0114b5f72e139931fe86ae571
-  UPDATE_PUBLIC_KEY: 4dbeb6131495015b1c44d2d61f80d527217623e1b12dee8f34664509ee3d2b35
-  UPDATE_KEY_ID: 288e85d43f792f83
-
 jobs:
-  build:
+  candidate:
     runs-on: ubuntu-24.04
     steps:
-      - name: Check out the exact release tag
+      - name: Check out exact reviewed source without credentials
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ inputs.source_ref }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify annotated tag identity and maintainer signature
+      - name: Validate non-secret release inputs
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          ARTIFACT_REVISION: ${{ inputs.artifact_revision }}
+          RELEASE_TIMESTAMP: ${{ inputs.release_timestamp }}
+          UPDATE_PUBLIC_KEY_HEX: ${{ inputs.update_public_key_hex }}
         run: |
           set -euo pipefail
-          test "$(git cat-file -t "$RELEASE_TAG")" = tag
-          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA"
-          git -c gpg.ssh.allowedSignersFile=release/tag-signing-allowed-signers \
-            verify-tag "$RELEASE_TAG"
+          python3 - <<'PY'
+          import datetime
+          import os
+          import re
 
-      - name: Check out the exact Node Monitor source
+          retired = "4dbeb6131495015b1c44d2d61f80d527217623e1b12dee8f34664509ee3d2b35"
+          public = os.environ["UPDATE_PUBLIC_KEY_HEX"].strip().lower()
+          assert re.fullmatch(r"[0-9a-f]{64}", public), "replacement public key is malformed"
+          assert public != retired, "retired CI-held update key is forbidden"
+          revision = os.environ["ARTIFACT_REVISION"]
+          assert re.fullmatch(r"0|[1-9][0-9]*", revision), "artifact_revision is not canonical"
+          stamp = os.environ["RELEASE_TIMESTAMP"]
+          parsed = datetime.datetime.fromisoformat(stamp[:-1] + "+00:00" if stamp.endswith("Z") else stamp)
+          assert parsed.tzinfo is not None, "release timestamp requires timezone"
+          assert os.environ["RELEASE_TAG"].startswith("v"), "tag must start with v"
+          PY
+
+      - name: Read exact Node Monitor pin
+        id: monitor
+        run: |
+          set -euo pipefail
+          commit=$(python3 - <<'PY'
+          import json
+          value = json.load(open("release/install-sources.json", encoding="utf-8"))["nodeMonitor"]["commit"]
+          print(value)
+          PY
+          )
+          test "${#commit}" = 40
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact Node Monitor source
+        env:
+          MONITOR_COMMIT: ${{ steps.monitor.outputs.commit }}
         run: |
           set -euo pipefail
           monitor="$RUNNER_TEMP/ravencoin-node-monitor"
           git init "$monitor"
-          git -C "$monitor" remote add origin \
-            https://github.com/ALENOC/ravencoin-node-monitor.git
+          git -C "$monitor" remote add origin https://github.com/ALENOC/ravencoin-node-monitor.git
           git -C "$monitor" fetch --depth 1 origin "$MONITOR_COMMIT"
           git -C "$monitor" checkout --detach FETCH_HEAD
           test "$(git -C "$monitor" rev-parse HEAD)" = "$MONITOR_COMMIT"
           test -z "$(git -C "$monitor" status --porcelain)"
 
-      - name: Build deterministic release inputs without private keys
+      - name: Build unsigned deterministic candidate
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          ARTIFACT_REVISION: ${{ inputs.artifact_revision }}
+          RELEASE_TIMESTAMP: ${{ inputs.release_timestamp }}
+          UPDATE_PUBLIC_KEY_HEX: ${{ inputs.update_public_key_hex }}
         run: |
           set -euo pipefail
-          timestamp=$(git for-each-ref \
-            --format='%(taggerdate:iso8601-strict)' "refs/tags/$RELEASE_TAG")
-          test -n "$timestamp"
-          python core-safety/scripts/build_production_release.py \
+          python3 core-safety/scripts/build_production_release.py \
             --monitor-dir "$RUNNER_TEMP/ravencoin-node-monitor" \
-            --output-dir "$RUNNER_TEMP/release-build" \
+            --output-dir "$RUNNER_TEMP/release-candidate" \
             --tag "$RELEASE_TAG" \
-            --release-timestamp "$timestamp"
-          cp RELEASE_NOTES_1.13.1.md \
-            "$RUNNER_TEMP/release-build/RELEASE_NOTES_1.13.1.md"
+            --artifact-revision "$ARTIFACT_REVISION" \
+            --release-timestamp "$RELEASE_TIMESTAMP" \
+            --update-public-key-hex "$UPDATE_PUBLIC_KEY_HEX"
+          cd "$RUNNER_TEMP/release-candidate"
+          sha256sum --check SHA256SUMS.build
+          test ! -e release-manifest.json
 
-      - name: Upload unsigned build inputs
+      - name: Assert private signing and publication are absent
+        run: |
+          set -euo pipefail
+          test -z "${ELECTRUMX_UPDATE_SIGNING_KEY:-}"
+          ! grep -R --line-number -E 'gh release (create|edit)|contents:[[:space:]]*write' \
+            .github/workflows/release.yml
+
+      - name: Upload unsigned candidate only
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
         with:
-          name: release-build-${{ inputs.tag }}
-          path: ${{ runner.temp }}/release-build/
+          name: release-candidate-${{ inputs.tag }}-r${{ inputs.artifact_revision }}
+          path: ${{ runner.temp }}/release-candidate/
           if-no-files-found: error
-          retention-days: 1
-
-  sign:
-    needs: build
-    runs-on: ubuntu-24.04
-    environment: electrumx-release-signing
-    steps:
-      - name: Download non-secret release inputs
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16  # v4.1.8
-        with:
-          name: release-build-${{ inputs.tag }}
-          path: ${{ runner.temp }}/release
-
-      - name: Validate every signed field and prepare canonical bytes
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import datetime
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-
-          root = Path(os.environ['RUNNER_TEMP']) / 'release'
-          body = json.loads((root / 'unsigned-release-manifest.json').read_text())
-          expected_keys = {
-              'schemaVersion', 'electrumxVersion', 'channel', 'releaseTimestamp',
-              'artifactDigest', 'architecture', 'coreVersion', 'coreRepository',
-              'coreTag', 'coreCommit', 'certificationReportDigest',
-              'safeCorePolicyVersion', 'requiredUpdaterVersion',
-              'configCompatibility', 'dbCompatibility', 'rollbackSafe',
-              'consensusImpact', 'autoUpdateEligible', 'installerFilename',
-              'installerDigest',
-          }
-          assert set(body) == expected_keys
-          assert body['schemaVersion'] == 1
-          assert body['electrumxVersion'] == '1.13.1'
-          assert body['channel'] == 'stable'
-          assert body['architecture'] == 'linux/amd64,linux/arm64'
-          assert body['coreVersion'] == '4.8.0'
-          assert body['coreRepository'] == 'RavenProject/Ravencoin'
-          assert body['coreTag'] == 'v4.8.0'
-          assert body['coreCommit'] == \
-              '22549129888d02e0e08fcdb9f96f3c699167e774'
-          assert body['certificationReportDigest'] == \
-              '949ec5eb66fc5fef709a75073bb5aba8964b1212e4b407369aace0cde3a34045'
-          assert body['safeCorePolicyVersion'] == 3
-          assert body['requiredUpdaterVersion'] == '1.0.0'
-          assert body['configCompatibility'] == {}
-          assert body['dbCompatibility'] == {'schemaVersion': 1}
-          assert body['rollbackSafe'] is True
-          assert body['consensusImpact'] is False
-          assert body['autoUpdateEligible'] is True
-          assert body['installerFilename'] == 'electrumx-ravencoin-install.py'
-          parsed = datetime.datetime.fromisoformat(body['releaseTimestamp'])
-          assert parsed.tzinfo is not None
-
-          def digest(name):
-              return 'sha256:' + hashlib.sha256((root / name).read_bytes()).hexdigest()
-
-          assert body['artifactDigest'] == digest(
-              'electrumx-ravencoin-bundle.tar.gz')
-          assert body['installerDigest'] == digest(
-              'electrumx-ravencoin-install.py')
-          canonical = (
-              b'ALENOC-RVN-ELECTRUMX-UPDATE-MANIFEST-v1\x00'
-              + json.dumps(body, sort_keys=True, separators=(',', ':'),
-                           ensure_ascii=True).encode('utf-8')
-          )
-          (Path(os.environ['RUNNER_TEMP']) / 'release-manifest.canonical').write_bytes(
-              canonical)
-          PY
-
-      - name: Sign in the protected release-key environment
-        env:
-          ELECTRUMX_UPDATE_SIGNING_KEY: ${{ secrets.ELECTRUMX_UPDATE_SIGNING_KEY }}
-        run: |
-          set -euo pipefail
-          umask 077
-          key_file="$RUNNER_TEMP/electrumx-update-signing-key.der"
-          signature_file="$RUNNER_TEMP/release-manifest.signature"
-          python - <<'PY'
-          import base64
-          import os
-          from pathlib import Path
-
-          raw = base64.b64decode(
-              os.environ['ELECTRUMX_UPDATE_SIGNING_KEY'], validate=True)
-          assert len(raw) == 32
-          # RFC 8410 PKCS#8 prefix for a raw Ed25519 private key.
-          prefix = bytes.fromhex('302e020100300506032b657004220420')
-          (Path(os.environ['RUNNER_TEMP']) /
-           'electrumx-update-signing-key.der').write_bytes(prefix + raw)
-          PY
-          openssl pkey -in "$key_file" -inform DER -pubout -outform DER \
-            -out "$RUNNER_TEMP/electrumx-update-signing-public.der"
-          python - <<'PY'
-          import os
-          from pathlib import Path
-
-          public_der = (Path(os.environ['RUNNER_TEMP']) /
-                        'electrumx-update-signing-public.der').read_bytes()
-          expected = bytes.fromhex(os.environ['UPDATE_PUBLIC_KEY'])
-          assert public_der == bytes.fromhex('302a300506032b6570032100') + expected
-          PY
-          openssl pkeyutl -sign -rawin -keyform DER -inkey "$key_file" \
-            -in "$RUNNER_TEMP/release-manifest.canonical" \
-            -out "$signature_file"
-          python - <<'PY'
-          import base64
-          import json
-          import os
-          from pathlib import Path
-
-          root = Path(os.environ['RUNNER_TEMP']) / 'release'
-          body = json.loads((root / 'unsigned-release-manifest.json').read_text())
-          signature = (Path(os.environ['RUNNER_TEMP']) /
-                       'release-manifest.signature').read_bytes()
-          assert len(signature) == 64
-          document = {
-              'manifest': body,
-              'signature': {
-                  'algorithm': 'ed25519',
-                  'keyId': os.environ['UPDATE_KEY_ID'],
-                  'value': base64.b64encode(signature).decode('ascii'),
-              },
-          }
-          (root / 'release-manifest.json').write_text(
-              json.dumps(document, indent=2, sort_keys=True) + '\n')
-          PY
-          rm -f -- "$key_file" "$signature_file"
-
-      - name: Verify the signature and finalize public checksums
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import base64
-          import json
-          import os
-          from pathlib import Path
-
-          root = Path(os.environ['RUNNER_TEMP']) / 'release'
-          document = json.loads((root / 'release-manifest.json').read_text())
-          assert document['signature']['keyId'] == os.environ['UPDATE_KEY_ID']
-          (Path(os.environ['RUNNER_TEMP']) / 'release-manifest.signature').write_bytes(
-              base64.b64decode(document['signature']['value'], validate=True))
-          public = bytes.fromhex(os.environ['UPDATE_PUBLIC_KEY'])
-          (Path(os.environ['RUNNER_TEMP']) /
-           'electrumx-update-signing-public.der').write_bytes(
-              bytes.fromhex('302a300506032b6570032100') + public)
-          PY
-          openssl pkeyutl -verify -rawin -pubin -keyform DER \
-            -inkey "$RUNNER_TEMP/electrumx-update-signing-public.der" \
-            -in "$RUNNER_TEMP/release-manifest.canonical" \
-            -sigfile "$RUNNER_TEMP/release-manifest.signature"
-          cd "$RUNNER_TEMP/release"
-          sha256sum electrumx-ravencoin-bundle.tar.gz \
-            electrumx-ravencoin-install.py release-manifest.json > SHA256SUMS
-          rm -f -- unsigned-release-manifest.json SHA256SUMS.build
-
-      - name: Upload signed public release assets
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
-        with:
-          name: signed-release-${{ inputs.tag }}
-          path: |
-            ${{ runner.temp }}/release/electrumx-ravencoin-bundle.tar.gz
-            ${{ runner.temp }}/release/electrumx-ravencoin-install.py
-            ${{ runner.temp }}/release/release-manifest.json
-            ${{ runner.temp }}/release/SHA256SUMS
-            ${{ runner.temp }}/release/RELEASE_NOTES_1.13.1.md
-          if-no-files-found: error
-          retention-days: 1
-
-  publish:
-    needs: sign
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - name: Download signed release assets
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16  # v4.1.8
-        with:
-          name: signed-release-${{ inputs.tag }}
-          path: ${{ runner.temp }}/release
-
-      - name: Publish draft, verify asset set, then make latest
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          cd "$RUNNER_TEMP/release"
-          sha256sum --check SHA256SUMS
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-              >/dev/null 2>&1; then
-            echo "release $RELEASE_TAG already exists; refusing replacement" >&2
-            exit 1
-          fi
-          gh release create "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
-            --draft \
-            --title "ElectrumX-Ravencoin $RELEASE_TAG" \
-            --notes-file RELEASE_NOTES_1.13.1.md \
-            electrumx-ravencoin-bundle.tar.gz \
-            electrumx-ravencoin-install.py \
-            release-manifest.json \
-            SHA256SUMS
-          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --json isDraft --jq '.isDraft')" = true
-          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --json assets --jq '[.assets[].name] | sort | join(",")')" = \
-            'SHA256SUMS,electrumx-ravencoin-bundle.tar.gz,electrumx-ravencoin-install.py,release-manifest.json'
-          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --draft=false --latest
+          retention-days: 7

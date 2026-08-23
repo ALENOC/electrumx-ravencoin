@@ -28,12 +28,23 @@ SCRIPTS = ROOT / "core-safety" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import policy as core_policy  # noqa: E402
+import update_manifest  # noqa: E402
 import update_runtime  # noqa: E402
 
 CORE_COMMIT = "c" * 40
 REPORT_DIGEST = "d" * 64
 UPDATE_KEY_HEX = "a" * 64
 MONITOR_COMMIT = "e" * 40
+PROVENANCE_BYTES = (
+    json.dumps({
+        "schemaVersion": 1,
+        "electrumxVersion": "1.14.0",
+        "artifact_revision": 0,
+        "sourceRepository": "ALENOC/electrumx-ravencoin",
+        "sourceCommit": "f" * 40,
+    }, sort_keys=True, separators=(",", ":")) + "\n"
+).encode("utf-8")
+PROVENANCE_DIGEST = "sha256:" + hashlib.sha256(PROVENANCE_BYTES).hexdigest()
 
 
 def _policy_document(*, private_key=None, report_digest=REPORT_DIGEST):
@@ -78,12 +89,32 @@ def _bundle_files(*, policy_document, core_key_hex,
             f"RAVENCOIN_SOURCE_COMMIT: {CORE_COMMIT}\n"
             "RAVENCOIN_SOURCE_REPOSITORY: RavenProject/Ravencoin\n"
         ).encode(),
+        "compose.storage.yaml": (
+            b"volumes:\n"
+            b"  ravencoin-data:\n    driver: local\n"
+            b"  ravencoin-config:\n    driver: local\n"
+            b"  electrumx-data:\n    driver: local\n"
+            b"  monitor-data:\n    driver: local\n"
+        ),
         "compose.chainstrap.yaml": b"network_mode: none\n",
         "compose.monitor.yaml": (
             b"services:\n  monitor:\n"
             b"    security_opt:\n      - no-new-privileges:true\n"
             b"    cap_drop:\n      - ALL\n"
             b'    ports:\n      - "127.0.0.1:8899:8899/tcp"\n'
+        ),
+        "compose.monitor-controller.yaml": b"services:\n  monitor-controller: {}\n",
+        "compose.tls.yaml": (
+            b"services:\n"
+            b"  electrumx:\n"
+            b"    ports:\n"
+            b'      - "50002:50002/tcp"\n'
+        ),
+        "compose.existing-core.yaml": (
+            b"services:\n"
+            b"  electrumx:\n"
+            b"    environment:\n"
+            b"      RAVENCOIN_DAEMON_HOST: host.docker.internal\n"
         ),
         "setup.sh": b"#!/bin/sh\nexit 0\n",
         ".env.example": b"EXAMPLE=1\n",
@@ -95,6 +126,7 @@ def _bundle_files(*, policy_document, core_key_hex,
         ),
         "release-install-metadata.json": (
             json.dumps(metadata, sort_keys=True) + "\n").encode(),
+        "release-provenance.json": PROVENANCE_BYTES,
         "core-safety/production/update-signing-public-key.hex":
             (update_key_hex + "\n").encode(),
         "core-safety/production/core-policy-signing-public-key.hex":
@@ -119,16 +151,29 @@ def _make_bundle(files):
 
 
 def _manifest_for(data):
-    return {
-        "artifactDigest": "sha256:" + hashlib.sha256(data).hexdigest(),
-        "electrumxVersion": "1.14.0",
-        "coreRepository": "RavenProject/Ravencoin",
-        "coreVersion": "4.8.0",
-        "coreTag": "v4.8.0",
-        "coreCommit": CORE_COMMIT,
-        "certificationReportDigest": REPORT_DIGEST,
-        "safeCorePolicyVersion": 3,
-    }
+    return update_manifest.build_manifest(
+        electrumx_version="1.14.0",
+        artifact_revision=0,
+        channel="stable",
+        artifact_digest="sha256:" + hashlib.sha256(data).hexdigest(),
+        provenance_digest=PROVENANCE_DIGEST,
+        architecture="linux/amd64",
+        core_version="4.8.0",
+        core_repository="RavenProject/Ravencoin",
+        core_tag="v4.8.0",
+        core_commit=CORE_COMMIT,
+        certification_report_digest=REPORT_DIGEST,
+        safe_core_policy_version=3,
+        required_updater_version="2.0.0",
+        config_compatibility={},
+        db_compatibility={"schemaVersion": 1},
+        rollback_safe=True,
+        consensus_impact=False,
+        auto_update_eligible=True,
+        installer_filename="electrumx-ravencoin-install.py",
+        installer_digest="sha256:" + "f" * 64,
+        release_timestamp="2026-08-22T00:00:00Z",
+    )
 
 
 def _write_bundle(tmp_path, files):

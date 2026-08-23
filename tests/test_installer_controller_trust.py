@@ -14,6 +14,7 @@ import importlib.util
 import io
 import os
 import pathlib
+import subprocess
 import tarfile
 from types import SimpleNamespace
 
@@ -178,7 +179,7 @@ def test_reinstall_uses_atomic_root_owned_staging_and_digest(monkeypatch, tmp_pa
     source.write_text("# controller\n")
     installer.install_trusted_controller(source, expected)
 
-    installs = [c for c in commands if "install" in c]
+    installs = [c for c in commands if "install" in c and "-d" not in c]
     assert installs, "trusted controller was never installed"
     install_cmd = installs[0]
     assert "-o" in install_cmd and install_cmd[install_cmd.index("-o") + 1] == "root"
@@ -192,7 +193,7 @@ def test_reinstall_uses_atomic_root_owned_staging_and_digest(monkeypatch, tmp_pa
     assert renames and renames[0][-1] == str(installer.TRUSTED_CONTROLLER_PATH)
     assert verified == [expected]
     for command in commands:
-        if "install" in command:
+        if "install" in command and "-d" not in command:
             assert command[-1] != str(installer.TRUSTED_CONTROLLER_PATH)
 
 
@@ -255,3 +256,53 @@ def test_uninstall_removes_trusted_copy():
     source = inspect.getsource(installer.uninstall_controller_best_effort)
     assert "TRUSTED_CONTROLLER_PATH" in source
     assert "rm" in source
+
+
+def test_trusted_controller_dir_creation_uses_a_real_ownership_capable_command(
+        monkeypatch, tmp_path):
+    """The privileged directory step must be a command that accepts -o/-g/-m.
+
+    ``mkdir`` has no ownership flags, so ``mkdir -p -o root -g root`` aborts the
+    whole installation with ``mkdir: invalid option -- 'o'`` as soon as the
+    operator enables the advanced host controller.
+    """
+    commands = []
+    expected = "b" * 64
+    # The installer shares this process's subprocess module, and the patch below
+    # replaces subprocess.run globally, so keep the real one for the rehearsal.
+    real_run = subprocess.run
+
+    monkeypatch.setattr(installer, "controller_prerequisites", lambda **_: None)
+    monkeypatch.setattr(installer, "run_checked",
+                        lambda argv, cwd=None: commands.append(list(argv)))
+    monkeypatch.setattr(installer, "_file_sha256", lambda path: expected)
+    monkeypatch.setattr(installer, "verify_trusted_controller", lambda digest=None: None)
+    monkeypatch.setattr(installer.subprocess, "run",
+                        lambda *args, **kwargs: SimpleNamespace(returncode=0))
+
+    source = tmp_path / "vendor-copy.py"
+    source.write_text("# controller\n")
+    installer.install_trusted_controller(source, expected)
+
+    directory = [c for c in commands if c[-1] == str(installer.TRUSTED_CONTROLLER_DIR)]
+    assert directory, "the trusted controller directory was never created"
+    command = directory[0]
+    assert "mkdir" not in command
+    # The command may carry a sudo prefix; the privileged program is what matters.
+    command = command[command.index("install"):]
+    assert command[0] == "install" and "-d" in command
+    assert command[command.index("-o") + 1] == "root"
+    assert command[command.index("-g") + 1] == "root"
+    assert command[command.index("-m") + 1] == "0755"
+
+    # Execute the same argv shape unprivileged, so the flags are validated by
+    # the real coreutils binary rather than by this test's expectations.
+    target = tmp_path / "trusted-dir"
+    rehearsal = [arg for arg in command]
+    rehearsal[rehearsal.index("-o") + 1] = str(os.getuid())
+    rehearsal[rehearsal.index("-g") + 1] = str(os.getgid())
+    rehearsal[-1] = str(target)
+    completed = real_run(rehearsal, capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+    assert target.is_dir()
+    assert target.stat().st_mode & 0o777 == 0o755

@@ -13,6 +13,7 @@ import pathlib
 import subprocess
 import sys
 import tarfile
+import tempfile
 
 import pytest
 
@@ -21,21 +22,55 @@ INSTALLER_PATH = ROOT / "electrumx-ravencoin-install.py"
 SCRIPTS = ROOT / "core-safety" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+# Keep the checked-in installer bound to the historical name. Assertions that
+# verify the v1 trust discontinuity continue to exercise these exact bytes.
 spec = importlib.util.spec_from_file_location("electrumx_ravencoin_install", INSTALLER_PATH)
 installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
 
 import policy  # noqa: E402
+import render_installer_v2  # noqa: E402
 import update_manifest as um  # noqa: E402
 
 CORE_COMMIT = "c" * 40
 MONITOR_COMMIT = "d" * 40
 REPORT_DIGEST = "e" * 64
 TEST_CORE_POLICY_PRIVATE, TEST_CORE_POLICY_PUBLIC = policy.generate_keypair()
+TEST_RELEASE_PRIVATE, TEST_RELEASE_PUBLIC = um.generate_keypair()
+TEST_PROVENANCE_BYTES = (
+    json.dumps({
+        "schemaVersion": 1,
+        "artifact_revision": 0,
+        "electrumxVersion": "1.14.0",
+        "sourceRepository": "ALENOC/electrumx-ravencoin",
+        "sourceCommit": "f" * 40,
+    }, sort_keys=True, separators=(",", ":")) + "\n"
+).encode("utf-8")
+TEST_PROVENANCE_DIGEST = "sha256:" + hashlib.sha256(TEST_PROVENANCE_BYTES).hexdigest()
+
+# Manifest-v2 tests exercise the real rendered 1.13.3 installer, not a
+# compatibility mode added to the historical v1 source template.
+_RENDERED_DIR = pathlib.Path(tempfile.mkdtemp(prefix="electrumx-installer-v2-test-"))
+RENDERED_INSTALLER_PATH = _RENDERED_DIR / "electrumx-ravencoin-install.py"
+render_installer_v2.render(
+    output=RENDERED_INSTALLER_PATH,
+    public_key_hex=TEST_RELEASE_PUBLIC.hex(),
+)
+v2_spec = importlib.util.spec_from_file_location(
+    "electrumx_ravencoin_install_v2", RENDERED_INSTALLER_PATH)
+v2_installer = importlib.util.module_from_spec(v2_spec)
+sys.modules[v2_spec.name] = v2_installer
+v2_spec.loader.exec_module(v2_installer)
+
+# Preserve the pre-existing exception assertions byte-for-byte while changing
+# only the code-under-test input target from the v1 template to rendered v2.
+# Installer functions resolve InstallError from module globals at call time.
+v2_installer.InstallError = installer.InstallError
 
 # Direct bundle-validation tests use a test policy key. Production source still
-# contains the real independent key; only this imported test module is patched.
+# contains the real independent key; only these imported test modules are patched.
 installer.PRODUCTION_CORE_POLICY_PUBLIC_KEY_HEX = TEST_CORE_POLICY_PUBLIC.hex()
+v2_installer.PRODUCTION_CORE_POLICY_PUBLIC_KEY_HEX = TEST_CORE_POLICY_PUBLIC.hex()
 
 
 def signed_document(key_pair, *, artifact_digest="sha256:" + "a" * 64,
@@ -47,8 +82,10 @@ def signed_document(key_pair, *, artifact_digest="sha256:" + "a" * 64,
     private_key, public_bytes = key_pair
     body = um.build_manifest(
         electrumx_version="1.14.0",
+        artifact_revision=0,
         channel="stable",
         artifact_digest=artifact_digest,
+        provenance_digest=TEST_PROVENANCE_DIGEST,
         architecture="linux/amd64,linux/arm64",
         core_version="4.8.0",
         core_repository=core_repository,
@@ -144,6 +181,7 @@ def bundle_files(*, core_policy_document=None,
         ),
         "release-install-metadata.json": (
             json.dumps(metadata, sort_keys=True) + "\n").encode(),
+        "release-provenance.json": TEST_PROVENANCE_BYTES,
         "vendor/ravencoin-node-monitor/Dockerfile": b"FROM scratch\n",
         "vendor/ravencoin-node-monitor/.env.example": b"BIND_PORT=8899\n",
         "vendor/ravencoin-node-monitor/contrib/ravencoin-bandwidth-controller.py": b"#!/usr/bin/env python3\n",
@@ -182,7 +220,7 @@ def manifest_for_bundle(data, **kwargs):
         um.generate_keypair(),
         artifact_digest="sha256:" + hashlib.sha256(data).hexdigest(),
         **kwargs)
-    return installer.verify_manifest_signature(document, public_bytes.hex())
+    return v2_installer.verify_manifest_signature(document, public_bytes.hex())
 
 
 def test_source_installer_has_no_unceremonied_production_release_key():
@@ -197,10 +235,16 @@ def test_source_installer_pins_independent_core_policy_key():
     assert "9fc91edbe763513490248a23ae97575a6b963101b644e01493a3860b99e35648" in source
 
 
+def test_source_installer_refuses_schema_v2_manifest():
+    document, _ = signed_document(um.generate_keypair())
+    with pytest.raises(installer.InstallError, match="unsupported release manifest body/schema"):
+        installer.validate_manifest_body(document["manifest"])
+
+
 def test_valid_signed_manifest_verifies():
     key_pair = um.generate_keypair()
     document, public_bytes = signed_document(key_pair)
-    body = installer.verify_manifest_signature(document, public_bytes.hex())
+    body = v2_installer.verify_manifest_signature(document, public_bytes.hex())
     assert body["coreRepository"] == "RavenProject/Ravencoin"
     assert body["coreCommit"] == CORE_COMMIT
 
@@ -209,7 +253,7 @@ def test_manifest_signed_by_other_key_is_refused():
     document, _ = signed_document(um.generate_keypair())
     _, wrong_public = um.generate_keypair()
     with pytest.raises(installer.InstallError):
-        installer.verify_manifest_signature(document, wrong_public.hex())
+        v2_installer.verify_manifest_signature(document, wrong_public.hex())
 
 
 def test_installer_digest_binds_exact_downloaded_file(tmp_path):
@@ -226,16 +270,16 @@ def test_installer_digest_binds_exact_downloaded_file(tmp_path):
 def test_valid_bundle_is_bound_to_manifest_policy_and_monitor_identity():
     data = make_bundle()
     body = manifest_for_bundle(data)
-    metadata = installer.validate_bundle(data, body, public_key_hex="a" * 64)
+    metadata = v2_installer.validate_bundle(data, body, public_key_hex="a" * 64)
     assert metadata["nodeMonitor"]["commit"] == MONITOR_COMMIT
 
 
 def test_bundle_with_wrong_digest_is_refused():
     data = make_bundle()
     document, public_bytes = signed_document(um.generate_keypair())
-    body = installer.verify_manifest_signature(document, public_bytes.hex())
+    body = v2_installer.verify_manifest_signature(document, public_bytes.hex())
     with pytest.raises(installer.InstallError, match="SHA-256 mismatch"):
-        installer.validate_bundle(data, body, public_key_hex="a" * 64)
+        v2_installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
 def test_bundle_path_traversal_is_refused_even_when_digest_matches():
@@ -244,7 +288,7 @@ def test_bundle_path_traversal_is_refused_even_when_digest_matches():
     data = make_bundle(files)
     body = manifest_for_bundle(data)
     with pytest.raises(installer.InstallError, match="unsafe bundle path"):
-        installer.validate_bundle(data, body, public_key_hex="a" * 64)
+        v2_installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
 def test_bundle_symlink_is_refused_even_when_digest_matches():
@@ -254,7 +298,7 @@ def test_bundle_symlink_is_refused_even_when_digest_matches():
     data = make_bundle(special_member=member)
     body = manifest_for_bundle(data)
     with pytest.raises(installer.InstallError, match="forbidden"):
-        installer.validate_bundle(data, body, public_key_hex="a" * 64)
+        v2_installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
 def test_bundle_core_identity_must_match_signed_manifest():
@@ -264,7 +308,7 @@ def test_bundle_core_identity_must_match_signed_manifest():
     data = make_bundle(files)
     body = manifest_for_bundle(data)
     with pytest.raises(installer.InstallError, match="Core commit"):
-        installer.validate_bundle(data, body, public_key_hex="a" * 64)
+        v2_installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
 def test_core_policy_signature_is_load_bearing():
@@ -274,7 +318,7 @@ def test_core_policy_signature_is_load_bearing():
     data = make_bundle(files)
     body = manifest_for_bundle(data)
     with pytest.raises(installer.InstallError, match="safe-Core policy signature"):
-        installer.validate_bundle(data, body, public_key_hex="a" * 64)
+        v2_installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
 def test_core_policy_key_must_match_independent_pin():
@@ -283,28 +327,28 @@ def test_core_policy_key_must_match_independent_pin():
     data = make_bundle(files)
     body = manifest_for_bundle(data)
     with pytest.raises(installer.InstallError, match="differs from pinned trust root"):
-        installer.validate_bundle(data, body, public_key_hex="a" * 64)
+        v2_installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
 def test_core_policy_report_digest_must_match_manifest():
     data = make_bundle()
     body = manifest_for_bundle(data, certification_report_digest="f" * 64)
     with pytest.raises(installer.InstallError, match="report digest disagrees"):
-        installer.validate_bundle(data, body, public_key_hex="a" * 64)
+        v2_installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
 def test_core_policy_version_must_match_manifest():
     data = make_bundle()
     body = manifest_for_bundle(data, safe_core_policy_version=4)
     with pytest.raises(installer.InstallError, match="policy versions disagree"):
-        installer.validate_bundle(data, body, public_key_hex="a" * 64)
+        v2_installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
 def test_core_policy_must_certify_exact_manifest_commit():
     data = make_bundle()
     body = manifest_for_bundle(data, core_commit="9" * 40)
     with pytest.raises(installer.InstallError, match="does not uniquely certify"):
-        installer.validate_bundle(data, body, public_key_hex="a" * 64)
+        v2_installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
 def test_chainstrap_exact_tip_gate_is_required_by_installer():
@@ -313,7 +357,7 @@ def test_chainstrap_exact_tip_gate_is_required_by_installer():
     data = make_bundle(files)
     body = manifest_for_bundle(data)
     with pytest.raises(installer.InstallError, match="offline isolation"):
-        installer.validate_bundle(data, body, public_key_hex="a" * 64)
+        v2_installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
 def test_chainstrap_reindex_missing_rpc_gate_is_refused():
@@ -325,14 +369,14 @@ def test_chainstrap_reindex_missing_rpc_gate_is_refused():
     data = make_bundle(files)
     body = manifest_for_bundle(data)
     with pytest.raises(installer.InstallError, match="lacks gate 'listassets'"):
-        installer.validate_bundle(data, body, public_key_hex="a" * 64)
+        v2_installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
 def test_bundle_updater_key_must_match_installer_trust_root():
     data = make_bundle()
     body = manifest_for_bundle(data)
     with pytest.raises(installer.InstallError, match="trust root"):
-        installer.validate_bundle(data, body, public_key_hex="c" * 64)
+        v2_installer.validate_bundle(data, body, public_key_hex="c" * 64)
 
 
 def test_incomplete_bundle_is_refused():
@@ -341,7 +385,7 @@ def test_incomplete_bundle_is_refused():
     data = make_bundle(files)
     body = manifest_for_bundle(data)
     with pytest.raises(installer.InstallError, match="release bundle is incomplete"):
-        installer.validate_bundle(data, body, public_key_hex="a" * 64)
+        v2_installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
 def test_safe_extract_writes_no_path_outside_destination(tmp_path):
@@ -521,23 +565,23 @@ def test_separation_b_production_path_with_unsigned_manifest_fails_closed():
     document, _ = signed_document(key_pair)
     unsigned = {"manifest": document["manifest"]}
     with pytest.raises(installer.InstallError):
-        installer.verify_manifest_signature(unsigned, public_bytes.hex())
+        v2_installer.verify_manifest_signature(unsigned, public_bytes.hex())
 
 
 def test_separation_c_production_path_with_unknown_signer_fails_closed():
     document, _ = signed_document(um.generate_keypair())
     _, trusted_public = um.generate_keypair()
     with pytest.raises(installer.InstallError):
-        installer.verify_manifest_signature(document, trusted_public.hex())
+        v2_installer.verify_manifest_signature(document, trusted_public.hex())
 
 
 def test_separation_d_explicit_local_validation_with_both_matching_keys_succeeds(tmp_path):
     directory, _, _ = _write_local_release_validation_dir(tmp_path)
     public_key_hex, core_policy_key_hex, manifest_fetch, bundle_fetch = \
         installer.load_local_release_validation(directory)
-    body = installer.fetch_and_verify_release_manifest(
+    body = v2_installer.fetch_and_verify_release_manifest(
         public_key_hex=public_key_hex, fetch=manifest_fetch)
-    _, metadata = installer.fetch_and_verify_bundle(
+    _, metadata = v2_installer.fetch_and_verify_bundle(
         body, fetch=bundle_fetch, public_key_hex=public_key_hex,
         core_policy_public_key_hex=core_policy_key_hex)
     assert metadata["nodeMonitor"]["commit"] == MONITOR_COMMIT
@@ -555,15 +599,15 @@ def test_separation_e_validation_keys_are_never_production_roots(tmp_path):
 def test_separation_f_production_installer_still_refuses_same_release_afterward(tmp_path):
     directory, document, _ = _write_local_release_validation_dir(tmp_path)
     public_key_hex, _, manifest_fetch, _ = installer.load_local_release_validation(directory)
-    installer.fetch_and_verify_release_manifest(
+    v2_installer.fetch_and_verify_release_manifest(
         public_key_hex=public_key_hex, fetch=manifest_fetch)
 
     def production_fetch(_url):
         return json.dumps(document).encode()
 
     with pytest.raises(installer.InstallError):
-        installer.fetch_and_verify_release_manifest(
-            public_key_hex=installer.RELEASE_PUBLIC_KEY_HEX, fetch=production_fetch)
+        v2_installer.fetch_and_verify_release_manifest(
+            public_key_hex=v2_installer.RELEASE_PUBLIC_KEY_HEX, fetch=production_fetch)
 
 
 def test_local_release_validation_dir_missing_file_fails_closed(tmp_path):
@@ -584,7 +628,7 @@ def test_monitor_controller_comment_mentioning_forbidden_terms_is_not_a_false_po
     )
     data = make_bundle(files)
     body = manifest_for_bundle(data)
-    installer.validate_bundle(data, body, public_key_hex="a" * 64)
+    v2_installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
 def test_monitor_controller_real_docker_socket_grant_is_still_refused():
@@ -598,7 +642,7 @@ def test_monitor_controller_real_docker_socket_grant_is_still_refused():
     data = make_bundle(files)
     body = manifest_for_bundle(data)
     with pytest.raises(installer.InstallError, match="forbidden privileges"):
-        installer.validate_bundle(data, body, public_key_hex="a" * 64)
+        v2_installer.validate_bundle(data, body, public_key_hex="a" * 64)
 
 
 

@@ -24,16 +24,10 @@ from typing import Optional
 
 from packaging.version import InvalidVersion, Version
 
+from electrumx_core_safety import artifact_revision
+
 AUTO_UPDATE_MODES = ("off", "notify", "stable", "security")
-
-
-class EligibilityVerdict(enum.Enum):
-    ELIGIBLE = "ELIGIBLE"
-    IGNORED_SAME_VERSION = "IGNORED_SAME_VERSION"
-    REFUSED_OLDER_VERSION = "REFUSED_OLDER_VERSION"
-    REFUSED_PRERELEASE_ON_STABLE_CHANNEL = "REFUSED_PRERELEASE_ON_STABLE_CHANNEL"
-    REFUSED_WRONG_CHANNEL = "REFUSED_WRONG_CHANNEL"
-    REFUSED_AUTO_UPDATE_OFF = "REFUSED_AUTO_UPDATE_OFF"
+EligibilityVerdict = artifact_revision.EligibilityVerdict
 
 
 class VerificationVerdict(enum.Enum):
@@ -72,6 +66,13 @@ class HostFacts:
     # Current production ElectrumX DB schema. Existing pre-updater installs of
     # this project are schema 1; new installers persist the schema explicitly.
     current_db_schema: int = 1
+    # Release identity comes from the same authenticated operational state as
+    # current_electrumx_version. Missing or malformed values are preserved and
+    # refused by the canonical artifact ordering function; they are never
+    # silently coerced to revision 0 or an empty digest.
+    current_artifact_revision: object = None
+    current_artifact_digest: object = None
+    current_provenance_digest: object = None
 
 
 @dataclass(frozen=True)
@@ -116,13 +117,17 @@ class Decision:
 
 
 def evaluate_eligibility(*, auto_update_mode: str, channel: str,
-                         current_version: str, candidate_version: str,
-                         candidate_is_prerelease: bool) -> Decision:
+                         host: HostFacts, candidate_version: str,
+                         candidate_is_prerelease: bool,
+                         candidate_revision: object,
+                         candidate_artifact_digest: object,
+                         candidate_provenance_digest: object) -> Decision:
     """Step 1-5 of the update algorithm: is this release worth even looking at.
 
     Never treats a mutable ``latest`` tag as trust; the caller is expected to
     have already enumerated concrete tagged GitHub Releases and to call this
-    once per candidate.
+    once per candidate. Version/revision/digest ordering is delegated to the
+    single canonical implementation in ``artifact_revision``.
     """
     if auto_update_mode not in AUTO_UPDATE_MODES:
         return Decision(EligibilityVerdict.REFUSED_AUTO_UPDATE_OFF,
@@ -141,18 +146,21 @@ def evaluate_eligibility(*, auto_update_mode: str, channel: str,
     if channel == "stable" and candidate_is_prerelease:
         return Decision(EligibilityVerdict.REFUSED_PRERELEASE_ON_STABLE_CHANNEL)
 
-    try:
-        current = Version(current_version)
-        candidate = Version(candidate_version)
-    except InvalidVersion as exc:
-        return Decision(EligibilityVerdict.REFUSED_OLDER_VERSION,
-                        f"unparseable version: {exc}")
-
-    if candidate == current:
-        return Decision(EligibilityVerdict.IGNORED_SAME_VERSION)
-    if candidate < current:
-        return Decision(EligibilityVerdict.REFUSED_OLDER_VERSION)
-    return Decision(EligibilityVerdict.ELIGIBLE)
+    ordering = artifact_revision.compare_revision(
+        {
+            "electrumxVersion": host.current_electrumx_version,
+            "artifact_revision": host.current_artifact_revision,
+            "artifactDigest": host.current_artifact_digest,
+            "provenanceDigest": host.current_provenance_digest,
+        },
+        {
+            "electrumxVersion": candidate_version,
+            "artifact_revision": candidate_revision,
+            "artifactDigest": candidate_artifact_digest,
+            "provenanceDigest": candidate_provenance_digest,
+        },
+    )
+    return Decision(ordering.verdict, ordering.reason)
 
 
 def _updater_version_compatible(host: HostFacts, manifest: dict) -> bool:
