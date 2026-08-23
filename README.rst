@@ -1,5 +1,5 @@
 ============================================
-ElectrumX for Ravencoin 1.13.6
+ElectrumX for Ravencoin 1.13.7
 ============================================
 
 Community-maintained ElectrumX server for Ravencoin, with Ravencoin-specific
@@ -7,9 +7,9 @@ asset support, an exact official Ravencoin Core trust model, verified bootstrap
 options, deployment tooling and additional safety checks introduced after the
 August 2026 consensus incident.
 
-**Current release: 1.13.6.** It supersedes 1.13.1, which is no longer the
-recommended release. New installations should use the 1.13.6 installer, and
-existing 1.13.1 nodes should move to 1.13.6. A 1.13.1 node installed with the
+**Current release: 1.13.7.** It supersedes 1.13.1, which is no longer the
+recommended release. New installations should use the 1.13.7 installer, and
+existing 1.13.1 nodes should move to 1.13.7. A 1.13.1 node installed with the
 historical ``setup.sh`` path needs the one-time adoption step in
 `Legacy adoption`_ before the normal updater can be used; a 1.13.1 node
 installed with the release installer updates directly with
@@ -40,7 +40,15 @@ ecosystem and enabling this faster bootstrap path.**
 
 ChainStrap is used only as a transport/bootstrap accelerator. It is **not** a
 replacement for Ravencoin Core validation and it is not treated as a source of
-consensus trust. The 1.13.1 flow is deliberately fail-closed:
+consensus trust.
+
+Starting with **1.13.7**, current upstream ChainStrap archives may contain
+additional derived Ravencoin datadir material alongside the raw blockchain.
+ElectrumX-RVN intentionally ignores that material and extracts **only**
+allowlisted ``blocks/blk*.dat`` files. Files such as ``assets/*.ldb``,
+``assets/CURRENT``, ``assets/LOCK``, chainstate or other derived indexes are
+never imported. Ravencoin Core then performs the normal full local reindex and
+validation of the raw blockchain data. The 1.13.1 flow is deliberately fail-closed:
 
 1. the installer verifies the signed ElectrumX release metadata;
 2. the ChainStrap manifest and downloaded parts are verified before staging;
@@ -74,7 +82,7 @@ The normal trust/data path is::
    wallet / Electrum client
             |
             v
-   ElectrumX-RVN 1.13.6
+   ElectrumX-RVN 1.13.7
             |
             v
    Ravencoin Core 4.8.0
@@ -282,8 +290,8 @@ and the run can simply be repeated.
 
 1.13.6 replaces that call with ``install -d`` and creates the directory
 correctly, so the advanced controller can be enabled during a normal
-installation. Operators still on the 1.13.5 installer either move to the 1.13.6
-installer, or install without the advanced controller, which is the default and
+installation. Operators still on the 1.13.5 installer should move to the current
+1.13.7 installer, or install without the advanced controller, which is the default and
 is not required for normal monitoring:
 
 .. code-block:: sh

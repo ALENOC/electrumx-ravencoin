@@ -1,8 +1,8 @@
-"""Guard the 1.13.6 release identity.
+"""Guard the 1.13.7 release identity.
 
 1.13.2 and 1.13.3 were built, failed real hardware qualification and were
 withdrawn. Historical qualification/signing material may name those candidates;
-release identity surfaces for the replacement candidate must pin 1.13.6.
+release identity surfaces for the replacement candidate must pin 1.13.7.
 """
 import re
 import subprocess
@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE_VERSION = "1.13.6"
+RELEASE_VERSION = "1.13.7"
 WITHDRAWN_VERSION = "1.13.2"
 PREVIOUS_WITHDRAWN_VERSION = "1.13.3"
 
@@ -65,14 +65,14 @@ def test_no_release_executable_reference_to_1_13_2_candidate():
 
 
 @pytest.mark.parametrize("relative,pattern", [
-    ("electrumx/__init__.py", r"^version = 'ElectrumX-RVN 1\.13\.6'$"),
-    ("compose.yaml", r"image: alenoc/electrumx-ravencoin:1\.13\.6$"),
-    ("compose.existing-core.yaml", r"image: alenoc/electrumx-ravencoin:1\.13\.6$"),
+    ("electrumx/__init__.py", r"^version = 'ElectrumX-RVN 1\.13\.7'$"),
+    ("compose.yaml", r"image: alenoc/electrumx-ravencoin:1\.13\.7$"),
+    ("compose.existing-core.yaml", r"image: alenoc/electrumx-ravencoin:1\.13\.7$"),
     ("core-safety/scripts/legacy_1_13_1_apply.py",
-     r'^TARGET_ELECTRUMX_VERSION = "1\.13\.6"$'),
+     r'^TARGET_ELECTRUMX_VERSION = "1\.13\.7"$'),
     ("core-safety/scripts/render_installer_v2.py",
-     r"'\"alenoc/electrumx-ravencoin:1\.13\.6\", \"-ec\",'"),
-    (".github/workflows/release.yml", r"default: v1\.13\.6$"),
+     r"'\"alenoc/electrumx-ravencoin:1\.13\.7\", \"-ec\",'"),
+    (".github/workflows/release.yml", r"default: v1\.13\.7$"),
 ])
 def test_release_identity_is_pinned_to_current_version(relative, pattern):
     text = (ROOT / relative).read_text(encoding="utf-8")
@@ -99,9 +99,13 @@ def test_qualification_and_signing_docs_track_the_current_release():
     assert not (ROOT / f"docs/OFFLINE_RELEASE_SIGNING_{WITHDRAWN_VERSION}.md").exists()
 
 
-def test_withdrawn_1_13_3_failure_is_recorded_in_replacement_qualification():
+def test_current_qualification_records_chainstrap_mixed_content_contract():
     text = (ROOT / f"docs/HARDWARE_QUALIFICATION_{RELEASE_VERSION}.md").read_text(
         encoding="utf-8")
-    assert "withdrawn 1.13.3 candidate" in text
-    assert "No such container" in text
-    assert "ravencoin-bandwidth-controller.service" in text
+    assert "## RESULT: PENDING" in text
+    assert "source version for the ordinary updater path: `1.13.6`" in text
+    assert "candidate version: `1.13.7`" in text
+    assert "`assets/LOCK`" in text
+    assert "`blocks/blk*.dat`" in text
+    assert "only allowlisted `blocks/blk*.dat` members may be extracted" in text
+    assert "Ravencoin Core still performs a local full reindex/revalidation" in text
