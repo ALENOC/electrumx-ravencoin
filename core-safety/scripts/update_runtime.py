@@ -559,6 +559,11 @@ def _env_compose_selection(root: Path) -> list[str]:
         raw = value.strip()
     if raw is None:
         return []
+    # COMPOSE_PATH_SEPARATOR defaults to ":" on POSIX, so ":" is the only
+    # separator this code has to honour.  A comma-only value is still split
+    # so the entries are named in the refusal message instead of appearing
+    # as one unreadable blob; either way the check stays fail-closed,
+    # because an unsplit value cannot match a release Compose file name.
     separator = "," if ("," in raw and ":" not in raw) else ":"
     return [entry.strip() for entry in raw.split(separator) if entry.strip()]
 

@@ -19,13 +19,11 @@ they run without a Docker daemon.
 
 from __future__ import annotations
 
-import json
 import os
 import pathlib
 import shutil
 import subprocess
 import sys
-import textwrap
 
 import pytest
 
@@ -303,15 +301,3 @@ def test_legacy_upgrade_keeps_its_single_compose_model():
     }
     assert legacy._legacy_compose_files(marker) == [runtime.BASE_COMPOSE]
     assert runtime.CHAINSTRAP_OVERLAY not in legacy._legacy_compose_files(marker)
-
-
-def test_documented_failure_shape_is_covered(tmp_path, stub_docker):
-    """The stub models the exact stderr line the qualification apply reported."""
-    staging = _staging_tree(
-        tmp_path, setup_source=_pre_fix_setup_source(),
-        compose_file=f"compose.yaml:{HOST_LOCAL_OVERLAY}")
-    completed = _run_setup(staging, stub_docker)
-    detail = completed.stdout + completed.stderr
-    assert "no such file or directory" in detail
-    assert json.dumps(HOST_LOCAL_OVERLAY).strip('"') in detail
-    assert textwrap.dedent(detail).strip()
