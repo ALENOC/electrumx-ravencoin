@@ -206,12 +206,98 @@ From an external client:
 
   `["ElectrumX-RVN 1.13.8", "1.4"]`
 
+## Observed evidence, 2026-08-23
+
+### Signed artifact identity
+
+- release source commit: `c279608f22763e7bcfcf1587bc56cd0e6682f418`
+- merge commit on master: `d00f73a2beef65175994ecb4f1fa114e08326768`
+- `artifact_revision`: `0`
+- release timestamp: `2026-08-23T19:22:01Z`
+- signing key ID: `6f4f944c9b0a19a1`
+- bundle SHA-256: `f58020543b2ef8ad4449d266917fd18a50361563b1b6140151f3bbfbdd24423e`
+- installer SHA-256: `74af3b119210fd4e5fc628f2fe9cb5c9da76d62801d15b6d430d1e64480438f0`
+- provenance SHA-256: `ca02c7c7a629d43f3b3d3c114fbe994e333a9d3c82917dd93cb6c398fdf42812`
+- signed manifest SHA-256: `659af82009af675be8b504a1eb847992a0f082b6933b65f45b7589aa7eb9aec5`
+- offline verify-only result: `status=VERIFIED`
+
+### Gate 1: regression/security suite
+
+PASS. Focused suite over `tests/test_chainstrap*.py` and
+`tests/test_release_version_identity.py`: 149 passed. Full CI on the release
+source commit: tests 3.10, 3.11 and 3.12, container, Core artifact amd64 and
+arm64, and Protected path scope all pass.
+
+### Gate 2: current upstream ChainStrap fresh install
+
+PASS. Isolated fresh install against the 2026-08-19 upstream snapshot
+(`chainstrap/chainstrap.github.io@509dc251d4896f245912e8212a3b2b1ea5bc7add`,
+metadata SHA-256 `1d6aa9a05106880aaed13d7b4c86bd7110f9ac80ee46e6b091fc3e3542031ff1`,
+height 4505776), using a dedicated Compose project and bind-mounted storage
+paths.
+
+- all 17 parts downloaded and passed SHA-256 verification;
+- part 14, which aborted 1.13.7 on `blocks/index/004089.ldb`, was accepted:
+  `part accepted: 22 raw block file(s) | snapshot 83.2% (14/17)`;
+- parts 15, 16 and 17 carry no raw blocks at all and were accepted without
+  extracting anything, for example:
+  `preflight ignored 538 foreign ZIP member(s)` then
+  `preflight accepted 0 raw block member(s), 0 B uncompressed`;
+- `ChainStrap stage complete: 291 contiguous raw block files`;
+- datadir purity after completion: `blocks/` holds 291 entries, every one
+  matching `blk[0-9]{5,8}.dat`, with zero non-matching entries. No
+  `blocks/index/*`, no `rev*.dat` and no `assets/*` was written to disk;
+- no automatic P2P fallback occurred at any point;
+- Ravencoin Core started the mandatory network-isolated reindex.
+
+### Gate 3: post-install service state
+
+PENDING. The isolated fresh-install reindex of 291 block files was still
+running when 1.13.8 was published. Complete this gate on the isolated
+installation and record the observed Core readiness, Core health, ElectrumX
+health and reported version here.
+
+### Gate 4: ordinary hardware update
+
+PASS on the Raspberry Pi 5 node (`electrumx.raventag.com`), from a healthy
+1.13.7 installation over the normal updater path:
+
+```
+UPDATER_CHECKPOINT storage-preflight=PASS old-stack=RUNNING storage-model=named-volumes volume-objects=3 active-mounts=PASS
+UPDATER_CHECKPOINT external-mutator-suspend=PASS service=ravencoin-bandwidth-controller.service
+UPDATER_CHECKPOINT candidate-storage=PASS old-stack=RUNNING compose-model=PASS storage-model=named-volumes volume-objects=3
+UPDATER_CHECKPOINT release-switch=PASS same-filesystem-renames=COMPLETE new-root=ACTIVE
+UPDATER_CHECKPOINT external-mutator-resume=PASS service=ravencoin-bandwidth-controller.service
+HealthVerdict.PROMOTE_TO_CURRENT: post-update health gates passed
+```
+
+After promotion: `pendingCandidate = null`, `failureReason = null`,
+`lastKnownGoodRelease` records 1.13.7, the installed
+`release-install-metadata.json` records `1.13.8` at source commit
+`c279608f22763e7bcfcf1587bc56cd0e6682f418`, ElectrumX runs
+`alenoc/electrumx-ravencoin:1.13.8` healthy, Ravencoin Core remains
+`alenoc/ravencoin-core:4.8.0` healthy, the Node Monitor stayed up, existing
+chain data and ElectrumX database were preserved, and ChainStrap was not
+re-run. `electrumx_rpc getinfo` reports `"version": "ElectrumX-RVN 1.13.8"`.
+
+### Gate 5: public endpoint
+
+PASS. With default certificate verification against
+`electrumx.raventag.com:50002` (certificate common name
+`electrumx.raventag.com`):
+
+```
+{"jsonrpc":"2.0","result":["ElectrumX-RVN 1.13.8","1.4"],"id":0}
+```
+
 ## Qualification result
 
 PENDING.
 
-Change this document to `RESULT: PASS` only after the signed candidate has
-passed all mandatory gates above.
+Gates 1, 2, 4 and 5 passed on real hardware and are recorded above. Gate 3, the
+post-install service state of the isolated fresh installation, is still
+outstanding because its mandatory Core reindex was unfinished at publication
+time. 1.13.8 was published ahead of that gate on the maintainer's explicit
+instruction.
 
-Record the exact final artifact identity and real hardware evidence when the
-qualification completes.
+Change this document to `RESULT: PASS` only after gate 3 is recorded here.
