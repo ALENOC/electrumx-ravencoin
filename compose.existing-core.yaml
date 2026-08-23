@@ -5,7 +5,7 @@ services:
     build:
       context: .
       dockerfile: contrib/Dockerfile
-    image: alenoc/electrumx-ravencoin:1.13.7
+    image: alenoc/electrumx-ravencoin:1.13.8
     network_mode: host
     env_file:
       - ${ELECTRUMX_ENV_FILE:-contrib/electrumx.env}

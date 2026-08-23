@@ -6,6 +6,27 @@ This document defines the release/update trust model introduced by ElectrumX-RVN
 
 Release 1.13.2 was built and offered as a candidate but failed real hardware qualification during the staged apply of the legacy 1.13.1 upgrade. Its GitHub Release was deleted and 1.13.2 was never published as an installable release. The git tag `v1.13.2` is retained only as a historical trace of that failed candidate. No operator should ever install, target or trust 1.13.2, and the version number is not reused. The first published release carrying the manifest-v2 trust root is 1.13.3.
 
+## 1.13.8
+
+`v1.13.8` exists because the published 1.13.7 bootstrap classifies ChainStrap
+ZIP members by location. Any member under `blocks/` that is not an allowlisted
+raw block was fatal, so a fresh install against the current upstream snapshot
+aborted on part 14/17 at `blocks/index/004089.ldb`. 1.13.8 classifies members
+structurally: an allowlisted raw `blocks/blk*.dat` member is extracted, any
+other safe regular member is ignored wherever it appears, and unsafe entries
+still fail closed.
+
+That is a change of executable bootstrap behaviour, so it could not ship as
+another artifact revision of 1.13.7: the frozen-scope rule below requires a
+version bump for a behavioural change. 1.13.8 starts again at
+`artifact_revision 0`.
+
+The extraction allowlist is unchanged. Only `blocks/blk*.dat` is ever written
+into the Ravencoin datadir, and ChainStrap remains transport acceleration rather
+than a consensus trust source.
+
+Qualification evidence is recorded in `docs/HARDWARE_QUALIFICATION_1.13.8.md`.
+
 ## 1.13.6
 
 `v1.13.6` exists because the published 1.13.5 installer aborts a fresh
