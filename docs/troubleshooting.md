@@ -3,6 +3,124 @@
 Documentation: [Home](../README.rst) · [Docs index](README.md) ·
 [Operations](operations.md) · [Validation status](validation-status.md)
 
+## Where does the installer put things?
+
+Three independent locations are involved, and only one is expected to grow
+large:
+
+- the **installation directory** holds the Compose files, `.env`, and the install
+  marker. It defaults to `electrumx-ravencoin` resolved against the current
+  working directory, not against the home directory. Override it with
+  `--install-dir`;
+- the **project data directory** holds the Ravencoin chain data and ElectrumX
+  index. It is selected explicitly with `--storage-root` and is the location that
+  can grow to hundreds of gigabytes;
+- **Docker images** stay in Docker's existing data-root. The installer does not
+  relocate them, so the filesystem holding `/var/lib/docker` still needs free
+  space even when `--storage-root` points at another disk.
+
+The installer prints all three locations on success.
+
+## `host anti-rollback preflight failed: root-owned security-state locator is missing`
+
+The full message is:
+
+```text
+error: host anti-rollback preflight failed: root-owned security-state locator is missing: /var/lib/electrumx-ravencoin/security-state.locator
+```
+
+This is expected on a first installation performed as an unprivileged user and
+is not a defect. The host-wide anti-rollback floor lives outside the
+installation directory so reinstalling into another directory cannot reset it.
+An unprivileged process is deliberately not allowed to create the root-owned
+locator itself.
+
+`--check-only` does not touch persistent state, so a successful preflight does
+not imply that the locator exists.
+
+To keep the node owned by the current unprivileged user, provision the locator
+once and re-run the installer unchanged:
+
+```sh
+sudo install -d -o root -g root -m 0755 /var/lib/electrumx-ravencoin
+
+printf '{\n  "schemaVersion": 1,\n  "ownerUid": %s,\n  "path": "%s"\n}\n' \
+  "$(id -u)" \
+  "${XDG_STATE_HOME:-$HOME/.local/state}/electrumx-ravencoin/security-state.json" \
+  | sudo tee /var/lib/electrumx-ravencoin/security-state.locator >/dev/null
+
+sudo chmod 0644 /var/lib/electrumx-ravencoin/security-state.locator
+```
+
+The locator must be a regular non-symlink file owned by root with mode `0644`.
+The state file it names is created later by the installer, owned by the same
+unprivileged user and mode `0600`.
+
+Running the installer under `sudo` instead is also supported. Root provisions
+the locator in the root namespace at
+`/var/lib/electrumx-ravencoin/security-state.json`, and the installation and its
+data become root-owned, so later `docker compose` and `electrumx-update apply`
+commands also require `sudo`.
+
+The two ownership models are mutually exclusive. A locator provisioned for an
+unprivileged user makes a later root invocation fail with a message such as:
+
+```text
+security-state namespace belongs to uid 1000, not caller uid 0
+```
+
+Changing the ownership decision later requires deliberately removing the
+root-owned locator and its state file, which discards the recorded anti-rollback
+high-water. Choose the owning identity before installing.
+
+## `fresh install storage root already exists`
+
+Example:
+
+```text
+error: fresh install storage root already exists: /mnt/data/electrumx-ravencoin-storage; preserve or remove it explicitly before retrying
+```
+
+A fresh install never writes into an existing storage root, so a directory left
+by an earlier attempt is refused rather than reused or overwritten. The
+installer suggests `<mountpoint>/electrumx-ravencoin-storage` on writable mounted
+filesystems, and an existing directory at that location causes the refusal.
+
+Decide explicitly what the old directory contains. If it holds chain data worth
+preserving, rename it and reuse the suggested path:
+
+```sh
+mv /mnt/data/electrumx-ravencoin-storage /mnt/data/electrumx-storage-old
+```
+
+If it is disposable, remove it explicitly. Container-owned subdirectories may
+require `sudo`, and this permanently discards any synced data:
+
+```sh
+sudo rm -rf /mnt/data/electrumx-ravencoin-storage
+```
+
+Alternatively choose a custom path in the interactive installer or pass
+`--storage-root DIR`. The storage root must be a dedicated child directory: not
+`/`, not `$HOME`, and not the filesystem mountpoint itself.
+
+## `mkdir: invalid option -- 'o'` with advanced host controls
+
+Example from the historical 1.13.5 installer:
+
+```text
+error: command failed with exit code 1: /usr/bin/sudo mkdir -p -o root -g root -m 0755 /usr/local/lib/electrumx-ravencoin
+```
+
+This affects the 1.13.5 installer only. It attempted to create the root-owned
+controller directory with ownership flags that `mkdir` does not accept. A fresh
+1.13.5 install therefore aborted when the advanced bandwidth/connection
+controller was requested.
+
+1.13.6 and later use the correct `install -d` path. Operators should use the
+current release rather than work around this historical installer defect. The
+advanced controller is optional and disabled by default.
+
 ## Core is syncing
 
 An initial `blocks`/`headers` gap is normal. During block-file reindex, `blocks`
@@ -63,26 +181,23 @@ problem to fix deliberately, not a reason to recreate databases.
 ## ElectrumX and a Core reindex that moves the backend height a lot
 
 If Core is reindexed on a host that also runs ElectrumX, Core's own reported
-height passes through a low value early on (while it is rebuilding its block
-index) before reaching the real chain tip. Older ElectrumX builds on this fork
-could match that temporary low height, mark themselves internally as caught
-up, and then never reconsider that status even as Core went on to advance
-millions of blocks further; `self.caught_up` in
-`electrumx/server/block_processor.py` was a one-way latch. This was discovered
-during the real mainnet reindex documented in
-[Validation status](validation-status.md) and is fixed: ElectrumX now revokes
-its own caught-up state when the backend's height moves materially ahead of
-its own indexed height (more than one prefetch batch, the codebase's existing
-unit for ordinary catch-up work), and restores it once it has genuinely
-indexed up to the new height again. Ordinary single-block tip lag does not
-trigger this; only a real, material gap does.
+height passes through a low value early on before reaching the real chain tip.
+Older ElectrumX builds on this fork could match that temporary low height, mark
+themselves internally as caught up, and then never reconsider that status even
+as Core advanced millions of blocks further. This was discovered during the
+real mainnet reindex documented in [Validation status](validation-status.md) and
+is fixed: ElectrumX now revokes its own caught-up state when the backend's
+height moves materially ahead of its indexed height and restores it after a
+genuine catch-up. Ordinary single-block tip lag does not trigger this behavior.
 
-A build with the fix recovers on its own; no manual ElectrumX rebuild or
-restart should be needed for this specific scenario anymore. If you are
-running an older build, restarting the ElectrumX container is still a valid,
-low-cost workaround (`docker compose up -d --build --no-deps electrumx`,
-leaving Core untouched); it is cheapest done as soon as you notice, since a
-fresh process has to re-catch-up in full.
+A build with the fix recovers on its own. For an older build, restarting only the
+ElectrumX container remains a valid low-cost workaround:
+
+```sh
+docker compose up -d --build --no-deps electrumx
+```
+
+Leave Core and its data untouched.
 
 ## Disk space is low
 
@@ -97,27 +212,27 @@ Use `dig +short your-name.duckdns.org` and compare the answer with the current
 public address. If DuckDNS is stale, inspect the updater service/timer and its
 last response without printing the token. If the router WAN address differs
 from the address reported by an independent Internet service, the connection
-may be behind CGNAT; DuckDNS cannot bypass that. See the [public-node guide](public-node.md)
-for ISP, IPv6 and relay options.
+may be behind CGNAT; DuckDNS cannot bypass that. See the
+[public-node guide](public-node.md) for ISP, IPv6 and relay options.
 
 ## Port 50002 or TLS fails
 
 Test TCP 50002 from outside the home network. Check the node's stable LAN
-address, the router's TCP forwarding rule, firewall rules, certificate hostname
-and certificate expiry. Use `openssl s_client` with the hostname and SNI to
-inspect the certificate. Do not expose Core RPC or REST to the public Internet.
+address, router forwarding rule, firewall rules, certificate hostname and
+certificate expiry. Use `openssl s_client` with the hostname and SNI to inspect
+the certificate. Do not expose Core RPC or REST to the public Internet.
 
 ## No peers or legacy server behavior
 
 Review Core logs and peer counts, then check time, DNS and outbound firewall
-rules. An old Electrum endpoint may lack `server.ravencoin_backend` or the
-current safety evidence. The wallet intentionally rejects missing, stale,
-contradictory or unreviewed backend identity; do not bypass that check by
-forcing a version string.
+rules. An old Electrum endpoint may lack `server.ravencoin_backend` or current
+safety evidence. The wallet intentionally rejects missing, stale, contradictory
+or unreviewed backend identity; do not bypass that check by forcing a version
+string.
 
 ## Chain conflict or policy rejection
 
-Record the exact wallet error, the server address, `server.version`,
+Record the exact wallet error, server address, `server.version`,
 `server.ravencoin_backend`, network, heights and checkpoint evidence. A wrong
 repository/commit, revoked release, future unreviewed Core, stale backend or
 chain conflict is a fail-closed safety result. Escalate with those facts rather
