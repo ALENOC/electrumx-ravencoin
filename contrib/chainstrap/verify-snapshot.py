@@ -11,8 +11,16 @@ No ignored member is opened, trusted or represented as verified block state.
 from __future__ import annotations
 
 import stat
+import sys
 import zipfile
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
+
+# This file is also loaded directly with importlib.spec_from_file_location by
+# the regression suite.  Make the sibling reviewed base module resolvable
+# without depending on the caller's sys.path.
+_CHAINSTRAP_DIR = Path(__file__).resolve().parent
+if str(_CHAINSTRAP_DIR) not in sys.path:
+    sys.path.insert(0, str(_CHAINSTRAP_DIR))
 
 import verify_snapshot_base as _base
 from verify_snapshot_base import *  # noqa: F401,F403 - compatibility surface
