@@ -1,11 +1,20 @@
 ============================================
-ElectrumX for Ravencoin 1.13.1
+ElectrumX for Ravencoin 1.13.5
 ============================================
 
 Community-maintained ElectrumX server for Ravencoin, with Ravencoin-specific
 asset support, an exact official Ravencoin Core trust model, verified bootstrap
 options, deployment tooling and additional safety checks introduced after the
 August 2026 consensus incident.
+
+**Current release: 1.13.5.** It supersedes 1.13.1, which is no longer the
+recommended release. New installations should use the 1.13.5 installer, and
+existing 1.13.1 nodes should move to 1.13.5. A 1.13.1 node installed with the
+historical ``setup.sh`` path needs the one-time adoption step in
+`Legacy adoption`_ before the normal updater can be used; a 1.13.1 node
+installed with the release installer updates directly with
+``electrumx-update apply``. Later releases keep the same Ravencoin Core 4.8.0
+identity, so this is a software update and not a change of Core trust root.
 
 ElectrumX-RVN 1.13.1 is the first release line in this repository that combines
 all of the following in one maintained deployment path:
@@ -65,7 +74,7 @@ The normal trust/data path is::
    wallet / Electrum client
             |
             v
-   ElectrumX-RVN 1.13.1
+   ElectrumX-RVN 1.13.5
             |
             v
    Ravencoin Core 4.8.0
@@ -83,7 +92,7 @@ as separate concepts.
 Official Ravencoin Core identity
 ================================
 
-The bundled 1.13.1 deployment is pinned to the official Ravencoin repository:
+The bundled deployment is pinned to the official Ravencoin repository:
 
 .. code-block:: text
 
@@ -99,7 +108,7 @@ string.
 
 Historical emergency/community builds may still be useful evidence when
 investigating the August 2026 incident, but they are **not** the production
-Core trust root for 1.13.1. Current production trust is designed around the
+Core trust root. Current production trust is designed around the
 exact official ``RavenProject/Ravencoin`` identity above.
 
 Installation: one stable link
@@ -234,7 +243,7 @@ allowed to execute it.
 Security model
 ==============
 
-ElectrumX-RVN 1.13.1 separates several trust decisions that older deployment
+ElectrumX-RVN separates several trust decisions that older deployment
 models often collapse together.
 
 Core release trust
@@ -370,6 +379,27 @@ Normal maintenance uses::
 A candidate must satisfy the release manifest, architecture, safe-Core policy,
 compatibility and rollback checks before it can be applied.
 
+An update is transactional. The updater proves that the existing storage stays
+attached before it stops anything, switches the release directory, then either
+promotes the new release or restores the previous one exactly. If it cannot
+prove an exact restore it stops and asks for operator intervention instead of
+starting an ambiguous stack.
+
+Two properties matter for existing deployments:
+
+* Storage is preserved as it is. Installations created by the release installer
+  use bind-backed project storage. Installations adopted from an older
+  ``setup.sh`` deployment keep their original Docker named volumes. The updater
+  reads which model an installation uses from its own install marker and never
+  converts, recreates or deletes storage.
+* Compose overlays selected through ``COMPOSE_FILE`` in ``.env`` are preserved
+  across promotion and rollback, so a TLS deployment stays a TLS deployment.
+  ChainStrap is a one-shot bootstrap and is never re-run by an update.
+
+Adoption of an older ``setup.sh`` deployment is a separate one-time step, and
+the operator is prompted for it explicitly. After adoption has completed, every
+later update is an ordinary ``electrumx-update apply``.
+
 Release readiness
 =================
 
@@ -407,6 +437,7 @@ Start with the guide that matches the task:
 * `Electrum monitor`_: peer discovery and backend/operator evidence;
 * `August 2026 incident guide`_: incident and recovery background;
 * `Validation status`_: current test, architecture and release evidence;
+* `Legacy adoption`_: one-time adoption of a ``setup.sh`` 1.13.1 node;
 * `Troubleshooting`_: operational diagnosis;
 * `Documentation index`_: full documentation map.
 
@@ -438,5 +469,6 @@ process documented in ``SECURITY.md``.
 .. _Electrum monitor: docs/electrum-monitor.md
 .. _August 2026 incident guide: docs/incident-2026.md
 .. _Validation status: docs/validation-status.md
+.. _Legacy adoption: docs/LEGACY_1.13.1_ADOPTION.md
 .. _Troubleshooting: docs/troubleshooting.md
 .. _Upstream and credits: docs/upstream-and-credits.md
