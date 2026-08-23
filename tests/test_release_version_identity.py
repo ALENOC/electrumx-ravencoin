@@ -1,10 +1,8 @@
-"""Guard the 1.13.3 release identity.
+"""Guard the 1.13.4 release identity.
 
-1.13.2 was built, failed real hardware qualification and was withdrawn. Its
-GitHub Release no longer exists, so any release-executable reference to it would
-point operators at a release that cannot be installed. Documentation and the
-explicitly historical staging-resolution regression module are allowed to name
-the withdrawn candidate; nothing that ships or runs is.
+1.13.2 and 1.13.3 were built, failed real hardware qualification and were
+withdrawn. Historical qualification/signing material may name those candidates;
+release identity surfaces for the replacement candidate must pin 1.13.4.
 """
 import re
 import subprocess
@@ -13,13 +11,15 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE_VERSION = "1.13.3"
+RELEASE_VERSION = "1.13.4"
 WITHDRAWN_VERSION = "1.13.2"
+PREVIOUS_WITHDRAWN_VERSION = "1.13.3"
 
-# Historical-by-design: these record the withdrawn candidate on purpose.
+# Historical-by-design: these record withdrawn candidates on purpose.
 HISTORICAL_FILES = {
     "docs/release-artifact-revisions.md",
     "docs/HARDWARE_QUALIFICATION_1.13.3.md",
+    "docs/OFFLINE_RELEASE_SIGNING_1.13.3.md",
     "tests/test_update_staging_compose_resolution.py",
 }
 
@@ -48,7 +48,7 @@ def executable_surface():
         yield name
 
 
-def test_no_release_executable_reference_to_withdrawn_candidate():
+def test_no_release_executable_reference_to_1_13_2_candidate():
     offenders = []
     for name in executable_surface():
         path = ROOT / name
@@ -65,16 +65,14 @@ def test_no_release_executable_reference_to_withdrawn_candidate():
 
 
 @pytest.mark.parametrize("relative,pattern", [
-    ("electrumx/__init__.py", r"^version = 'ElectrumX-RVN 1\.13\.3'$"),
-    ("compose.yaml", r"image: alenoc/electrumx-ravencoin:1\.13\.3$"),
-    ("compose.existing-core.yaml", r"image: alenoc/electrumx-ravencoin:1\.13\.3$"),
-    ("contrib/bootstrap/chainstrap_runtime.py",
-     r'"electrumx-ravencoin-chainstrap-resolver/1\.13\.3"'),
+    ("electrumx/__init__.py", r"^version = 'ElectrumX-RVN 1\.13\.4'$"),
+    ("compose.yaml", r"image: alenoc/electrumx-ravencoin:1\.13\.4$"),
+    ("compose.existing-core.yaml", r"image: alenoc/electrumx-ravencoin:1\.13\.4$"),
     ("core-safety/scripts/legacy_1_13_1_apply.py",
-     r'^TARGET_ELECTRUMX_VERSION = "1\.13\.3"$'),
+     r'^TARGET_ELECTRUMX_VERSION = "1\.13\.4"$'),
     ("core-safety/scripts/render_installer_v2.py",
-     r"'\"alenoc/electrumx-ravencoin:1\.13\.3\", \"-ec\",'"),
-    (".github/workflows/release.yml", r"default: v1\.13\.3$"),
+     r"'\"alenoc/electrumx-ravencoin:1\.13\.4\", \"-ec\",'"),
+    (".github/workflows/release.yml", r"default: v1\.13\.4$"),
 ])
 def test_release_identity_is_pinned_to_current_version(relative, pattern):
     text = (ROOT / relative).read_text(encoding="utf-8")
@@ -94,12 +92,16 @@ def test_v1_installer_template_needle_is_not_bumped():
 def test_qualification_and_signing_docs_track_the_current_release():
     assert (ROOT / f"docs/HARDWARE_QUALIFICATION_{RELEASE_VERSION}.md").is_file()
     assert (ROOT / f"docs/OFFLINE_RELEASE_SIGNING_{RELEASE_VERSION}.md").is_file()
+    # 1.13.3 remains as historical evidence of the failed qualification.
+    assert (ROOT / f"docs/HARDWARE_QUALIFICATION_{PREVIOUS_WITHDRAWN_VERSION}.md").is_file()
+    assert (ROOT / f"docs/OFFLINE_RELEASE_SIGNING_{PREVIOUS_WITHDRAWN_VERSION}.md").is_file()
     assert not (ROOT / f"docs/HARDWARE_QUALIFICATION_{WITHDRAWN_VERSION}.md").exists()
     assert not (ROOT / f"docs/OFFLINE_RELEASE_SIGNING_{WITHDRAWN_VERSION}.md").exists()
 
 
-def test_withdrawn_candidate_history_is_recorded():
+def test_withdrawn_1_13_3_failure_is_recorded_in_replacement_qualification():
     text = (ROOT / f"docs/HARDWARE_QUALIFICATION_{RELEASE_VERSION}.md").read_text(
         encoding="utf-8")
-    assert "legacy-adoption-rollback=PASS marker=REMOVED old-stack=PRESERVED" in text
-    assert "compose.local-core-identity.yaml: no such file or directory" in text
+    assert "withdrawn 1.13.3 candidate" in text
+    assert "No such container" in text
+    assert "ravencoin-bandwidth-controller.service" in text
