@@ -14,7 +14,7 @@ The integration branch currently deploys:
 - Core repository: `RavenProject/Ravencoin`
 - Core version/tag: `4.8.0` / `v4.8.0`
 - Core commit: `22549129888d02e0e08fcdb9f96f3c699167e774`
-- ElectrumX release line: `1.13.1`
+- ElectrumX release line: `1.13.5`
 
 Repository plus exact commit is the trust identity. Tree-equivalent or
 historically tested commits are not interchangeable with this identity.

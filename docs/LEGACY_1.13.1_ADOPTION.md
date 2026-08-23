@@ -1,8 +1,10 @@
-# Legacy 1.13.1 adoption for the 1.13.4 transactional updater
+# Legacy 1.13.1 adoption for the transactional updater
 
 This procedure exists only for production ElectrumX-RVN 1.13.1 nodes that were installed with the historical `setup.sh` path and therefore predate both `.electrumx-ravencoin-installed.json` and the bind-backed `compose.storage.yaml` layout.
 
 The adoption path is intentionally separate from the normal updater. It preserves the existing Docker named volumes and does **not** convert them to bind mounts or derive stable storage configuration from Docker's private data-root.
+
+Adoption is a one-time step. Once it has completed, `storageMode: named-volumes` is durable installation state in `.electrumx-ravencoin-installed.json`, the normal updater interprets that state natively, and every later update is an ordinary `electrumx-update apply`. This wrapper must not be used again.
 
 ## Preconditions
 

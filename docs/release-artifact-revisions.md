@@ -6,6 +6,18 @@ This document defines the release/update trust model introduced by ElectrumX-RVN
 
 Release 1.13.2 was built and offered as a candidate but failed real hardware qualification during the staged apply of the legacy 1.13.1 upgrade. Its GitHub Release was deleted and 1.13.2 was never published as an installable release. The git tag `v1.13.2` is retained only as a historical trace of that failed candidate. No operator should ever install, target or trust 1.13.2, and the version number is not reused. The first published release carrying the manifest-v2 trust root is 1.13.3.
 
+## 1.13.5 artifact revisions
+
+`v1.13.5` carries two artifact revisions. Only revision 1 is qualified and installable.
+
+`artifact_revision 0` was built, signed and uploaded to the `v1.13.5` release, then failed real hardware qualification of the ordinary 1.13.4 -> 1.13.5 update path on an installation adopted from legacy 1.13.1. The post-release-switch storage proofs rejected the plain Docker named volumes that adoption preserves, and rollback failed the same proof, so the transaction stopped fail-closed and required operator intervention. Revision 0 was withdrawn and its assets were replaced in place. No operator should install, target or trust revision 0.
+
+`artifact_revision 1` fixes that defect, passed hardware qualification, and is the artifact published on the `v1.13.5` release. Its provenance `sourceCommit` is `5b38d0119ae7233b7b3dac7f4a1e2c860fde8f76`. The git tag `v1.13.5` still points at the revision-0 release-preparation commit `00776bdb0ab2f0581cdc677da61e137df13fdb3e` and was deliberately not moved, so the tag does not identify the published bytes. Release identity for 1.13.5 is the signed manifest with its `artifactDigest` and `provenanceDigest`.
+
+Revision 1 changes updater code inside the bundle and is therefore not scope-preserving against revision 0. That is not a violation of the frozen-scope rule below: the rule protects operators of a revision that was actually qualified and published as installable, and revision 0 never reached that state. The offline scope verifier must not be used to compare revision 0 with revision 1.
+
+Full evidence is recorded in `docs/HARDWARE_QUALIFICATION_1.13.5.md`.
+
 ## 1.13.1 cannot auto-update to 1.13.3
 
 An existing ElectrumX-RVN 1.13.1 node **cannot and must not auto-update to 1.13.3**.
@@ -58,6 +70,8 @@ The offline scope verifier compares the actual previously published release arti
 For the same ElectrumX version, application logic, installer behavior, gateway policy, policy caps, Core pins, signing keys and other executable behavior are frozen. Only the reviewed ChainStrap floor evidence, monotonic `artifact_revision`, timestamp, generated provenance, source-commit provenance metadata and the digests that necessarily bind those reviewed bytes may change. A behavioral change requires a version bump.
 
 The standalone installer must remain byte-identical between revisions of the same version. Tar member paths, types, modes and all frozen member contents must also remain identical. This makes a revision incapable of silently becoming a software update.
+
+The comparison baseline is a revision that was published as installable and passed qualification. A candidate revision that failed qualification and was withdrawn is not such a baseline, and is not compared against. See the 1.13.5 section above.
 
 ## Host-wide anti-rollback namespace
 

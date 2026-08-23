@@ -1,5 +1,5 @@
 ============================================
-ElectrumX for Ravencoin 1.13.1
+ElectrumX for Ravencoin 1.13.5
 ============================================
 
 Community-maintained ElectrumX server for Ravencoin, with Ravencoin-specific
@@ -65,7 +65,7 @@ The normal trust/data path is::
    wallet / Electrum client
             |
             v
-   ElectrumX-RVN 1.13.1
+   ElectrumX-RVN 1.13.5
             |
             v
    Ravencoin Core 4.8.0
@@ -83,7 +83,7 @@ as separate concepts.
 Official Ravencoin Core identity
 ================================
 
-The bundled 1.13.1 deployment is pinned to the official Ravencoin repository:
+The bundled deployment is pinned to the official Ravencoin repository:
 
 .. code-block:: text
 
@@ -99,7 +99,7 @@ string.
 
 Historical emergency/community builds may still be useful evidence when
 investigating the August 2026 incident, but they are **not** the production
-Core trust root for 1.13.1. Current production trust is designed around the
+Core trust root. Current production trust is designed around the
 exact official ``RavenProject/Ravencoin`` identity above.
 
 Installation: one stable link
@@ -234,7 +234,7 @@ allowed to execute it.
 Security model
 ==============
 
-ElectrumX-RVN 1.13.1 separates several trust decisions that older deployment
+ElectrumX-RVN separates several trust decisions that older deployment
 models often collapse together.
 
 Core release trust
@@ -369,6 +369,27 @@ Normal maintenance uses::
 
 A candidate must satisfy the release manifest, architecture, safe-Core policy,
 compatibility and rollback checks before it can be applied.
+
+An update is transactional. The updater proves that the existing storage stays
+attached before it stops anything, switches the release directory, then either
+promotes the new release or restores the previous one exactly. If it cannot
+prove an exact restore it stops and asks for operator intervention instead of
+starting an ambiguous stack.
+
+Two properties matter for existing deployments:
+
+* Storage is preserved as it is. Installations created by the release installer
+  use bind-backed project storage. Installations adopted from an older
+  ``setup.sh`` deployment keep their original Docker named volumes. The updater
+  reads which model an installation uses from its own install marker and never
+  converts, recreates or deletes storage.
+* Compose overlays selected through ``COMPOSE_FILE`` in ``.env`` are preserved
+  across promotion and rollback, so a TLS deployment stays a TLS deployment.
+  ChainStrap is a one-shot bootstrap and is never re-run by an update.
+
+Adoption of an older ``setup.sh`` deployment is a separate one-time step, and
+the operator is prompted for it explicitly. After adoption has completed, every
+later update is an ordinary ``electrumx-update apply``.
 
 Release readiness
 =================
