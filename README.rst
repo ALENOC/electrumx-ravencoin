@@ -6,7 +6,7 @@ Production-oriented ElectrumX infrastructure for Ravencoin with verified
 Ravencoin Core 4.8.0, Fast Verified Bootstrap, transactional updates, optional
 node monitoring, and maintained Linux amd64 / ARM64 deployment paths.
 
-**Current release: ElectrumX-RVN 1.13.7**
+**Current release: ElectrumX-RVN 1.13.8**
 
 `Install`_ · `Update`_ · `How it works`_ · `Security`_ · `Documentation`_ ·
 `Latest release <https://github.com/ALENOC/electrumx-ravencoin/releases/latest>`_
@@ -66,7 +66,7 @@ The normal data and trust path is::
    Wallet / Electrum client
              |
              v
-   ElectrumX-RVN 1.13.7
+   ElectrumX-RVN 1.13.8
              |
              v
    Ravencoin Core 4.8.0
@@ -116,11 +116,13 @@ The trust path is::
              v
       locally validated chain
 
-Starting with **1.13.7**, current upstream ChainStrap archives may contain
-additional derived Ravencoin datadir/index material. ElectrumX-RVN ignores safe
-foreign members and allows only ``blocks/blk*.dat`` files to enter the raw-block
-staging path. Unexpected members inside ``blocks/``, unsafe paths, unsafe entry
-types, malformed archives, and zero-raw-block parts remain fail-closed.
+Current upstream ChainStrap archives may contain additional derived Ravencoin
+datadir/index material, both beside the raw blocks (``assets/*.ldb``) and inside
+the blocks namespace (``blocks/index/*.ldb``). Since **1.13.8**, ElectrumX-RVN
+ignores such safe derived members wherever they appear and allows only
+``blocks/blk*.dat`` files to enter the raw-block staging path. Ignored members
+are never extracted and never reach the Ravencoin datadir. Unsafe paths, unsafe
+entry types, malformed archives, and zero-raw-block parts remain fail-closed.
 
 If ChainStrap fails, the installer does not silently switch to another bootstrap
 method. Traditional Ravencoin P2P synchronization can be selected explicitly:

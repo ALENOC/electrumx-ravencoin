@@ -4,7 +4,7 @@
 
 """One-time, explicit adoption path for legacy setup.sh 1.13.1 installs.
 
-The 1.13.7 transactional updater normally requires the installer marker and
+The 1.13.8 transactional updater normally requires the installer marker and
 bind-backed storage introduced by the new installer. Historical 1.13.1
 ``setup.sh`` deployments predate both. This wrapper discovers and proves that
 specific legacy shape while the old node is still serving, requires explicit
@@ -13,7 +13,7 @@ then runs the normal v2 updater with process-local storage proof functions that
 preserve the existing Docker named volumes verbatim.
 
 The ``discover`` command is strictly read-only. The ``apply`` command refuses to
-write the adoption marker until the already-discovered pending 1.13.7 candidate
+write the adoption marker until the already-discovered pending 1.13.8 candidate
 has been revalidated, downloaded, provenance-checked, bundle-checked and trust-
 continuity checked. If this invocation creates an adoption marker but the normal
 updater returns without promotion, the wrapper removes that marker again only
@@ -41,7 +41,7 @@ import electrumx_update_cli as cli
 import update_runtime as runtime
 
 LEGACY_ELECTRUMX_VERSION = "1.13.1"
-TARGET_ELECTRUMX_VERSION = "1.13.7"
+TARGET_ELECTRUMX_VERSION = "1.13.8"
 LEGACY_CORE_VERSION = "4.8.0"
 CONSENT_TEXT = "ADOPT LEGACY 1.13.1"
 LEGACY_STORAGE_MODE = "named-volumes"
@@ -351,7 +351,7 @@ def _prove_candidate_named_storage(
         raise LegacyAdoptionError("candidate named-volume identities differ from the running node")
     _prove_named_volume_objects(expected)
     # setup.sh may emit its own marker in the staged tree. Replace only the
-    # staged marker after storage proof so the activated 1.13.7 root retains
+    # staged marker after storage proof so the activated 1.13.8 root retains
     # the explicit legacy storage mode for rollback and future updates.
     _write_adoption_marker(root, electrumx_version=TARGET_ELECTRUMX_VERSION)
 
@@ -404,7 +404,7 @@ def _confirm(discovery: dict, *, assume_yes: bool) -> None:
 
 
 def _preflight_pending_candidate() -> dict:
-    """Fully authenticate the pending 1.13.7 candidate before marker mutation."""
+    """Fully authenticate the pending 1.13.8 candidate before marker mutation."""
     try:
         state = cli.load_state(cli.DEFAULT_STATE_PATH)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -412,7 +412,7 @@ def _preflight_pending_candidate() -> dict:
             f"cannot load updater state before legacy adoption: {exc}") from exc
     if not state.pending_candidate:
         raise LegacyAdoptionError(
-            "no pending candidate; run electrumx-update check after the signed 1.13.7 release exists")
+            "no pending candidate; run electrumx-update check after the signed 1.13.8 release exists")
 
     trusted_keys = cli.load_trusted_key(cli.DEFAULT_TRUSTED_KEY_PATH)
     resolved_policy = cli.resolve_production_core_policy(state)

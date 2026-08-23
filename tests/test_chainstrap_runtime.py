@@ -93,15 +93,23 @@ def _zip(path, members):
             archive.writestr(name, data)
 
 
-def test_foreign_member_rejects_entire_archive_before_extraction(tmp_path):
+def test_safe_foreign_member_is_ignored_and_never_extracted(tmp_path):
     archive = tmp_path / "part.zip"
     _zip(archive, [
         ("blocks/blk00000.dat", b"good"),
-        ("blocks/rev00000.dat", b"forbidden"),
+        ("blocks/rev00000.dat", b"derived-undo"),
+        ("blocks/index/004089.ldb", b"derived-index"),
     ])
-    with pytest.raises(runtime.RuntimeBootstrapError, match="non-allowlisted"):
-        runtime.preflight_archive(archive, already_claimed=set())
-    assert not (tmp_path / "data" / "blocks" / "blk00000.dat").exists()
+    vetted = runtime.preflight_archive(archive, already_claimed=set())
+    assert [info.filename for info in vetted] == ["blocks/blk00000.dat"]
+
+    datadir = tmp_path / "data"
+    runtime.extract_preflighted_archive(
+        archive, datadir, vetted, existing_uncompressed=0)
+    assert sorted(
+        str(path.relative_to(datadir))
+        for path in datadir.rglob("*") if path.is_file()
+    ) == ["blocks/blk00000.dat"]
 
 
 def test_traversal_directory_and_symlink_members_are_rejected(tmp_path):
@@ -114,8 +122,10 @@ def test_traversal_directory_and_symlink_members_are_rejected(tmp_path):
     with zipfile.ZipFile(directory, "w") as archive:
         archive.writestr("blocks/", b"")
         archive.writestr("blocks/blk00000.dat", b"x")
-    with pytest.raises(runtime.RuntimeBootstrapError, match="non-allowlisted"):
-        runtime.preflight_archive(directory, already_claimed=set())
+    # A plain directory entry is inert: ignored, never an extraction target.
+    assert [info.filename for info in
+            runtime.preflight_archive(directory, already_claimed=set())] == [
+        "blocks/blk00000.dat"]
 
     symlink = tmp_path / "symlink.zip"
     with zipfile.ZipFile(symlink, "w") as archive:
