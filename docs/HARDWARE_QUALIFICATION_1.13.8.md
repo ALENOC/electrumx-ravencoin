@@ -252,10 +252,53 @@ paths.
 
 ### Gate 3: post-install service state
 
-PENDING. The isolated fresh-install reindex of 291 block files was still
-running when 1.13.8 was published. Complete this gate on the isolated
-installation and record the observed Core readiness, Core health, ElectrumX
-health and reported version here.
+FAILED for 1.13.8 as published, observed on 2026-08-24.
+
+The mandatory network-isolated reindex completed successfully:
+
+```
+Release-floor ancestry verified at 4501329:000000000004967a3501a0e5edca06f6a88f3a6b4af7b4688160e2b63a4a7e48.
+Full local Core reindex completed; exact snapshot tip
+4505776:000000000005d3d76dc5a29b280e67f047697102c0b273a120e65a9f7bf88ac9,
+release-floor ancestry, and asset database/index probes were verified.
+Normal Core startup is now allowed.
+```
+
+The first normal Core startup then crash looped:
+
+```
+Error: Command line contains unexpected token
+'9c798a1088fea460d9d5924bb460e5adac6a8349ef9dccec2b8b931c7f6afe45',
+see ravend -h for a list of options.
+```
+
+Cause: `docker/core/entrypoint.sh` read the staged blocks-marker digest with
+`set -- $(sha256sum ...)`, which replaces the container positional parameters
+that the same script forwards to `ravend`. The digest and the marker path were
+appended to the Core command line. The refusal gate itself behaved correctly;
+only the argument handling was wrong.
+
+Scope: every ChainStrap fresh installation reaching its first normal Core
+startup, on 1.13.8 as published and on the releases that carry the same
+entrypoint. Ordinary updates of an existing installation are unaffected, which
+is why gate 4 passed on the Raspberry Pi 5 node and the public endpoint kept
+serving.
+
+With that one line corrected, the same installation and the same validated
+datadir passed the gate:
+
+- Ravencoin Core started, reached the repository readiness gate, is healthy and
+  reports `Raven Core Daemon version v4.8.0.0-225491298`;
+- ElectrumX started and is healthy;
+- `electrumx_rpc getinfo` reports `"version": "ElectrumX-RVN 1.13.8"`,
+  `"daemon height": 4507854`, with the ElectrumX index building from the
+  validated chain state;
+- the backend remained the trusted Ravencoin Core 4.8.0 identity pinned by this
+  release.
+
+That re-test used a locally built Core image carrying only the entrypoint fix,
+not a published artifact. It demonstrates the cause and the remedy; it does not
+qualify 1.13.8 as published.
 
 ### Gate 4: ordinary hardware update
 
@@ -294,10 +337,15 @@ PASS. With default certificate verification against
 
 PENDING.
 
-Gates 1, 2, 4 and 5 passed on real hardware and are recorded above. Gate 3, the
-post-install service state of the isolated fresh installation, is still
-outstanding because its mandatory Core reindex was unfinished at publication
-time. 1.13.8 was published ahead of that gate on the maintainer's explicit
-instruction.
+Gates 1, 2, 4 and 5 passed on real hardware and are recorded above. Gate 3
+failed: the ChainStrap fix that 1.13.8 exists for works, the snapshot downloads
+and validates end to end, but the Core container entrypoint then crash loops on
+the first normal startup of a fresh ChainStrap installation. 1.13.8 was
+published ahead of this gate on the maintainer's explicit instruction.
 
-Change this document to `RESULT: PASS` only after gate 3 is recorded here.
+1.13.8 therefore does not qualify as a fresh-install release and must be
+superseded. The corrected entrypoint is the only change required, and the same
+validated datadir passes the gate with it.
+
+Change this document to `RESULT: PASS` only if a build that includes the
+entrypoint fix passes gate 3 as a published artifact.
