@@ -191,16 +191,91 @@ From an external client:
 
   `["ElectrumX-RVN 1.13.9", "1.4"]`
 
-## Observed evidence
+## Observed evidence, 2026-08-24
 
-PENDING.
+### Signed artifact identity
 
-Record here, with dates, the observed result of every gate above, including the
-signed artifact identity actually published.
+- release source commit: `31e680e61a7c5833915768ea41ea9ccf44b953ed`
+- `artifact_revision`: `0`
+- release timestamp: `2026-08-24T11:57:27Z`
+- artifact digest:
+  `sha256:7bb1bc02f5586ea74ed426dd2170af7660074ff2c06b2c5515a76266b06c23cc`
+- installer digest:
+  `sha256:a7b3a55f8c04623ffd206f66de1173ebeda8b163b657912bd7258104141dbaf7`
+- provenance digest:
+  `sha256:992646796d60394dc601c3d254c06e4fd577bad9138246007523e5aa30285d4d`
+- signed manifest SHA-256:
+  `56cf3f8abdbcd0e0f0a0010d926e8bbc36c1909c3635044999ba3adc3b572c8f`
+- signing key ID: `6f4f944c9b0a19a1`
+- offline verification final line: `status=VERIFIED`
+
+### Gate 1: regression/security suite: PASS
+
+The entrypoint regression test asserts the exact argument vector forwarded to
+the daemon after a validated ChainStrap startup. Reverting the one-line fix makes
+exactly that test fail, and restoring it makes the whole entrypoint gate suite
+pass. The ChainStrap classification suite and the release identity suite pass on
+Python 3.10, 3.11 and 3.12 in CI.
+
+### Gate 2: ChainStrap datadir validity: PASS on a locally built image
+
+Against the ChainStrap-produced datadir from the 1.13.8 qualification, which
+carries both validation markers, a Ravencoin Core image built with only the
+entrypoint fix starts the normal service, passes the ChainStrap validation gate
+and reaches healthy:
+
+```
+Raven Core Daemon version v4.8.0.0-225491298
+```
+
+A full fresh ChainStrap install against the published 1.13.9 artifacts has not
+been repeated, so gate 2 is not yet observed end to end on a published artifact.
+
+### Gate 3: post-install service state: PASS on the updated node
+
+On the Raspberry Pi 5 node after the 1.13.9 update:
+
+- `ravencoin-core` healthy, no crash loop;
+- `electrumx` healthy;
+- ElectrumX reports `ElectrumX-RVN 1.13.9`;
+- the backend remains the trusted Ravencoin Core 4.8.0 identity.
+
+### Gate 4: ordinary hardware update: PASS
+
+On the Raspberry Pi 5 node, the existing healthy 1.13.8 installation discovered
+and applied the signed 1.13.9 candidate through the normal updater path:
+
+```
+UPDATER_CHECKPOINT storage-preflight=PASS old-stack=RUNNING storage-model=named-volumes volume-objects=3 active-mounts=PASS
+UPDATER_CHECKPOINT external-mutator-suspend=PASS service=ravencoin-bandwidth-controller.service
+UPDATER_CHECKPOINT candidate-storage=PASS old-stack=RUNNING compose-model=PASS storage-model=named-volumes volume-objects=3
+UPDATER_CHECKPOINT release-switch=PASS same-filesystem-renames=COMPLETE new-root=ACTIVE
+UPDATER_CHECKPOINT external-mutator-resume=PASS service=ravencoin-bandwidth-controller.service
+HealthVerdict.PROMOTE_TO_CURRENT: post-update health gates passed
+```
+
+Resulting updater state: `currentRelease 1.13.9`, `lastKnownGoodRelease 1.13.8`,
+`pendingCandidate = null`, `failureReason = null`. Blockchain data, ElectrumX
+database, named-volume identities, `compose.tls.yaml`, the external Node Monitor
+and the external bandwidth controller were preserved, and ChainStrap did not
+re-run.
+
+### Gate 5: public endpoint: PASS
+
+```
+{"jsonrpc":"2.0","result":["ElectrumX-RVN 1.13.9","1.4"],"id":0}
+```
+
+TLS certificate verification for `electrumx.raventag.com:50002` passed.
 
 ## Qualification result
 
 ## RESULT: PENDING
 
-Change this document to `RESULT: PASS` only after every mandatory gate above has
-been observed to pass against the published 1.13.9 artifacts.
+Gates 1, 3, 4 and 5 are observed PASS against the published 1.13.9 artifacts.
+Gate 2 is observed only against a locally built Core image carrying the
+entrypoint fix, not against a fresh ChainStrap install of the published
+artifacts.
+
+Change this document to `RESULT: PASS` only after a fresh ChainStrap install of
+the published 1.13.9 artifacts also passes gate 2 end to end.
