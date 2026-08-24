@@ -477,11 +477,35 @@ def extract_bundle_file(path: Path, destination: Path) -> None:
             os.chmod(target, mode)
 
 
+def _preserve_ownership(source_stat: os.stat_result, destination: Path) -> None:
+    """Keep operator state owned by the operator across a release switch.
+
+    The updater runs as root, so a plain copy hands every preserved file to
+    root:root.  Permission bits alone are not enough: a sidecar that
+    bind-mounts this state under an unprivileged uid (the Node Monitor reads
+    .secrets as 1000:1000) then loses access and crash-loops after an
+    otherwise healthy update.  Ownership is part of the operator state and is
+    carried over unchanged.
+    """
+    current = destination.stat()
+    if (current.st_uid, current.st_gid) == (source_stat.st_uid, source_stat.st_gid):
+        return
+    try:
+        os.chown(destination, source_stat.st_uid, source_stat.st_gid)
+    except OSError as exc:
+        raise UpdateRuntimeError(
+            f"cannot preserve operator ownership of {destination}; "
+            "run the updater with the privileges required to restore "
+            f"uid {source_stat.st_uid} gid {source_stat.st_gid}") from exc
+
+
 def _copy_mutable_path(source: Path, destination: Path) -> None:
     if source.is_symlink():
         raise UpdateRuntimeError(f"refusing symlink in persistent operator state: {source}")
     if source.is_dir():
+        source_stat = source.stat()
         destination.mkdir(parents=True, exist_ok=True)
+        _preserve_ownership(source_stat, destination)
         os.chmod(destination, 0o700)
         for child in source.iterdir():
             _copy_mutable_path(child, destination / child.name)
@@ -491,8 +515,10 @@ def _copy_mutable_path(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
         destination.unlink()
+    source_stat = source.stat()
     shutil.copyfile(source, destination)
-    os.chmod(destination, source.stat().st_mode & 0o777)
+    _preserve_ownership(source_stat, destination)
+    os.chmod(destination, source_stat.st_mode & 0o777)
 
 
 def copy_persistent_state(old_root: Path, new_root: Path) -> None:
