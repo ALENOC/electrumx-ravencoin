@@ -39,7 +39,7 @@ def _run_entrypoint(tmp_path, *, blocks_marker=None, done_marker=None):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     (fake_bin / "ravend").write_text(
-        "#!/bin/sh\ntouch \"$RAVEND_RAN\"\nexit 0\n")
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$RAVEND_RAN\"\nexit 0\n")
     (fake_bin / "ravend").chmod(0o755)
 
     environment = dict(os.environ)
@@ -81,6 +81,30 @@ def test_matching_reindex_marker_allows_startup(tmp_path):
         tmp_path, blocks_marker=marker, done_marker=done)
     assert completed.returncode == 0, completed.stderr
     assert ran
+
+
+def test_validated_chainstrap_startup_forwards_no_stray_arguments(tmp_path):
+    """The marker comparison must not clobber the container arguments.
+
+    Reading the staged marker digest with "set --" replaced the positional
+    parameters that are forwarded to ravend, so a fully validated ChainStrap
+    installation crash looped on its first normal startup with
+    "Command line contains unexpected token".
+    """
+    marker = MARKER_BODY % ("a" * 64, "b" * 64)
+    done = hashlib.sha256(marker.encode()).hexdigest() + "\n"
+    completed, ran = _run_entrypoint(
+        tmp_path, blocks_marker=marker, done_marker=done)
+    assert completed.returncode == 0, completed.stderr
+    assert ran
+    arguments = [
+        line for line in
+        (tmp_path / "ravend-ran").read_text().splitlines() if line]
+    assert arguments == [
+        f"-datadir={tmp_path / 'data'}",
+        f"-conf={tmp_path / 'config' / 'raven.conf'}",
+        "-printtoconsole",
+    ], arguments
 
 
 def test_mismatched_reindex_marker_refuses_startup(tmp_path):

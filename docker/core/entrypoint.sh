@@ -93,8 +93,10 @@ chainstrap_blocks_marker="$data_dir/.chainstrap-blocks-ready.json"
 chainstrap_done_marker="$data_dir/.chainstrap-reindex-complete"
 if [ -s "$chainstrap_blocks_marker" ]; then
     if [ -s "$chainstrap_done_marker" ]; then
-        set -- $(sha256sum "$chainstrap_blocks_marker")
-        blocks_hash=$1
+        # Never use "set --" here: it would replace the container arguments
+        # that are forwarded to ravend below, so a validated ChainStrap
+        # installation would crash loop on its first normal startup.
+        blocks_hash=$(sha256sum "$chainstrap_blocks_marker" | cut -d' ' -f1)
         done_hash=$(sed -n '1p' "$chainstrap_done_marker")
         if [ "$blocks_hash" != "$done_hash" ]; then
             printf '%s\n' \
