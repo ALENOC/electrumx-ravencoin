@@ -55,6 +55,23 @@ class AssetSupport(str, Enum):
     PARTIAL = "ASSET_PARTIAL"
     UNSUPPORTED = "ASSET_UNSUPPORTED"
     UNKNOWN = "ASSET_UNKNOWN"
+    #: Claims asset support in server.features but the required methods do
+    #: not actually work: a flag without a function.
+    LEGACY = "ASSET_LEGACY"
+
+
+class IndexHealth(str, Enum):
+    """How far ElectrumX's served chain trails its own backend Core.
+
+    Operational, not security: a certified Core is not UNSAFE because the
+    indexer above it is catching up, but a stale index is a poor wallet
+    server and must be selectable as such.
+    """
+
+    SYNCED = "INDEX_SYNCED"
+    LAGGING = "INDEX_LAGGING"
+    STALE = "INDEX_STALE"
+    UNKNOWN = "INDEX_UNKNOWN"
 
 
 class DiscoverySource(str, Enum):
@@ -115,6 +132,40 @@ class Thresholds:
     #: A conflict needs disagreement about a hash at a shared height, seen more
     #: than once, never a height difference on its own.
     conflict_confirmations: int = 2
+
+    # --- Chain Quorum 2.0 (monitor/quorum.py) -----------------------------
+    #: How far below the k-th highest attested height the shared anchor sits,
+    #: so propagation skew and shallow reorgs do not become disagreements.
+    #: Six blocks is the same tolerance as height_lag_tolerance: minutes on a
+    #: chain targeting one block per minute.
+    stable_height_margin: int = 6
+    #: Distinct attested operator groups that must have reached a height
+    #: before it can anchor a challenge round.  Two mirrors the minimum
+    #: corroboration already required for SAFE promotion.
+    minimum_attested_groups_for_anchor: int = 2
+    #: Unpredictable challenge heights added per crawl.  Small and polite.
+    random_challenges: int = 2
+    #: Window (in blocks, below the anchor) the random challenges draw from:
+    #: about a day of Ravencoin history.
+    challenge_random_window: int = 1440
+
+    # --- Index health (Part 4) --------------------------------------------
+    #: Core blocks ahead of the ElectrumX tip that still counts as synced.
+    index_lag_synced: int = 0
+    #: Beyond this the index is lagging (same scale as height_lag_tolerance).
+    index_lag_lagging: int = 6
+    #: Beyond this the index is stale (same scale as height_lag_alarm).
+    index_lag_stale: int = 60
+
+    # --- Asset quorum (Part 6) --------------------------------------------
+    #: Sentinel asset queries attempted per crawl; zero disables active
+    #: asset verification without touching anything else.
+    asset_sentinel_queries: int = 4
+    #: Cross-crawl confirmations required before a suspected asset-data
+    #: mismatch becomes a confirmed asset-data conflict.
+    asset_conflict_confirmations: int = 2
+    #: Maximum observers whose bundles a single aggregation considers.
+    max_observation_bundles: int = 64
 
     jitter_fraction: float = 0.15
 
@@ -189,6 +240,16 @@ class ProbeResult:
     connect_latency_ms: Optional[float] = None
     rpc_latency_ms: Optional[float] = None
     asset_support: AssetSupport = AssetSupport.UNKNOWN
+    #: Height reported by the backend Core through
+    #: server.ravencoin_backend.backend.blocks, when present.  A claim, but a
+    #: useful one: against ``height`` (the ElectrumX-served tip) it yields
+    #: index lag without any extra probe.
+    core_height: Optional[int] = None
+    #: Per-method asset capability matrix from active probing, when enabled.
+    asset_methods: Optional[dict] = None
+    #: Responses to non-standard probe calls (challenges, asset probes),
+    #: raw and untrusted; interpretation belongs to the caller.
+    extra_responses: Optional[dict] = None
 
 
 @dataclass

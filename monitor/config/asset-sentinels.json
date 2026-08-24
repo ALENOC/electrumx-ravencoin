@@ -1,0 +1,4 @@
+{
+  "note": "Sentinel assets for active asset capability verification and Asset Data Quorum v1. Each sentinel must be a cheap, public, permanent query on mainnet: an asset name, an optional qualifier for tag history, an optional restricted asset name, and an optional one-character prefix for get_assets_with_prefix. Never create assets or spend RVN for monitoring. An empty list (the shipped default) cleanly disables active asset probing: capability falls back to the server.features flag and asset quorum reports INSUFFICIENT_QUORUM instead of fabricating samples.",
+  "sentinels": []
+}

@@ -24,7 +24,7 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from electrumx.lib.coins import Ravencoin
 
-from .model import AssetSupport, EndpointId, Security, Thresholds
+from .model import AssetSupport, EndpointId, IndexHealth, Security, Thresholds
 
 #: Asset methods a wallet needs from a production Ravencoin Electrum server.
 REQUIRED_ASSET_METHODS = (
@@ -350,6 +350,28 @@ def count_unknown_safe_endpoints(states: Iterable) -> int:
     return sum(
         1 for state in states
         if state.security is Security.SAFE and not state.operator_group)
+
+
+def classify_index_lag(core_height: Optional[int], electrum_height: Optional[int],
+                       thresholds: Optional[Thresholds] = None) -> tuple:
+    """Distance between the backend Core chain and what ElectrumX serves.
+
+    Returns ``(IndexHealth, index_lag)`` where ``index_lag`` is
+    ``core_height - electrum_height`` or None when either side is
+    missing.  This is deliberately a separate axis from Security: an
+    endpoint with a certified Core is not UNSAFE because its indexer is
+    catching up, and conversely a perfectly synced index does not certify
+    anything about the Core underneath.
+    """
+    thresholds = thresholds or Thresholds()
+    if core_height is None or electrum_height is None:
+        return IndexHealth.UNKNOWN, None
+    lag = core_height - electrum_height
+    if lag <= thresholds.index_lag_synced:
+        return IndexHealth.SYNCED, lag
+    if lag <= thresholds.index_lag_lagging:
+        return IndexHealth.LAGGING, lag
+    return IndexHealth.STALE, lag
 
 
 def suggest_operator_group(hostname: str, known: Mapping[str, str]) -> Optional[str]:

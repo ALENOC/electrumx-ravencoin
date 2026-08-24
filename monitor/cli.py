@@ -24,11 +24,14 @@ import time
 from typing import List, Optional
 
 from .classify import (
-    ChainObservation, classify_assets, classify_backend, compare_chains,
-    count_independent_operators, count_unknown_safe_endpoints, independent_groups,
-    is_corroborated, operator_group_key,
+    ChainObservation, classify_assets, classify_backend, classify_index_lag,
+    compare_chains, count_independent_operators, count_unknown_safe_endpoints,
+    independent_groups, is_corroborated, operator_group_key,
 )
-from .crawl import Crawler
+from .crawl import (
+    Crawler, asset_capability_calls, challenge_calls, parse_challenge_responses,
+    probe_endpoint,
+)
 from .directory import build_directory
 from .model import (
     Availability, DiscoverySource, EndpointId, Limits, Security, Thresholds, Transport,
@@ -38,6 +41,7 @@ from .store import Store
 PACKAGE_DIR = pathlib.Path(__file__).resolve().parent
 REPO_ROOT = PACKAGE_DIR.parent
 DEFAULT_SEEDS = PACKAGE_DIR / "config" / "seeds.json"
+DEFAULT_SENTINELS = PACKAGE_DIR / "config" / "asset-sentinels.json"
 DEFAULT_REGISTRY = PACKAGE_DIR / "config" / "operator-registry.json"
 DEFAULT_POLICY_TRUSTED_KEY = (
     REPO_ROOT / "core-safety" / "production" / "core-policy-signing-public-key.hex")
@@ -253,8 +257,122 @@ async def run_discovery(store: Store, *, seeds_path: pathlib.Path,
     # A VALID-but-uncorroborated verdict, CONFLICT_SUSPECTED, TEMPORARY_LAG or
     # UNKNOWN all leave existing classifications as they were: no promotion.
 
+    # ---- Chain Quorum 2.0: shared-height header challenges -----------------
+    # The anchor comes from the same observations the cheap probe collected,
+    # so a second connection per reachable endpoint is the only extra load,
+    # bounded by the challenge set (a handful of heights).
+    challenge_summary = {"anchor": None, "status": "SKIPPED", "detail": ""}
+    from . import quorum as quorum_module
+    challenge_set = quorum_module.build_challenge_set(
+        observations, thresholds=thresholds)
+    challenge_results = {}
+    if challenge_set is not None:
+        crawl_id = f"{now}-{challenge_set.challenge_nonce[:8]}"
+        heights = challenge_set.height_values()
+        records = []
+        tips_by_group = {}
+        for endpoint, result in results.items():
+            if not result.reachable:
+                continue
+            state = store.load_state(endpoint)
+            group = operator_group_key(
+                state.operator_group if state else None, endpoint.hostname)
+            if result.height is not None:
+                best = tips_by_group.get(group)
+                if best is None or result.height > best:
+                    tips_by_group[group] = result.height
+            try:
+                challenge_result = await probe_endpoint(
+                    endpoint, limits=limits, allow_private=allow_private,
+                    calls=[("server.version", ["Ravencoin-Electrum-Monitor/1.0",
+                                               "1.4"])]
+                    + challenge_calls(heights))
+            except (OSError, ValueError):
+                continue
+            if not challenge_result.reachable:
+                continue
+            answers = parse_challenge_responses(
+                challenge_result.extra_responses or {}, heights)
+            challenge_results[str(endpoint)] = answers
+            endpoint_id = store.endpoint_id(endpoint)
+            if endpoint_id is None:
+                continue
+            for height, block_hash in answers.items():
+                records.append(quorum_module.ChallengeRecord(
+                    endpoint=endpoint, operator_group=group, height=height,
+                    block_hash=block_hash, observer=vantage_point,
+                    observed_at=now))
+        confirmations = {group: store.conflict_confirmations(group)
+                         for group in tips_by_group}
+        challenge_verdict = quorum_module.evaluate_challenges(
+            records, challenge_set, tips=tips_by_group,
+            confirmations=confirmations, thresholds=thresholds)
+        challenge_id = store.record_challenge_round(
+            crawl_id, challenge_set.anchor_height, challenge_set.challenge_nonce,
+            json.dumps(list(heights)), challenge_verdict.status.value,
+            challenge_verdict.detail, now=now)
+        for record in records:
+            store.record_challenge_response(
+                challenge_id, store.endpoint_id(record.endpoint),
+                record.height, record.block_hash, record.operator_group,
+                record.observer, now=now)
+        # Cross-crawl confirmation bookkeeping for challenge conflicts,
+        # same discipline as the tip-level conflicts above.
+        for group in tips_by_group:
+            if group in challenge_verdict.conflicting_groups:
+                store.record_conflict(group, now=now)
+            elif group in challenge_verdict.verified_groups:
+                store.clear_conflict(group)
+        challenge_summary = {
+            "anchor": challenge_set.anchor_height,
+            "status": challenge_verdict.status.value,
+            "detail": challenge_verdict.detail,
+        }
+
+    # ---- Index health (Part 4): backend Core height vs served tip ----------
+    index_states = {}
+    for endpoint, result in results.items():
+        health, lag = classify_index_lag(result.core_height, result.height,
+                                         thresholds)
+        index_states[str(endpoint)] = {"health": health.value, "lag": lag}
+
+    # ---- Active asset capability probes (Part 5) ----------------------------
+    # Disabled cleanly when no sentinel is configured: the features flag
+    # answer stands and nothing is probed.
+    from . import assets as assets_module
+    sentinels = assets_module.load_sentinels(DEFAULT_SENTINELS)
+    asset_summary = {"probed": 0, "capability": {}}
+    plan = assets_module.capability_probe_plan(
+        sentinels, limit=thresholds.asset_sentinel_queries)
+    if plan:
+        for endpoint, result in results.items():
+            if not result.reachable:
+                continue
+            try:
+                asset_result = await probe_endpoint(
+                    endpoint, limits=limits, allow_private=allow_private,
+                    calls=[("server.version", ["Ravencoin-Electrum-Monitor/1.0",
+                                               "1.4"])]
+                    + asset_capability_calls(plan))
+            except (OSError, ValueError):
+                continue
+            if not asset_result.reachable:
+                continue
+            extra = asset_result.extra_responses or {}
+            matrix = {}
+            for item in plan:
+                raw = extra.get(item["method"])
+                matrix[item["method"]] = raw is not None and not (
+                    isinstance(raw, dict) and raw.get("error"))
+            result.asset_methods = matrix
+            asset_summary["capability"][str(endpoint)] = (
+                assets_module.summarize_capability(matrix, result.features).value)
+            asset_summary["probed"] += 1
+
     return {"probed": len(results), "edges": len(edges), "chain": verdict.status,
-            "chain_detail": verdict.detail}
+            "chain_detail": verdict.detail,
+            "challenge": challenge_summary, "index": index_states,
+            "assets": asset_summary}
 
 
 def command_status(store: Store) -> int:
@@ -300,6 +418,113 @@ def command_publish(store: Store, *, version: int, output: str) -> int:
     print("sign it with the monitor signing key before publishing; an unsigned "
           "directory is not usable by a client")
     return 0
+
+
+def command_observer_keygen(args) -> int:
+    from .observer import generate_observer_keypair
+    info = generate_observer_keypair(args.key_dir, name=args.name)
+    print(f"observer public key: {info['publicKeyHex']}")
+    print(f"observer key id:     {info['keyId']}")
+    print(f"public key written:  {info['publicKeyPath']}")
+    print(f"private key written: {info['privateKeyPath']} (mode 0600; never "
+          f"share, publish or commit it)")
+    return 0
+
+
+def command_verify_observation(store: Store, args) -> int:
+    from .observer import verify_observation_bundle
+    document = json.loads(pathlib.Path(args.bundle).read_text(encoding="utf-8"))
+    trusted = {}
+    for line in pathlib.Path(args.trusted_observers).read_text(
+            encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            public = bytes.fromhex(line)
+            trusted[generate_key_id(public)] = public
+    body = verify_observation_bundle(
+        document, trusted,
+        observer_sequence_high_water=store.observer_high_water())
+    store.record_accepted_observation(
+        body["observerKeyId"], body["observerId"], body["sequence"],
+        json.dumps(document), body.get("crawlId"))
+    print(f"verified observation from observer {body['observerId']} "
+          f"(key {body['observerKeyId']}, sequence {body['sequence']}, "
+          f"{len(body['observations'])} endpoint observation(s))")
+    return 0
+
+
+def command_aggregate_observations(store: Store, args) -> int:
+    from .vantage import compare_vantage_views, views_from_bundles
+    bundles = []
+    for path in args.bundles:
+        bundles.append(json.loads(pathlib.Path(path).read_text(encoding="utf-8")))
+    if len(bundles) > Limits().max_observation_bundles:
+        print("error: too many bundles for one aggregation", file=sys.stderr)
+        return 1
+    summaries = compare_vantage_views(views_from_bundles(bundles))
+    for summary in summaries:
+        print(f"{summary.endpoint:<44} {summary.agreement.value:<40} "
+              f"{summary.detail}")
+    return 0
+
+
+def command_operator_verify(store: Store, args) -> int:
+    from .operators import (IdentityState, verify_operator_declaration)
+    attested = {}
+    if pathlib.Path(args.attested_keys).exists():
+        for line in pathlib.Path(args.attested_keys).read_text(
+                encoding="utf-8").splitlines():
+            parts = line.split()
+            if len(parts) == 2:
+                attested[parts[0]] = parts[1]
+    document = json.loads(pathlib.Path(args.declaration).read_text(
+        encoding="utf-8"))
+    declaration = verify_operator_declaration(
+        document, attested,
+        sequence_high_water=store.operator_sequence_high_water())
+    store.record_operator_declaration(declaration)
+    state = ("REGISTRY_ATTESTED (counts toward operator diversity)"
+             if declaration.state is IdentityState.REGISTRY_ATTESTED else
+             f"{declaration.state.value} (valid signature, NOT independent "
+             f"quorum: see docs/network-observer.md)")
+    print(f"operator {declaration.operator_name} group "
+          f"{declaration.operator_group} key {declaration.operator_key_id}: "
+          f"{state}")
+    print(f"{len(declaration.endpoints)} endpoint(s) bound: "
+          f"{', '.join(declaration.endpoints)}")
+    return 0
+
+
+def command_publish_snapshot(store: Store, args) -> int:
+    from .observer import load_observer_private_key
+    from .snapshot import build_snapshot, sign_snapshot
+    states = store.all_states()
+    body = build_snapshot(
+        states, snapshot_version=args.snapshot_version,
+        chain=json.loads(args.chain_summary) if args.chain_summary else {},
+        infrastructure=json.loads(args.infrastructure) if args.infrastructure else {},
+        observers=json.loads(args.observers) if args.observers else {},
+        asset_sampling=json.loads(args.asset_sampling) if args.asset_sampling else {})
+    minimum = store.minimum_snapshot_version()
+    if args.snapshot_version <= minimum:
+        print(f"error: snapshot version {args.snapshot_version} is not above "
+              f"the accepted {minimum}; refusing a rollback", file=sys.stderr)
+        return 1
+    private_key, public_hex = load_observer_private_key(args.signing_key)
+    document = sign_snapshot(body, private_key, key_id=generate_key_id(
+        bytes.fromhex(public_hex)))
+    path = pathlib.Path(args.output)
+    path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8")
+    store.record_snapshot(args.snapshot_version, json.dumps(body))
+    print(f"wrote signed network snapshot version {args.snapshot_version} "
+          f"({len(body['servers'])} endpoints) to {path}")
+    return 0
+
+
+def generate_key_id(public_bytes: bytes) -> str:
+    import hashlib
+    return hashlib.sha256(public_bytes).hexdigest()[:16]
 
 
 def main(argv=None) -> int:
@@ -349,7 +574,50 @@ def main(argv=None) -> int:
     publish.add_argument("--directory-version", type=int, required=True)
     publish.add_argument("--output", default="monitor-directory.json")
 
+    keygen = subparsers.add_parser(
+        "observer-keygen",
+        help="generate a local Ed25519 observer keypair (Phase 1 observer)")
+    keygen.add_argument("--key-dir", default="observer-keys")
+    keygen.add_argument("--name", default="observer")
+
+    verify_obs = subparsers.add_parser(
+        "verify-observation",
+        help="verify a signed observation bundle and record its sequence")
+    verify_obs.add_argument("bundle")
+    verify_obs.add_argument(
+        "--trusted-observers", default="observer-trusted-keys.hex",
+        help="hex Ed25519 public keys of observers this aggregator trusts, "
+             "one per line; a bundle signed by any other key is refused")
+
+    aggregate = subparsers.add_parser(
+        "aggregate-observations",
+        help="cross-compare verified bundles from several vantage points")
+    aggregate.add_argument("bundles", nargs="+")
+
+    operator_verify = subparsers.add_parser(
+        "operator-verify",
+        help="verify a signed operator declaration and store its identity")
+    operator_verify.add_argument("declaration")
+    operator_verify.add_argument(
+        "--attested-keys", default="operator-attested-keys.txt",
+        help="lines of '<operatorKeyId> <operatorGroup>' this deployment's "
+             "policy attests; anything else is SELF_SIGNED, never quorum")
+
+    publish_snapshot = subparsers.add_parser(
+        "publish-snapshot",
+        help="build and sign the network observation snapshot")
+    publish_snapshot.add_argument("--snapshot-version", type=int, required=True)
+    publish_snapshot.add_argument("--output", default="network-snapshot.json")
+    publish_snapshot.add_argument("--signing-key", required=True,
+                                  help="local Ed25519 signing key (hex seed file)")
+    publish_snapshot.add_argument("--chain-summary", default=None)
+    publish_snapshot.add_argument("--infrastructure", default=None)
+    publish_snapshot.add_argument("--observers", default=None)
+    publish_snapshot.add_argument("--asset-sampling", default=None)
+
     arguments = parser.parse_args(argv)
+    if arguments.command == "observer-keygen":
+        return command_observer_keygen(arguments)
     store = Store(arguments.database)
     try:
         if arguments.command == "status":
@@ -357,6 +625,14 @@ def main(argv=None) -> int:
         if arguments.command == "publish":
             return command_publish(store, version=arguments.directory_version,
                                    output=arguments.output)
+        if arguments.command == "verify-observation":
+            return command_verify_observation(store, arguments)
+        if arguments.command == "aggregate-observations":
+            return command_aggregate_observations(store, arguments)
+        if arguments.command == "operator-verify":
+            return command_operator_verify(store, arguments)
+        if arguments.command == "publish-snapshot":
+            return command_publish_snapshot(store, arguments)
         limits = Limits()
         if arguments.max_depth is not None:
             limits.max_crawl_depth = arguments.max_depth
@@ -391,6 +667,9 @@ def main(argv=None) -> int:
             reference=reference))
         print(f"probed {summary['probed']} endpoint(s), {summary['edges']} peer edge(s), "
               f"chain {summary['chain']}: {summary['chain_detail']}")
+        challenge = summary.get("challenge") or {}
+        print(f"chain quorum 2.0: anchor {challenge.get('anchor')} "
+              f"status {challenge.get('status')}: {challenge.get('detail', '')}")
         return 0
     finally:
         store.close()

@@ -24,7 +24,7 @@ import ssl
 import time
 from collections import defaultdict, deque
 from struct import error as struct_error
-from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from electrumx.lib.coins import Ravencoin
 from electrumx.lib.hash import hash_to_hex_str
@@ -144,11 +144,18 @@ def _certificate_summary(binary_certificate: Optional[bytes],
 
 async def probe_endpoint(endpoint: EndpointId, *, limits: Optional[Limits] = None,
                          allow_private: bool = False,
-                         connector: Optional[Callable] = None) -> ProbeResult:
+                         connector: Optional[Callable] = None,
+                         calls: Optional[Sequence[tuple]] = None) -> ProbeResult:
     """Run one cheap health probe.
 
     Cheap on purpose: identity, features, tip, backend evidence and peers.  No
     address-history queries, which are the expensive ones for a server to answer.
+
+    ``calls`` overrides the request list (same shape as PROBE_CALLS) so a
+    caller can run the shared-height Chain Quorum challenges or the bounded
+    asset capability probes over one connection.  Responses to methods not
+    part of the standard probe land in ``result.extra_responses`` untrusted
+    and unparsed: interpreting them is the caller's job.
     """
     limits = limits or Limits()
     started = time.monotonic()
@@ -208,7 +215,8 @@ async def probe_endpoint(endpoint: EndpointId, *, limits: Optional[Limits] = Non
     rpc_started = time.monotonic()
     try:
         responses = await asyncio.wait_for(
-            _speak_electrum(reader, writer, limits), timeout=limits.rpc_timeout)
+            _speak_electrum(reader, writer, limits, calls=calls),
+            timeout=limits.rpc_timeout)
     except asyncio.TimeoutError:
         result.error, result.error_category = "RPC timed out", "TIMEOUT"
         return result
@@ -253,19 +261,63 @@ async def probe_endpoint(endpoint: EndpointId, *, limits: Optional[Limits] = Non
     backend = responses.get("server.ravencoin_backend")
     if isinstance(backend, dict):
         result.backend = backend
+        core = backend.get("backend") or {}
+        blocks = core.get("blocks")
+        if isinstance(blocks, int) and not isinstance(blocks, bool):
+            result.core_height = blocks
     peers = responses.get("server.peers.subscribe")
     if peers is not None:
         try:
             result.peers = tuple(parse_peers_response(peers, limits))
         except UnsafeTarget:
             result.peers = ()
+    result.extra_responses = {
+        method: payload for method, payload in responses.items()
+        if method not in {name for name, _ in PROBE_CALLS}}
     return result
 
 
-async def _speak_electrum(reader, writer, limits: Limits) -> dict:
-    """Issue the probe calls and collect whatever answers arrive."""
+def challenge_calls(heights: Sequence[int]) -> List[tuple]:
+    """Request list fetching shared-height block headers."""
+    return [("blockchain.block.header", [int(height)]) for height in heights]
+
+
+def asset_capability_calls(plan: Sequence[dict]) -> List[tuple]:
+    """Request list for a bounded asset capability probe plan."""
+    return [(item["method"], list(item["params"])) for item in plan]
+
+
+def parse_challenge_responses(extra: Mapping, heights: Sequence[int],
+                              ) -> Dict[int, Optional[str]]:
+    """Compute real Ravencoin header hashes for answered challenges.
+
+    A missing, malformed or wrong-length header yields None: no evidence
+    rather than a hash of the wrong thing.
+    """
+    answers: Dict[int, Optional[str]] = {}
+    for index, height in enumerate(heights, start=1):
+        raw = extra.get(f"blockchain.block.header#{index}")
+        answers[int(height)] = (
+            _ravencoin_header_hash(raw, int(height))
+            if isinstance(raw, str) else None)
+    return answers
+
+
+async def _speak_electrum(reader, writer, limits: Limits,
+                          calls: Optional[Sequence[tuple]] = None) -> dict:
+    """Issue the probe calls and collect whatever answers arrive.
+
+    Repeated methods (the challenge round asks blockchain.block.header
+    once per height) are keyed ``method#request_index`` so individual
+    answers stay addressable; the single-shot probe calls keep their
+    plain names for backward compatibility with existing tests.
+    """
+    requests = list(calls if calls is not None else PROBE_CALLS)
+    duplicates = {name for name, _ in requests
+                  if [n for n, _ in requests].count(name) > 1}
     responses: Dict[str, object] = {}
-    for index, (method, params) in enumerate(PROBE_CALLS, start=1):
+    for index, (method, params) in enumerate(requests, start=1):
+        key = f"{method}#{index}" if method in duplicates else method
         request = json.dumps({"id": index, "method": method, "params": params})
         writer.write((request + "\n").encode())
         await writer.drain()
@@ -279,7 +331,7 @@ async def _speak_electrum(reader, writer, limits: Limits) -> dict:
         except json.JSONDecodeError:
             raise ValueError(f"{method} returned malformed JSON") from None
         if isinstance(payload, dict) and "result" in payload:
-            responses[method] = payload["result"]
+            responses[key] = payload["result"]
     if "server.version" not in responses:
         raise ValueError("server did not answer server.version")
     return responses
