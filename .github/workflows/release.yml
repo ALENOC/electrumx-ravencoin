@@ -9,7 +9,7 @@ on:
       tag:
         description: Release identity
         required: true
-        default: v1.13.9
+        default: v1.13.10
       artifact_revision:
         description: Monotonic artifact revision for this version
         required: true

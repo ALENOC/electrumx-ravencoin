@@ -6,6 +6,43 @@ This document defines the release/update trust model introduced by ElectrumX-RVN
 
 Release 1.13.2 was built and offered as a candidate but failed real hardware qualification during the staged apply of the legacy 1.13.1 upgrade. Its GitHub Release was deleted and 1.13.2 was never published as an installable release. The git tag `v1.13.2` is retained only as a historical trace of that failed candidate. No operator should ever install, target or trust 1.13.2, and the version number is not reused. The first published release carrying the manifest-v2 trust root is 1.13.3.
 
+## 1.13.10
+
+`v1.13.10` exists because the updater in every release up to and including
+1.13.9 drops the operator ownership of the preserved operator state during a
+release switch. `copy_persistent_state` runs as root and restored only the
+permission bits, so `.env`, `.secrets`, `certs`, `contrib/electrumx.env` and the
+Node Monitor `.env` all landed in the new release root as `root:root`.
+
+On the qualification node this crash looped the separately deployed Node
+Monitor, which bind-mounts `.secrets` under an unprivileged uid, with
+`PermissionError: [Errno 13] Permission denied: '/run/secrets/raven_rpc_user'`
+after an otherwise healthy 1.13.9 update. Ravencoin Core and ElectrumX were
+unaffected, because `compose.yaml` routes the RPC secrets through a root init
+container that republishes them at mode `0444`.
+
+1.13.10 carries the source uid and gid across the switch and fails closed with
+`UpdateRuntimeError` if it cannot, rather than silently changing the owner.
+`PERSISTENT_PATHS` is unchanged, so no new path crosses the release boundary,
+and the permission bits, the symlink refusal and the `0700` hardening of
+preserved directories behave exactly as in 1.13.9.
+
+That is a change of executable update behaviour, so it could not ship as another
+artifact revision of 1.13.9: the frozen-scope rule below requires a version bump
+for a behavioural change. 1.13.10 starts again at `artifact_revision 0`.
+
+The release switch is performed by the updater already installed on the host, so
+the 1.13.9 to 1.13.10 update still runs the unfixed 1.13.9 code and is expected
+to require one last manual ownership restore. From 1.13.10 onward the switch
+preserves ownership itself.
+
+1.13.10 is the first two-digit patch version in this repository. Release
+ordering is parsed, not compared as a string: `classify_release_order` and the
+host anti-rollback state both order versions through `packaging.version.Version`,
+so `1.13.10` is newer than `1.13.9`.
+
+Qualification evidence is recorded in `docs/HARDWARE_QUALIFICATION_1.13.10.md`.
+
 ## 1.13.9
 
 `v1.13.9` exists because the published 1.13.8 Ravencoin Core entrypoint clobbers
