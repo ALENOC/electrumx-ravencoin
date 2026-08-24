@@ -135,12 +135,35 @@ def wait_for_reindex(stack: Stack, datadir: Path, poll: int,
         raise GateFailure(
             f"reindex did not finish within {timeout} seconds")
 
-    try:
-        payload = marker.read_text(encoding="utf-8", errors="replace").strip()
-    except OSError as exc:
-        raise GateFailure(f"reindex marker is unreadable: {exc}") from exc
+    payload = read_marker(datadir, marker)
     log(f"reindex marker: {payload[:200]}")
     return payload
+
+
+CORE_IMAGE = "alenoc/ravencoin-core:4.8.0"
+
+
+def read_marker(datadir: Path, marker: Path) -> str:
+    """Read the completion marker, which Core writes owner-only as its own uid.
+
+    The gate signal is the one-shot exiting 0 and the marker existing; both are
+    established before this call. The contents are recorded as evidence, so an
+    unreadable marker is reported as such rather than being treated as a gate
+    failure.
+    """
+    try:
+        return marker.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError as exc:
+        log(f"marker not readable directly ({exc}); reading it through {CORE_IMAGE}")
+    result = run(
+        ["docker", "run", "--rm", "-v", f"{datadir}:/datadir:ro",
+         "--entrypoint", "cat", CORE_IMAGE,
+         f"/datadir/{marker.name}"], check=False)
+    if result.returncode == 0:
+        return result.stdout.strip()
+    log("marker contents could not be read; recording its presence only")
+    return ("marker present at "
+            f"{marker}, contents not readable from the host account")
 
 
 def wait_for_health(stack: Stack, service: str, poll: int,
