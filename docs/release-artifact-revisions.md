@@ -6,6 +6,31 @@ This document defines the release/update trust model introduced by ElectrumX-RVN
 
 Release 1.13.2 was built and offered as a candidate but failed real hardware qualification during the staged apply of the legacy 1.13.1 upgrade. Its GitHub Release was deleted and 1.13.2 was never published as an installable release. The git tag `v1.13.2` is retained only as a historical trace of that failed candidate. No operator should ever install, target or trust 1.13.2, and the version number is not reused. The first published release carrying the manifest-v2 trust root is 1.13.3.
 
+## 1.13.9
+
+`v1.13.9` exists because the published 1.13.8 Ravencoin Core entrypoint clobbers
+the container arguments while validating ChainStrap state. After a successful
+ChainStrap bootstrap and the mandatory local reindex, the normal `ravencoin-core`
+service crash looped with `Command line contains unexpected token <digest>`,
+because `set --` inside the marker comparison replaced the positional parameters
+that are forwarded to `ravend`. Every ChainStrap fresh install on 1.13.8 as
+published is affected at first normal Core startup; ordinary updates of existing
+installations are not.
+
+1.13.9 computes the marker digest without touching the positional parameters and
+adds a regression test that asserts the exact argument vector handed to the
+daemon after a validated ChainStrap startup.
+
+That is a change of executable startup behaviour, so it could not ship as another
+artifact revision of 1.13.8: the frozen-scope rule below requires a version bump
+for a behavioural change. 1.13.9 starts again at `artifact_revision 0`.
+
+The ChainStrap trust boundary is unchanged. Only `blocks/blk*.dat` is ever
+written into the Ravencoin datadir, the marker mismatch refusal still fails
+closed, and Ravencoin Core still performs the local full reindex/revalidation.
+
+Qualification evidence is recorded in `docs/HARDWARE_QUALIFICATION_1.13.9.md`.
+
 ## 1.13.8
 
 `v1.13.8` exists because the published 1.13.7 bootstrap classifies ChainStrap
