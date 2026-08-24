@@ -36,6 +36,24 @@ def _old_root(tmp_path: pathlib.Path) -> pathlib.Path:
     return old
 
 
+def _pretend_foreign_owner(monkeypatch, root: pathlib.Path, *, uid: int, gid: int) -> None:
+    """Report a different owner for everything under `root`.
+
+    `pathlib.Path.stat` is patched rather than `os.stat`: on Python 3.10 Path
+    reaches the C function through an accessor bound at import time, so patching
+    `os.stat` there has no effect at all.
+    """
+    real_stat = pathlib.Path.stat
+
+    def foreign_stat(self, *args, **kwargs):
+        result = real_stat(self, *args, **kwargs)
+        if str(self).startswith(str(root)):
+            return os.stat_result(tuple(result)[:4] + (uid, gid) + tuple(result)[6:])
+        return result
+
+    monkeypatch.setattr(pathlib.Path, "stat", foreign_stat)
+
+
 def test_secrets_keep_owner_and_mode_across_release_switch(tmp_path):
     old = _old_root(tmp_path)
     new = tmp_path / "new"
@@ -72,19 +90,10 @@ def test_release_switch_fails_closed_when_ownership_cannot_be_restored(tmp_path,
     new = tmp_path / "new"
     new.mkdir()
 
-    real_stat = os.stat
-
-    def foreign_stat(path, *args, **kwargs):
-        result = real_stat(path, *args, **kwargs)
-        if str(path).startswith(str(old)):
-            return os.stat_result(tuple(result)[:4] + (result.st_uid + 1, result.st_gid + 1)
-                                  + tuple(result)[6:])
-        return result
-
     def refuse_chown(*args, **kwargs):
         raise PermissionError(1, "Operation not permitted")
 
-    monkeypatch.setattr(os, "stat", foreign_stat)
+    _pretend_foreign_owner(monkeypatch, old, uid=4242, gid=4243)
     monkeypatch.setattr(os, "chown", refuse_chown)
 
     with pytest.raises(runtime.UpdateRuntimeError) as excinfo:
@@ -97,20 +106,12 @@ def test_every_preserved_file_and_directory_is_chowned(tmp_path, monkeypatch):
     new = tmp_path / "new"
     new.mkdir()
 
-    real_stat = os.stat
-
-    def foreign_stat(path, *args, **kwargs):
-        result = real_stat(path, *args, **kwargs)
-        if str(path).startswith(str(old)):
-            return os.stat_result(tuple(result)[:4] + (4242, 4243) + tuple(result)[6:])
-        return result
-
     calls = []
 
     def record_chown(path, uid, gid, *args, **kwargs):
         calls.append((pathlib.Path(path), uid, gid))
 
-    monkeypatch.setattr(os, "stat", foreign_stat)
+    _pretend_foreign_owner(monkeypatch, old, uid=4242, gid=4243)
     monkeypatch.setattr(os, "chown", record_chown)
 
     runtime.copy_persistent_state(old, new)
