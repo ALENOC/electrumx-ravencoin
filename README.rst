@@ -6,7 +6,7 @@ Production-oriented ElectrumX infrastructure for Ravencoin with verified
 Ravencoin Core 4.8.0, Fast Verified Bootstrap, transactional updates, optional
 node monitoring, and maintained Linux amd64 / ARM64 deployment paths.
 
-**Current release: ElectrumX-RVN 1.13.9**
+**Current release: ElectrumX-RVN 1.13.10**
 
 `Install`_ · `Update`_ · `How it works`_ · `Security`_ · `Documentation`_ ·
 `Latest release <https://github.com/ALENOC/electrumx-ravencoin/releases/latest>`_
@@ -66,7 +66,7 @@ The normal data and trust path is::
    Wallet / Electrum client
              |
              v
-   ElectrumX-RVN 1.13.9
+   ElectrumX-RVN 1.13.10
              |
              v
    Ravencoin Core 4.8.0
