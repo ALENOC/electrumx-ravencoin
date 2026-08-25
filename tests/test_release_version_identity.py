@@ -102,7 +102,8 @@ def test_qualification_and_signing_docs_track_the_current_release():
 def test_current_qualification_records_chainstrap_mixed_content_contract():
     text = (ROOT / f"docs/HARDWARE_QUALIFICATION_{RELEASE_VERSION}.md").read_text(
         encoding="utf-8")
-    assert "## RESULT: PENDING" in text
+    assert text.count("## RESULT: PASS") == 2
+    assert "Every mandatory gate above was observed" in text
     assert "source version for the ordinary updater path: `1.13.10`" in text
     assert "candidate version: `1.13.11`" in text
     assert "`assets/LOCK`" in text

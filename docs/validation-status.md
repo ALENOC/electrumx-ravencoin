@@ -1,186 +1,144 @@
 # Validation status
 
-This is the single human-readable status reference for the current development
-line. It deliberately separates historical evidence from evidence that applies
-to the exact Core/release identity currently pinned by the branch.
+This is the current human-readable status source. It separates source
+certification, release-artifact verification, real-node qualification, and
+claims that remain outside the available evidence.
 
 Documentation: [Home](../README.rst) · [Docs index](README.md) ·
-[Core certification](core-certification.md) · [Fast bootstrap](fast-bootstrap.md)
+[v1.13.11 overview](release-1.13.11.md) ·
+[Core certification](core-certification.md) ·
+[Hardware evidence](HARDWARE_QUALIFICATION_1.13.11.md)
 
-## Current branch identity
+## Current production release
 
-The integration branch currently deploys:
-
-- Core repository: `RavenProject/Ravencoin`
-- Core version/tag: `4.8.0` / `v4.8.0`
-- Core commit: `22549129888d02e0e08fcdb9f96f3c699167e774`
-- ElectrumX release line: `1.13.6`
-
-Repository plus exact commit is the trust identity. Tree-equivalent or
-historically tested commits are not interchangeable with this identity.
-
-## Core certification and policy migration
-
-| Item | Current status |
+| Item | Current identity or result |
 |---|---|
-| RavenProject v4.8.0 candidate | **CERTIFICATION PASS** for exact commit `22549129888d02e0e08fcdb9f96f3c699167e774`; evidence is under `core-safety/production/certifications/` |
-| Reviewed RavenProject-only policy body | `safe-core-policy-v3.unsigned.json`: `RavenProject/Ravencoin@225491...` is `KNOWN_SAFE`; historical `2miners/Ravencoin@b60f50...` is `REVOKED` |
-| Current signed `safe-core-policy.json` in this branch | **v3 production policy**, signed and verified under the pinned policy public key |
-| v2 -> v3 signing | **PASS** in the protected `core-safety-signing` environment; the one-shot workflow published the signed artifacts and removed itself |
-| Candidate discovery going forward | RavenProject-only; a repository/version name alone never grants trust |
+| ElectrumX-RVN | **1.13.11**, artifact revision `0` |
+| Release source/tag | `v1.13.11` at `152b5134b849a31b2fdd9ef9efe643683a5bcb5c` |
+| Bundle SHA-256 | `d3b81d1f7e3a0d096c5a41b64285fd9a7afdc9fa3807cebb5f86a37df973f5d4` |
+| Installer SHA-256 | `2cc3d87e8f2db98dd7ede3ee4d39261ad4943a2871cc28e3b80288c19e7601ee` |
+| Provenance SHA-256 | `fed02b1a993cac1c4591e0cfd5c15dda07f78c8a33e5512ae7503c8a689f7130` |
+| Manifest signing key ID | `6f4f944c9b0a19a1` (offline production key) |
+| Hardware qualification | **PASS** on the published artifact |
 
-The unsigned v3 file remains review material, not a trust anchor. Production
-trust comes only from the signed current policy.
+The Git tag, manifest, provenance, and release assets are distinct pieces of
+evidence. The signed manifest binds the executable artifact and provenance
+digests; a tag name alone is not an installable identity.
 
-## Single-file installer trust status
+## Ravencoin Core identity
 
-The installer has two independent trust domains:
+The current release pins:
 
-1. the ElectrumX release/update manifest key; and
-2. the safe-Core policy key.
+```text
+repository: RavenProject/Ravencoin
+version:    4.8.0
+tag:        v4.8.0
+commit:     22549129888d02e0e08fcdb9f96f3c699167e774
+```
 
-The safe-Core policy public key is pinned independently in the single-file
-bootstrap. A bundle is accepted only if the policy verifies under that key and
-the release manifest's exact Core repository, commit, tag, version, policy
-version and certification report digest all match one `KNOWN_SAFE` policy
-entry with passing certification evidence.
+This exact identity has persisted certification evidence under
+`core-safety/production/certifications/` and is `KNOWN_SAFE` in the signed
+RavenProject-only safe-Core policy v3. Historical third-party or tree-equivalent
+identities are not substitutes for the official repository and commit.
 
-The current ElectrumX release/update public key is independently authenticated
-and pinned into each production release candidate. Its private key remains
-offline and is unavailable to CI; CI builds only unsigned candidates. The
-historical v1 public key and attestation remain in the repository as immutable
-evidence, but that CI-held signing identity was retired on 2026-08-22 and grants
-no current signing authority. The complete public-key identities, signing
-domains and transition semantics are recorded in
-`core-safety/production/UPDATE-SIGNING-KEY-CEREMONY.md`.
+The installer verifies the safe-Core policy through a key pinned independently
+from the ElectrumX release/update key. Repository membership and a higher
+version number grant permission to evaluate a candidate, never automatic
+trust.
 
-For pre-release end-to-end testing only,
-`core-safety/scripts/build_local_release_validation_bundle.py` creates an
-explicit **NON-PRODUCTION** bundle. It uses the complete git-tracked source tree
-and exact pinned Node Monitor checkout, signs the reviewed RavenProject-only v3
-policy body and release manifest with two fresh ephemeral keys, writes only the
-public keys, and never writes either private key to disk. Those keys are usable
-only when the operator explicitly passes `--local-release-validation-dir` and
-cannot replace either production trust root.
+## Release and updater trust
 
-## CI and security regression coverage
+Production release candidates are built unsigned in CI. The release/update
+private key remains offline and is not available to GitHub Actions. Offline
+signing re-verifies all artifact and provenance bytes before producing the
+manifest signature.
 
-The draft integration PR is the current CI gate. Its matrix runs:
+The historical schema-v1 update key is retained in source only as immutable
+evidence and is explicitly rejected for production updater use. Source-checkout
+installation does not silently enable the signed-release updater; current-key
+provisioning is required and trust loading fails closed otherwise.
 
-- the full pytest suite on Python 3.10, 3.11 and 3.12;
-- static safety checks;
-- Compose model validation;
-- ElectrumX multi-architecture container builds;
-- bundled Core artifact build/qualification on amd64 and arm64.
+Manifest v2 identity, semantic version ordering, artifact revisions,
+host-wide anti-rollback state, and transactional update/rollback are covered in
+[release artifact revisions](release-artifact-revisions.md).
 
-Do not copy an old aggregate test count into release claims: the authoritative
-result is the CI run on the exact commit being reviewed.
+## CI and regression status
 
-Recent security work includes load-bearing regression coverage for, among other
-items, short `fs_tx_hash` reads, worker-thread mempool side-dictionary races,
-legacy protocol handler preservation, RavenProject source-pin consistency,
-signed-policy migration, ChainStrap bounds/integrity, monitor trust promotion,
-and installer dual-trust-root enforcement.
+The final v1.13.11 integration passed all exact-head required checks:
 
-## ChainStrap Fast Verified Bootstrap
+- full pytest matrices on Python 3.10, 3.11, and 3.12;
+- static security checks and protected-path enforcement;
+- Compose validation and multi-architecture ElectrumX container builds; and
+- bundled Core artifact build/qualification for amd64 and arm64.
 
-The current pinned snapshot is RVN mainnet at block **4,501,329**, block hash
-`000000000004967a3501a0e5edca06f6a88f3a6b4af7b4688160e2b63a4a7e48`,
-from `chainstrap/chainstrap.github.io` commit
-`c4ed0750603ea59823cdd21854d7eb75fe365928`.
+The final local audit totals were 1,131 passed, 15 skipped, and 2 warnings.
+Focused trust-root/updater/installer coverage passed 93 tests; the broader
+updater/installer/release selection passed 217 tests.
 
-ChainStrap is transport only. The downloader verifies pinned CIDs, byte counts
-and SHA-256 values and extracts only raw `blk*.dat` files. The bundled Core then
-performs an offline `-reindex -assumevalid=0` with the required indexes before
-normal Core or ElectrumX startup is permitted.
+Regression coverage includes the legacy Electrum protocol, the complete
+`server.ravencoin_backend` contract, release and policy signatures,
+anti-rollback, transactional recovery, persistent ownership, ChainStrap archive
+bounds, Network Observer SSRF/DNS controls, operator-aware quorum, signed
+observations, anti-replay, asset RPC correlation, persistent security
+high-water state, and governance domain separation.
 
-A real interactive validation attempt discovered a ChainStrap-bootstrap
-failure. That run is **invalid and is not a release PASS**. The installer now
-preserves useful ChainStrap diagnostics before teardown, refuses silent P2P
-fallback, removes the failed fresh run including its named volumes, and refuses
-a new fresh install if Compose-labelled runtime state already exists. A new
-clean interactive run is still required to establish a PASS for the complete
-ChainStrap path.
+## Real-node qualification
 
-## Node Monitor integration
+The published v1.13.11 artifact was qualified on the Raspberry Pi 5 node at
+`192.168.1.244` through the ordinary signed update path from v1.13.10.
 
-The optional bundled `ravencoin-node-monitor` remains a separate pinned source
-checkout. The default integration:
+Observed PASS evidence includes:
 
-- runs unprivileged and read-only;
-- drops Linux capabilities and enables `no-new-privileges`;
-- receives no Docker socket;
-- reaches ElectrumX admin RPC by sharing the ElectrumX network namespace rather
-  than publishing that RPC;
-- exposes the dashboard on host loopback `127.0.0.1:8899`;
-- keeps history in memory by default;
-- keeps the optional root-owned bandwidth/connection controller in a separate,
-  explicit opt-in security domain.
+- candidate signature, artifact, provenance, eligibility, and anti-rollback;
+- transactional promotion with `pendingCandidate = null` and
+  `failureReason = null`;
+- preserved Ravencoin chain data, ElectrumX database, named-volume identities,
+  TLS overlay, secrets ownership, Node Monitor, and controller state;
+- Ravencoin Core 4.8.0 and ElectrumX-RVN 1.13.11 healthy and synchronized with
+  zero container restarts;
+- externally verified TLS, `server.version`, `server.ravencoin_backend`, and
+  live asset RPC behavior; and
+- installed `network_observer` package, no stale `monitor` package, bounded
+  discovery, SSRF filtering, and a valid shared-height Chain Quorum round over
+  real public endpoints.
 
-A full fresh interactive install must still validate the actual Node Monitor
-container, Core/ElectrumX connectivity, history/mempool/resource/network data
-and restart behavior on the newly created stack.
+The detailed timestamps, digests, checkpoints, and observations are in
+[v1.13.11 hardware qualification](HARDWARE_QUALIFICATION_1.13.11.md).
 
-## Discovery and backend trust
+## Architecture evidence
 
-`server.ravencoin_backend` remains additive and does not change legacy Electrum
-protocol negotiation. The server reports sanitized backend evidence; clients
-and the monitor still apply their own policy.
+The same exact Core source identity is built and checked for amd64 and ARM64 in
+CI. The Raspberry Pi 5 qualification additionally proves the published ARM64
+deployment and update path on real hardware. It does not imply that every
+ARM64 board, kernel, storage device, or network environment is qualified.
 
-The trust pipeline intentionally keeps these states separate:
+Orange Pi 5-class systems remain supported build targets, but have not received
+the same complete physical qualification recorded for the Raspberry Pi 5.
+Existing-Core mode remains available, but the operator must independently
+establish the identity and configuration of that Core deployment.
 
-`DISCOVERED -> CAPABILITY_SUPPORTED -> BACKEND_VERIFIED -> TRUSTED_BY_OPERATOR`
+## Network Observer and governance status
 
-Seed membership is never trust. The current seed preference is the RavenTag
-reference endpoint first, then the three Cipig Ravencoin endpoints on their
-actual ports (SSL `20051`, TCP `10051`), followed by rvn4lyfe and Moontree.
-Multiple Cipig hosts remain one operator group for diversity purposes.
+Network Observer Phase 1 is implemented and tested. Its signed bundles
+authenticate observation provenance, not Ravencoin consensus. Operator and
+observer diversity remain separate, and a self-signed identity does not count
+as an independently attested operator.
 
-## Historical evidence that does **not** automatically transfer to the current pin
+The governance framework is implemented and tested, including N-of-M policies,
+rotation, revocation, anti-rollback, domain separation, and explicit successor
+adoption. Current production roots are still single-maintainer roots. The
+precise status is:
 
-Earlier live and physical ARM64 validation was performed against the historical
-v4.8.0 identity `b60f50e04f1fba425b28804e61be2694faaf3469`. That work remains useful
-historical evidence, including the Raspberry Pi 5 build/storage observations
-and the earlier synchronized-node backend/checkpoint/asset checks, but it must
-not be presented as live validation of the current exact RavenProject commit
-`22549129888d02e0e08fcdb9f96f3c699167e774`.
+> **FOUNDER-INDEPENDENCE CAPABLE — PRODUCTION THRESHOLD ACTIVATION PENDING A
+> FUTURE SIGNING CEREMONY**
 
-The current commit has its own certification and CI artifact gates. The current
-installer/ChainStrap/Node Monitor composition still requires a new clean
-end-to-end run.
+Network Observer output cannot authorize releases, rotate keys, lower a
+threshold, or adopt a successor.
 
-## Current release gates
+## Scope limits
 
-The branch is not production-release-ready until all of these are true on the
-exact final commit:
-
-1. full CI matrix: all required jobs PASS;
-2. the promoted RavenProject-only safe-Core policy v3 verifies under the pinned
-   policy public key;
-3. the release artifacts and manifest are generated and signed only by the
-   protected ElectrumX release publication workflow;
-4. a fresh host validation starts with no previous `electrumx-ravencoin`
-   containers/networks/volumes or installer state;
-5. the real interactive single-file installer is traversed from its menu,
-   selecting ChainStrap and Node Monitor without post-menu workarounds;
-6. ChainStrap download/integrity/offline-reindex succeeds, or the run is
-   correctly reported as failed (never silently converted into P2P success);
-7. fresh Core starts on mainnet and its live identity/sync/checkpoint evidence
-   agrees with the signed release metadata;
-8. fresh ElectrumX indexes from that Core and `server.ravencoin_backend` agrees
-   with live `raven-cli` evidence;
-9. Node Monitor is healthy and connected to the new Core/ElectrumX services;
-10. stop/restart persistence succeeds without data loss;
-11. rerunning the installer against the installed node behaves safely and does
-    not duplicate or silently destroy state.
-
-Only a run that satisfies those gates without manual post-menu repair counts as
-the qualifying installer validation.
-
-## Public endpoint
-
-Publishing a public Electrum TLS endpoint is a separate operational gate from
-software correctness. DNS, external reachability, CA-valid TLS and renewal must
-be verified from outside the operator's LAN before claiming that a particular
-host is a validated public service. Core JSON-RPC and REST must not be exposed
-publicly.
+Certification and one qualified node do not prove every future Core release,
+third-party image, public endpoint, hardware combination, or operator
+configuration. New software identities require fresh certification and signed
+policy authorization. A public endpoint also needs its own DNS, TLS, firewall,
+reachability, and ongoing operational checks.

@@ -21,9 +21,9 @@ from electrumx import version
 
 # -- Project information -----------------------------------------------------
 
-project = 'ElectrumX Ravencoin'
-copyright = '2016-2020, Neil Booth; 2020, kralverde'
-author = 'Neil Booth; kralverde'
+project = 'ElectrumX for Ravencoin'
+copyright = '2016-2026, ElectrumX contributors; 2026, ALENOC'
+author = 'ElectrumX contributors and ALENOC'
 
 # The full version including branding
 release = version
@@ -90,9 +90,9 @@ html_theme = 'alabaster'
 # documentation.
 #
 html_theme_options = {
-    'description': 'Lightweight Electrum Ravencoin Server in Python',
-    'github_user': 'Electrum-RVN-SIG',
-    'github_repo': 'electrumx',
+    'description': 'Production-oriented ElectrumX infrastructure for Ravencoin',
+    'github_user': 'ALENOC',
+    'github_repo': 'electrumx-ravencoin',
     'github_button': True,
     'github_type': 'star',
     'github_banner': True,

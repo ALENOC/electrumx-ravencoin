@@ -1,6 +1,33 @@
-# Release artifact revisions and 1.13.3 trust migration
+# Release artifact revisions and trust migration
 
 This document defines the release/update trust model introduced by ElectrumX-RVN 1.13.3. It is intentionally separate from the Ravencoin Core safe-policy trust root. Nothing in this mechanism changes the pinned Ravencoin Core 4.8.0 identity or makes release metadata a source of consensus trust.
+
+Documentation: [Home](../README.rst) · [Docs index](README.md) ·
+[v1.13.11 overview](release-1.13.11.md) ·
+[Security model](security-model.md)
+
+## 1.13.11
+
+`v1.13.11` adds Ravencoin Network Observer Phase 1 and the tested governance
+and succession library. These components are outside the wallet-serving path:
+the legacy Electrum protocol, `server.ravencoin_backend`, safe-Core policy,
+release/update verification, transactional updater, and ChainStrap trust
+boundary retain their existing contracts.
+
+The release is artifact revision `0`, built from source commit
+`152b5134b849a31b2fdd9ef9efe643683a5bcb5c`. Its manifest and the preceding
+1.13.10 manifest are both signed by production key ID `6f4f944c9b0a19a1`, so
+the 1.13.10 to 1.13.11 transition is continuity under one production key, not a
+key rotation.
+
+The published artifact passed the ordinary-update, service-health, ownership,
+public endpoint, Network Observer, and regression gates recorded in
+`docs/HARDWARE_QUALIFICATION_1.13.11.md`.
+
+The superseded GitHub Release entries for v1.13.9 and v1.13.10 were removed on
+2026-08-25 after v1.13.11 became current. Their Git tags and the historical
+qualification and revision documents remain available for auditability. Their
+removal does not alter the signed identity or artifacts of v1.13.11.
 
 ## Withdrawn 1.13.2 candidate
 
@@ -120,14 +147,15 @@ Revision 1 changes updater code inside the bundle and is therefore not scope-pre
 
 Full evidence is recorded in `docs/HARDWARE_QUALIFICATION_1.13.5.md`.
 
-## 1.13.1 cannot auto-update to 1.13.3
+## 1.13.1 requires a manual trust transition
 
-An existing ElectrumX-RVN 1.13.1 node **cannot and must not auto-update to 1.13.3**.
+An existing ElectrumX-RVN 1.13.1 node **cannot and must not directly
+auto-update to a manifest-v2 release, including 1.13.11**.
 
 There are two independent reasons:
 
 1. the 1.13.1 updater accepts release-manifest schema v1 and rejects the v2 schema introduced by 1.13.3; and
-2. 1.13.1 knows only the retired release/update trust root. It does not know the replacement Ed25519 public key used for 1.13.3 and later manifests.
+2. 1.13.1 knows only the retired release/update trust root. It does not know the current Ed25519 public key used for 1.13.3 and later manifests.
 
 There is deliberately no bridge manifest signed by the retired key. The retired key does not sign, certify, endorse, or attest its own replacement.
 
@@ -137,14 +165,24 @@ The operator must perform the transition explicitly:
 
 1. Obtain the new Ed25519 release/update **public** key through an authenticated out-of-band channel controlled independently of the 1.13.1 release/update key. Preferably compare its full 64-hex fingerprint through two independent authenticated channels.
 2. Do not accept a statement merely because it is signed by the retired 1.13.1 update key. Such a statement is not a trust-root migration mechanism.
-3. Download the reviewed 1.13.3 installer, signed manifest, provenance and checksums through the normal distribution channel.
+3. Download the reviewed 1.13.11 installer, signed manifest, provenance and checksums through the normal distribution channel.
 4. Verify the v2 manifest directly against the independently authenticated replacement public key, then verify the installer, bundle and provenance digests bound by that manifest.
 5. Provision the host-wide anti-rollback locator as described below. For a root installation this is created only in the root-owned `/var/lib/electrumx-ravencoin` namespace. An unprivileged installation requires an administrator-provisioned root-owned locator.
-6. Perform the 1.13.3 installation/upgrade manually. Automatic update discovery may be enabled only after the new updater and new release/update public key are installed.
+6. For a historical `setup.sh` deployment, follow
+   `docs/LEGACY_1.13.1_ADOPTION.md` from the exact reviewed 1.13.11 candidate
+   tree. Automatic update discovery may be enabled only after the current
+   updater and public key are installed.
 
 This is a deliberate trust discontinuity. A compromised retired signing key therefore cannot authorize the new root of trust.
 
-Legacy updater state is not silently upgraded into a revision-aware identity. If an existing state file has a `currentRelease`, `lastKnownGoodRelease`, or pending manifest that lacks authenticated `artifact_revision`, `artifactDigest`, or `provenanceDigest` identity, the 1.13.3 state loader refuses it. It does not invent `artifact_revision = 0`. The only supported way forward is the separately authenticated manual trust transition above: authenticate the replacement public key out of band, verify the complete 1.13.3 v2 release identity, and establish fresh revision-aware operational/high-water state from that verified release.
+Legacy updater state is not silently upgraded into a revision-aware identity.
+If an existing state file has a `currentRelease`, `lastKnownGoodRelease`, or
+pending manifest that lacks authenticated `artifact_revision`,
+`artifactDigest`, or `provenanceDigest` identity, the current state loader
+refuses it. It does not invent `artifact_revision = 0`. The supported path is
+the separately authenticated manual transition above: authenticate the current
+public key out of band, verify the complete 1.13.11 release identity, and
+establish fresh revision-aware operational and high-water state.
 
 ## Manifest v2 and `artifact_revision`
 

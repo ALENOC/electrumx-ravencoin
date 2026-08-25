@@ -26,7 +26,7 @@ policy.
 
 ## Current v4.8.0 identity
 
-The current integration branch pins the official RavenProject v4.8.0 tag
+The current v1.13.11 release line pins the official RavenProject v4.8.0 tag
 target:
 
 ```text
@@ -100,9 +100,9 @@ identical prebuilt artifact is not assumed. ARM64 build/startup evidence is not
 the same claim as full incident-specific consensus qualification unless those
 mandatory probes were actually run on that artifact.
 
-See [Validation status](validation-status.md) for the evidence that applies to
-the current branch and for historical hardware runs that were performed against
-an older exact commit.
+See [Validation status](validation-status.md) for current release, CI, and
+real-hardware evidence, and for the limits of claims that can be transferred
+between architectures or exact Core identities.
 
 ## Independent installer enforcement
 

@@ -2,7 +2,9 @@
 ElectrumX for Ravencoin
 =======================
 
-A reimplementation of Electrum-Server for a future with bigger blocks.
+A production-oriented Ravencoin ElectrumX deployment with signed releases,
+verified Ravencoin Core, transactional updates, and optional Network Observer
+tooling.
 
 The current version is |release|.
 
@@ -27,8 +29,9 @@ notes are in `NOTICE.md <../NOTICE.md>`_.
 Getting Started
 ===============
 
-Start with the repository `documentation hub <README.md>`_, then see
-:ref:`HOWTO` for the legacy Sphinx deployment guide.
+Start with the repository `documentation hub <README.md>`_. The current
+technical overview is `ElectrumX-RVN 1.13.11 <release-1.13.11.md>`_; the
+Sphinx pages below retain the protocol and legacy deployment references.
 
 There is a `Dockerfile`_ available .
 
