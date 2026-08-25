@@ -1,11 +1,15 @@
 # The Ravencoin Electrum Network Observer (Phase 1)
 
-The Network Observer is the evolution of the existing monitor into a
-consensus-aware observation layer. It is NOT a Ravencoin consensus
-authority and never becomes one: the Ravencoin blockchain remains the
-consensus authority, every snapshot says so on its face, and clients
-must independently validate endpoints. The architecture audit this
-evolution started from is `docs/network-observer-audit.md`.
+Documentation: [Home](../README.rst) · [Docs index](README.md) ·
+[v1.13.11 overview](release-1.13.11.md) ·
+[Architecture](architecture.md) · [Security model](security-model.md)
+
+The Network Observer is a consensus-aware observation layer released in
+ElectrumX-RVN 1.13.11. It is **not** a Ravencoin consensus authority and never
+becomes one: the Ravencoin blockchain remains the consensus authority, every
+snapshot says so on its face, and clients must independently validate
+endpoints. The design began with the
+[Phase 1 architecture audit](network-observer-audit.md).
 
 ## What exists now, module by module
 
@@ -79,7 +83,7 @@ portion: the anchor never validates itself.
 
 ## Multi-vantage observers
 
-Each observer runs this monitor on an unrelated network and publishes a
+Each observer runs the observer on an unrelated network and publishes a
 signed bundle (`observer-keygen` + `publish-snapshot` flow,
 `verify-observation`, `aggregate-observations`). The aggregator trusts
 only observer keys it configured itself; an observation signing its own
@@ -178,7 +182,7 @@ methods (`list_addresses_by_asset`) are ever probed.
 deployed RavenTag Android clients and is NOT touched by this work: it
 still describes local ElectrumX to Core evidence, with its existing
 fields, types and semantics. Network Observer functionality lives in
-the monitor package, is never imported by the server, and the RPC has
+the `network_observer` package, is never imported by the server, and the RPC has
 no dependency on observers, quorum, registries or anything beyond its
 existing local checks. `tests/test_ravencoin_backend_contract.py`
 locks this contract in and fails the release if it regresses.
@@ -187,7 +191,7 @@ locks this contract in and fails the release if it regresses.
 
 New surfaces and their answers: Sybil operator keys (SELF_SIGNED never
 quorum), future-height self-anchoring (k-th highest anchor), challenge
-precomputation (CSPRAG nonce, auditable), equivocation/selective
+precomputation (CSPRNG nonce, auditable), equivocation/selective
 serving (multi-vantage cross-comparison, conservative categories),
 bundle replay/rollback (sequence high-water, expiry, skew bounds),
 declaration rollback (per-key sequence marks that survive pruning),

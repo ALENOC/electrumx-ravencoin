@@ -3,13 +3,17 @@ ElectrumX for Ravencoin
 ================================
 
 Production-oriented ElectrumX infrastructure for Ravencoin with verified
-Ravencoin Core 4.8.0, Fast Verified Bootstrap, transactional updates, optional
-node monitoring, and maintained Linux amd64 / ARM64 deployment paths.
+Ravencoin Core 4.8.0, Fast Verified Bootstrap, signed transactional updates,
+optional node monitoring, Network Observer tooling, and maintained Linux amd64
+/ ARM64 deployment paths.
 
 **Current release: ElectrumX-RVN 1.13.11**
 
-`Install`_ · `Update`_ · `How it works`_ · `Security`_ · `Documentation`_ ·
+`Install`_ · `What's new`_ · `Architecture`_ · `Security`_ ·
+`Network Observer`_ · `Documentation`_ ·
 `Latest release <https://github.com/ALENOC/electrumx-ravencoin/releases/latest>`_
+
+.. _Install:
 
 Quick install
 =============
@@ -58,6 +62,24 @@ wallet private keys or signing transactions.
 More independently operated Electrum servers improve availability, privacy,
 infrastructure decentralization, and network resilience.
 
+.. _What's new:
+
+What's new in 1.13.11
+=====================
+
+Since 1.13.1, the project has added revision-aware signed releases,
+host-wide anti-rollback state, transactional update/rollback, hardened
+ChainStrap staging, and explicit migration of legacy persistent state.
+
+Release 1.13.11 also introduces the optional Ravencoin Network Observer:
+Chain Quorum 2.0, signed multi-vantage observations, operator-aware diversity,
+active asset capability probes, and height-bound Asset Data Quorum. A tested
+N-of-M governance/succession framework is included but production threshold
+governance is **not activated**; the project is founder-independence capable,
+not founder-independent.
+
+See `1.13.11 overview`_ for the technical changes and compatibility guarantees.
+
 How it works
 ============
 
@@ -99,133 +121,40 @@ Fast Verified Bootstrap
 Fresh installations use `ChainStrap <https://chainstrap.com>`_ Fast Verified
 Bootstrap by default. ChainStrap accelerates acquisition of historical raw
 block data; it is **not** a consensus trust source and it does not replace Core
-validation.
+validation. Only verified raw block files may enter staging; downloaded
+chainstate and indexes are never installed. The pinned Core performs a complete
+local ``-reindex -assumevalid=0`` before ElectrumX starts. Failures remain
+fail-closed rather than silently switching to P2P synchronization.
 
-The trust path is::
-
-   ChainStrap verified transport
-             |
-             v
-      raw blocks/blk*.dat
-             |
-             v
-      Ravencoin Core 4.8.0
-             |
-             | full local reindex
-             | -reindex -assumevalid=0
-             v
-      locally validated chain
-
-Current upstream ChainStrap archives may contain additional derived Ravencoin
-datadir/index material, both beside the raw blocks (``assets/*.ldb``) and inside
-the blocks namespace (``blocks/index/*.ldb``). Since **1.13.8**, ElectrumX-RVN
-ignores such safe derived members wherever they appear and allows only
-``blocks/blk*.dat`` files to enter the raw-block staging path. Ignored members
-are never extracted and never reach the Ravencoin datadir. Current snapshots
-also split derived material into whole parts that carry no ``blk*.dat`` at all;
-such a part is accepted and extracts nothing. Unsafe paths, unsafe entry types
-and malformed archives remain fail-closed, and a snapshot that yields no raw
-block file, or a gapped raw-block sequence, is still refused before the
-blocks-ready marker is written.
-
-If ChainStrap fails, the installer does not silently switch to another bootstrap
-method. Traditional Ravencoin P2P synchronization can be selected explicitly:
-
-.. code-block:: sh
-
-   python3 electrumx-ravencoin-install.py \
-     --p2p-bootstrap --storage-root /path/to/data
-
-For the complete staging and threat model, see `Fast bootstrap`_.
+See `Fast bootstrap`_ for the archive rules, resume behavior, storage needs,
+P2P alternative, and complete threat model.
 
 Installation options
 ====================
 
-Running ``python3 electrumx-ravencoin-install.py`` starts the interactive
-installer. Common non-interactive choices include:
+Running ``python3 electrumx-ravencoin-install.py`` starts the guided installer.
+It supports explicit storage selection, traditional P2P bootstrap, optional
+local monitoring, and an opt-in privileged controller. Persistent Core and
+ElectrumX data should live on SSD or NVMe; a fresh install never silently adopts
+an existing storage root.
 
-.. code-block:: sh
+The signed installer is the recommended production entry point. Source-checkout
+deployments remain supported for development and deliberate operator workflows,
+but ``setup.sh`` does not create signed-release updater state and the retired
+tracked update key cannot become an active production root.
 
-   # Traditional P2P synchronization instead of ChainStrap
-   python3 electrumx-ravencoin-install.py \
-     --p2p-bootstrap --storage-root /path/to/data
-
-   # Do not deploy the optional Node Monitor
-   python3 electrumx-ravencoin-install.py \
-     --without-monitor --storage-root /path/to/data
-
-   # Explicitly enable the privileged host controller
-   python3 electrumx-ravencoin-install.py \
-     --with-monitor-controller --storage-root /path/to/data
-
-Storage
--------
-
-Persistent Ravencoin and ElectrumX data should normally live on SSD or NVMe.
-The installer keeps three locations distinct:
-
-* the installation directory containing Compose files, ``.env``, and markers;
-* the explicitly selected project data directory containing Core and ElectrumX
-  persistent data;
-* Docker's own image/data root.
-
-A fresh install never silently adopts an existing storage root. Detailed path,
-ownership, collision, and anti-rollback locator guidance lives in
-`Troubleshooting`_ and `Storage selection`_.
-
-Source checkout installation
-----------------------------
-
-Operators who intentionally work from a repository checkout can still use:
-
-.. code-block:: sh
-
-   git clone https://github.com/ALENOC/electrumx-ravencoin.git
-   cd electrumx-ravencoin
-   ./setup.sh --enable-reboot
-   docker compose up -d --build
-   docker compose ps
-
-The signed release installer is the recommended production entry point because
-it binds the downloaded bundle, release manifest, and independent Core policy
-to their verification paths.
-
-The checkout's ``core-safety/production/update-signing-public-key.hex`` retains
-the immutable historical v1 key; production packaging replaces that bundle
-member with the independently authenticated current offline public key.
-``setup.sh`` does not create signed-release updater state or install the
-``electrumx-update`` command. If an operator deliberately wires the updater to
-a source deployment without explicitly provisioning the current public key,
-the updater sees the historical key and fails closed.
+See `Getting started`_, `Storage selection`_, and `Troubleshooting`_ for the
+commands, storage model, and source-checkout trust behavior.
 
 Supported systems
 =================
 
-The maintained container deployment targets 64-bit Linux hosts.
-
-Linux amd64 / x86-64
---------------------
-
-The bundled Core image uses the pinned official Ravencoin 4.8.0 release
-identity and verifies the expected release artifacts before runtime use.
-
-Linux ARM64 / aarch64
----------------------
-
-ARM64, including Raspberry Pi 5 and Orange Pi 5-class systems, builds Ravencoin
-Core from the same official RavenProject commit shown above. Architecture-
-specific qualification details are recorded in `Validation status`_.
-
-Recommended hardware
---------------------
-
-* Raspberry Pi 5: 8 GB or more, active cooling, SSD/NVMe;
-* Orange Pi 5-class: 8 GB or more, NVMe;
-* x86-64 mini-PC/NUC: 16 GB or more, NVMe;
-* dedicated Linux server/VPS: adequate persistent SSD/NVMe and inbound TCP.
-
-For long-lived nodes, avoid placing Docker, Core, or the ElectrumX database on
-microSD. See `Hardware`_ and `Storage selection`_.
+The maintained deployment targets 64-bit Linux on amd64 and ARM64. Raspberry
+Pi 5 is the physically qualified low-power ARM64 path for v1.13.11; Orange Pi
+5-class systems use the supported ARM64 build path but do not inherit that
+complete physical qualification. Use SSD/NVMe, active cooling on SBCs, and
+avoid placing Docker or databases on microSD. See `Hardware`_,
+`Storage selection`_, and `Validation status`_.
 
 Ravencoin Node Monitor
 ======================
@@ -266,10 +195,12 @@ ChainStrap is a fresh-install bootstrap and is not re-run by an ordinary update.
 Upgrading older 1.13.1 installations
 ------------------------------------
 
-A 1.13.1 node installed with the signed release installer can use the normal
-``electrumx-update apply`` path. A historical ``setup.sh`` 1.13.1 deployment
-must first perform the explicit one-time `Legacy adoption`_ procedure; later
-updates then use the ordinary updater.
+A 1.13.1 node cannot directly authenticate the manifest-v2/current-key release
+line. The replacement public key must first be authenticated out of band. A
+historical ``setup.sh`` 1.13.1 deployment then uses the explicit one-time
+`Legacy adoption`_ procedure for the signed 1.13.11 candidate; only later
+updates use the ordinary updater. Never treat a statement signed solely by the
+retired 1.13.1 key as authorization for its replacement.
 
 Security
 ========
@@ -289,6 +220,11 @@ into one version check.
   monitoring, and administrative paths are kept separate.
 * **Database integrity:** startup checks reject unsafe historical extent
   corruption while bounded crash-tail recovery remains explicit.
+* **Observation is not authority:** Network Observer evidence cannot authorize
+  releases, rotate governance, or replace local Ravencoin validation.
+* **Governance domains remain separate:** release and safe-Core policy
+  authorization use distinct keys and domains; threshold activation is pending
+  a future independent-maintainer ceremony.
 
 See `Security model`_, `Core certification`_, and `Crash consistency`_ for the
 full rationale and limits. Security reports should follow ``SECURITY.md``.
@@ -356,12 +292,16 @@ Start with the guide that matches the task:
 Task                           Guide
 =============================  =================================================
 Install a first node           `Getting started`_
+Review 1.13.11 changes         `1.13.11 overview`_
+Understand the architecture    `Architecture guide`_
 Understand ChainStrap          `Fast bootstrap`_
 Choose hardware                `Hardware`_
 Choose storage                 `Storage selection`_
 Operate or update a node       `Operations`_
 Publish a public server        `Public node`_
 Understand trust boundaries    `Security model`_
+Understand Network Observer    `Network Observer guide`_
+Understand governance          `Governance guide`_
 Verify Core identity           `Core certification`_
 Diagnose a problem             `Troubleshooting`_
 Check qualification status     `Validation status`_
@@ -384,10 +324,10 @@ License
 
 See ``LICENCE``.
 
-.. _Install: `Quick install`_
-.. _How it works: `How it works`_
-.. _Security: `Security`_
-.. _Documentation: `Documentation`_
+.. _Architecture: docs/architecture.md
+.. _Network Observer: docs/network-observer.md
+.. _1.13.11 overview: docs/release-1.13.11.md
+.. _Architecture guide: docs/architecture.md
 .. _Getting started: docs/getting-started.md
 .. _Fast bootstrap: docs/fast-bootstrap.md
 .. _Hardware: docs/hardware.md
@@ -395,6 +335,8 @@ See ``LICENCE``.
 .. _Operations: docs/operations.md
 .. _Public node: docs/public-node.md
 .. _Security model: docs/security-model.md
+.. _Network Observer guide: docs/network-observer.md
+.. _Governance guide: docs/GOVERNANCE_AND_SUCCESSION.md
 .. _Core certification: docs/core-certification.md
 .. _Crash consistency: docs/crash-consistency.md
 .. _Validation status: docs/validation-status.md

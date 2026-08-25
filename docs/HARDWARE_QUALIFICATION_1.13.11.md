@@ -1,6 +1,6 @@
 # ElectrumX-RVN 1.13.11 hardware qualification
 
-## RESULT: PENDING
+## RESULT: PASS
 
 This document records the qualification plan and, after execution, the evidence
 for ElectrumX-RVN 1.13.11.
@@ -171,11 +171,12 @@ must be healthy, with restart count `0`, at the end of the gate.
 
 Gate 1 (regression/security suite), local venv on the reviewed source:
 
-- full suite: 991 passed, 15 skipped (baseline before the audit remediations:
-  980 passed, 15 skipped; +11 regression tests)
-- governance matrix: 19 passed; observer adversarial suites: 112 passed;
-  core/netsafety: 95 passed; RavenTag backend contract: 17 passed;
-  updater suites: 69 passed, 2 skipped; DB migration/retention: 4 passed.
+- final full suite: 1,131 passed, 15 skipped, 2 warnings;
+- focused trust-root/updater/installer selection: 93 passed;
+- broader updater/installer/release selection: 217 passed;
+- the final audit coverage includes RPC response correlation, observer bundle
+  verification, declaration application and rollback high-water, source trust
+  loading, artifact-wide key consistency, and governance domain separation.
 
 Gate 2 (ordinary hardware update) on the Raspberry Pi 5 node
 (192.168.1.244, aarch64, Docker 29.7.2):

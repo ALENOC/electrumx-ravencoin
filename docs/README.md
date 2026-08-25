@@ -7,9 +7,10 @@ operator or reference section.
 ## New here?
 
 1. [What the node stack does](getting-started.md#what-the-services-do)
-2. [Choose hardware](hardware.md)
-3. [Start a private node](getting-started.md)
-4. [Understand the August 2026 incident](incident-2026.md)
+2. [What changed in v1.13.11](release-1.13.11.md)
+3. [Choose hardware](hardware.md)
+4. [Start a private node](getting-started.md)
+5. [Understand the August 2026 incident](incident-2026.md)
 
 ## I want to run a private server
 
@@ -34,19 +35,37 @@ operator or reference section.
 
 ## I want to understand the security design
 
+- [v1.13.11 technical overview](release-1.13.11.md): changes since v1.13.1,
+  compatibility, qualification, and links to each detailed subsystem.
+- [Architecture](architecture.md): serving, deployment, observation, and
+  governance boundaries.
 - [August 2026 incident](incident-2026.md): KAWPOW, `nHeight`, checkpoint and
   recovery context.
 - [Security model](security-model.md): release identity, policy, evidence and
   fail-closed behavior.
 - [Core certification](core-certification.md): candidate pipeline, profile and
   signed policy.
+- [Release and update identity](release-artifact-revisions.md): manifest v2,
+  artifact revisions, provenance, transactional updates, and anti-rollback.
+- [Governance and succession](GOVERNANCE_AND_SUCCESSION.md): current trust
+  roots, N-of-M transitions, and explicit successor adoption.
 - [Validation status](validation-status.md): the single current status source.
+
+## I want to understand Network Observer
+
+- [Network Observer architecture](network-observer.md): Chain Quorum 2.0,
+  signed observations, operator identity, multi-vantage comparison, asset
+  probes, and Asset Data Quorum.
+- [Observer audit](network-observer-audit.md): the architecture review and
+  threat-model reasoning behind Phase 1.
+- [Monitoring terminology](electrum-monitor.md): the distinction between the
+  distributed Network Observer and the separate local Ravencoin Node Monitor.
 
 ## Developer and operator reference
 
-- [Architecture](architecture.md): service boundaries and data flow.
-- [Electrum monitor](electrum-monitor.md): discovery, health, SSRF protection,
-  operator groups and vantage points.
+- [Architecture](architecture.md): service and trust boundaries.
+- [Network Observer](network-observer.md): discovery, health, SSRF protection,
+  operator groups, quorum, signed observations, and asset correlation.
 - [Docker Compose reference](DOCKER_COMPOSE.md): deployment model details.
 - [Protocol documentation](protocol.rst): Electrum protocol reference.
 - [RPC interface](rpc-interface.rst): server RPC methods.

@@ -32,10 +32,24 @@ only after a clean stop; a live directory is not a consistent backup.
 
 ## Upgrade and reboot
 
-Read release notes, preserve a rollback snapshot, and use fast-forward Git
-updates. Re-run backend, chain, index, asset and TLS checks after an upgrade.
-The bundled Core is pinned; never replace it with an unreviewed image or use an
-unsafe override to make a deployment appear healthy.
+Read the release notes and record current service and storage status first.
+Installations created by the signed release installer use:
+
+```sh
+electrumx-update check
+electrumx-update status
+electrumx-update show
+electrumx-update apply
+```
+
+The updater authenticates the candidate, enforces host-wide anti-rollback,
+proves the storage model, and performs a transactional switch with exact
+rollback. Source checkouts may use normal reviewed Git workflows, but do not
+silently gain signed-release updater state or trust.
+
+Re-run backend, chain, index, asset and TLS checks after an upgrade. The bundled
+Core is pinned; never replace it with an unreviewed image or use an unsafe
+override to make a deployment appear healthy.
 
 ## Reindex warnings
 
@@ -102,9 +116,10 @@ a healthy service may still be synchronizing.
 ## Updating safely
 
 Before an update, read the release notes and [Core certification](core-certification.md),
-record live status, check disk space and protect configuration. Afterward,
-recheck Core identity, network, checkpoint, indexes, asset RPC, backend
-evidence, ElectrumX height and TLS. A higher semantic version is not a
+record live status, check disk space, and protect configuration. Do not modify
+the release tree while an update transaction is active. Afterward, recheck Core
+identity, network, checkpoint, indexes, asset RPC, backend evidence, ElectrumX
+height, Node Monitor health, and TLS. A higher semantic version is not a
 substitute for a certified exact repository and commit.
 
 ## Dangerous cleanup

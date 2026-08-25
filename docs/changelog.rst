@@ -2,6 +2,30 @@
  ChangeLog
 ===========
 
+Version 1.13.11 RVN (25 Aug 2026)
+=================================
+
+* Adds Ravencoin Network Observer Phase 1 with Chain Quorum 2.0,
+  domain-separated signed observation bundles, anti-replay, cryptographic
+  operator declarations and multi-vantage comparison.
+* Adds active asset RPC capability probes and height-bound Asset Data Quorum,
+  with canonical sampling and repeated-conflict confirmation.
+* Adds the founder-independence-capable governance and succession library:
+  N-of-M policies, epoch transitions, domain separation, revocation,
+  anti-rollback and explicit successor adoption. Production threshold
+  governance is not activated.
+* Incorporates the post-1.13.1 release platform: manifest-v2 artifact identity,
+  offline release signing, provenance binding, host-wide anti-rollback,
+  transactional update/rollback and legacy persistent-state adoption.
+* Preserves the legacy Electrum protocol, the public
+  ``server.ravencoin_backend`` contract, the signed safe-Core policy chain and
+  the ChainStrap transport-only trust boundary.
+* Qualifies the published signed artifact through the regression suite and the
+  Raspberry Pi 5 update, service, public TLS, ownership and observer gates.
+
+See ``docs/release-1.13.11.md`` for the current technical overview and links to
+the detailed subsystem documentation.
+
 Version 1.13.1 RVN (21 Aug 2026)
 ================================
 

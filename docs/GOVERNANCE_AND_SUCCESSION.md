@@ -1,5 +1,9 @@
 # ElectrumX-RVN governance and succession
 
+Documentation: [Home](../README.rst) · [Docs index](README.md) ·
+[v1.13.11 overview](release-1.13.11.md) ·
+[Architecture](architecture.md) · [Security model](security-model.md)
+
 ElectrumX-RVN must be able to survive its original maintainer.  This
 document is the canonical description of how project trust is rooted
 today, how it can rotate, and what happens when maintainers disappear.
@@ -23,7 +27,7 @@ Precise status language, used consistently:
 | Release anti-rollback | per-node high-water state | SELF-SIGNED / LOCAL | `/var/lib/electrumx-ravencoin/security-state.json` (locator module embedded in installer; `enforce_high_water`) |
 | Safe-Core policy signing | pinned public key | SINGLE-MAINTAINER | `core-safety/production/core-policy-signing-public-key.hex`; verifier `core-safety/scripts/policy.py:verify_policy`; domain `ALENOC-RVN-CORE-POLICY-v1` |
 | Policy anti-rollback | policyVersion floor | SELF-SIGNED / LOCAL | `core-safety/scripts/policy.py`; observer side `network_observer/store.py:record_policy_version` |
-| Key custody/recovery | offline private key + ceremony docs | SINGLE-MAINTAINER | `core-safety/production/UPDATE-SIGNING-KEY-CEREMONY.md`, `update-signing-key-attestation.json`; policy: never in CI, never in repo (`docs/OFFLINE_RELEASE_SIGNING_1.13.10.md`) |
+| Key custody/recovery | offline private key + ceremony docs | SINGLE-MAINTAINER | `core-safety/production/UPDATE-SIGNING-KEY-CEREMONY.md`, `update-signing-key-attestation.json`; policy: never in CI, never in repo (`docs/OFFLINE_RELEASE_SIGNING_1.13.11.md`) |
 | Download origin | github.com/ALENOC/electrumx-ravencoin + release gateway allowlist | EXTERNAL-UPSTREAM (transport only; authority is the signature) | installer `--secrets`/release URL constants; ChainStrap gateways pinned in bootstrap image |
 | Signed directory | observer-local keys | SELF-SIGNED / LOCAL | `network_observer/directory.py` (domain `ALENOC-RVN-ELECTRUM-DIRECTORY-v1`, predates Phase 1 and shipped in released 1.13.7+; kept for verifiability of already-signed directories) |
 | Observer / operator / snapshot identities | local self-generated keys | SELF-SIGNED / LOCAL | `network_observer/observer.py`, `operators.py`, `snapshot.py` (neutral `RAVENCOIN-NETWORK-OBSERVER-*` domains, never released before the rename) |

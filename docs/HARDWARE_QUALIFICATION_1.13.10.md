@@ -1,6 +1,6 @@
 # ElectrumX-RVN 1.13.10 hardware qualification
 
-## RESULT: PENDING
+## RESULT: PASS
 
 This document records the qualification plan and, after execution, the evidence
 for ElectrumX-RVN 1.13.10.
@@ -226,13 +226,6 @@ the real `.secrets` state when run as root against a scratch destination:
 
 The Node Monitor must be healthy, with restart count `0`, at the end of the
 gate.
-
-## Qualification result
-
-## RESULT: PENDING
-
-Change this document to `RESULT: PASS` only after every mandatory gate above has
-been observed against the published 1.13.10 artifacts.
 
 ## Observed evidence, 2026-08-25
 

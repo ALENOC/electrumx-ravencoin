@@ -42,12 +42,12 @@ The adoption marker is **not** written merely because the legacy node is valid.
 
 Before any install-root mutation, `apply` requires an already discovered pending candidate and revalidates the exact tagged signed manifest, artifact revision/high-water constraints, eligibility and safe-Core policy. It then downloads the exact artifact, verifies its SHA-256, verifies the signed provenance binding, validates the release bundle and proves both installed trust roots are continuous with the candidate.
 
-The candidate must be exactly ElectrumX-RVN `1.13.4`. If no verified pending 1.13.4 candidate exists, adoption refuses with the old 1.13.1 install root untouched and no marker created.
+The candidate must be exactly ElectrumX-RVN `1.13.11`. If no verified pending 1.13.11 candidate exists, adoption refuses with the old 1.13.1 install root untouched and no marker created.
 
 A successful preflight ends with:
 
 ```text
-UPDATER_CHECKPOINT legacy-candidate-preflight=PASS version=1.13.4 marker=UNTOUCHED old-stack=RUNNING
+UPDATER_CHECKPOINT legacy-candidate-preflight=PASS version=1.13.11 marker=UNTOUCHED old-stack=RUNNING
 ```
 
 The normal updater deliberately performs its own candidate revalidation again after adoption and immediately before the transaction. The duplicate verification is intentional: the first pass protects the adoption boundary; the second protects the transactional apply boundary.
@@ -70,7 +70,10 @@ The default is refusal.
 
 ## Apply
 
-After the replacement 1.13.4 trust root has been authenticated out-of-band, `electrumx-update check` has recorded the signed v2 candidate, and the candidate-first preflight can succeed, invoke the one-time wrapper from the exact reviewed/signed 1.13.4 candidate tree:
+After the current production trust root has been authenticated out of band,
+`electrumx-update check` has recorded the signed v2 candidate, and the
+candidate-first preflight can succeed, invoke the one-time wrapper from the
+exact reviewed/signed 1.13.11 candidate tree:
 
 ```bash
 python3 core-safety/scripts/legacy_1_13_1_apply.py apply
@@ -98,13 +101,13 @@ UPDATER_CHECKPOINT external-mutator-resume=PASS service=ravencoin-bandwidth-cont
 
 If rollback itself is indeterminate, the controller deliberately remains suspended so it cannot mutate an already ambiguous Docker state. Operator intervention is then required.
 
-If this invocation created the adoption marker but the normal updater returns without promotion, the wrapper removes the marker again only when the restored install root still contains the exact legacy 1.13.1 adoption marker. It refuses to delete a marker that identifies a promoted 1.13.4 tree or any unknown state. This prevents a failed pre-promotion attempt from leaving the production node silently half-adopted while avoiding destructive cleanup after an ambiguous switch/recovery state.
+If this invocation created the adoption marker but the normal updater returns without promotion, the wrapper removes the marker again only when the restored install root still contains the exact legacy 1.13.1 adoption marker. It refuses to delete a marker that identifies a promoted 1.13.11 tree or any unknown state. This prevents a failed pre-promotion attempt from leaving the production node silently half-adopted while avoiding destructive cleanup after an ambiguous switch/recovery state.
 
 The process-local compatibility hooks change only the storage proof model for this legacy transaction: candidate and restored stacks use `compose.yaml` without `compose.storage.yaml`, retaining the exact existing project-scoped named-volume identities. The normal new-installer/bind-backed updater remains unchanged.
 
 ## Safety invariants
 
-- no adoption marker before a completely revalidated/downloaded/verified 1.13.4 candidate;
+- no adoption marker before a completely revalidated/downloaded/verified 1.13.11 candidate;
 - no `docker compose down -v`;
 - no named-volume deletion or recreation;
 - no conversion of Docker private mountpoints into host bind-storage API;
