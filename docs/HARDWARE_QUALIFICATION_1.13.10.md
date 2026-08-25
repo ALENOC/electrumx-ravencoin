@@ -233,3 +233,150 @@ gate.
 
 Change this document to `RESULT: PASS` only after every mandatory gate above has
 been observed against the published 1.13.10 artifacts.
+
+## Observed evidence, 2026-08-25
+
+### Signed artifact identity
+
+- release source commit: `45279df6adf504e280cc25ea032f88d0a939e62b`
+- `artifact_revision`: `0`
+- release timestamp: `2026-08-24T17:34:30Z`
+- bundle SHA-256: `2f6baf495d219c5349743751761df5b0523abcb6714cad1274abd9d6fd7e66bf`
+- installer SHA-256: `66a12e6b9848faf75bc2eab27844db45d8b33a3ea279a39389d010ded0c1d506`
+- provenance SHA-256: `f3f8ae0d00d82fe5fedfeb746b3b9bbd747c195ce4d80f23a8540c96bba97b30`
+- signed manifest SHA-256: `543481cb995f7b3ef88745e4794930a8e0cd736ca43b2ef2c3125ea37d57bb09`
+- signing key ID: `6f4f944c9b0a19a1`
+- annotated tag `v1.13.10`, tagger ALENOC
+- offline verification against the production public key with the
+  repository's own verifier (`update_manifest.verify_manifest`)
+  concluded `status=VERIFIED`
+
+### Gate 1: regression/security suite
+
+PASS (prerelease). `tests/test_update_persistent_state_ownership.py`
+proves uid/gid preservation and the `preserve operator ownership`
+fail-closed error, and fails against the pre-fix implementation;
+`tests/test_two_digit_patch_ordering.py` proves `1.13.10 > 1.13.9` in
+`classify_release_order`, `enforce_high_water` and
+`_updater_version_compatible`. Full suite on the release source commit:
+481 passed, 3 skipped, with the 3 known pre-existing failures
+unrelated to this release.
+
+### Gate 2: fresh ChainStrap install of the published artifacts
+
+PASS, observed on 2026-08-24/25 on a fresh workstation install with
+the PUBLISHED v1.13.10 installer (assets downloaded from the GitHub
+release), a new empty datadir
+(`/mnt/colibri-models/rvn-qual-11310`, ~272G free), default ChainStrap
+path, no P2P bootstrap.
+
+- published installer `--check-only`: all signed release and
+  independent Core-policy checks passed against the published
+  manifest (ElectrumX 1.13.10, Core 4.8.0 @ 2254912988);
+- upstream snapshot 2026-08-24 (height 4507204, hash
+  `0000000000062844713d38e0d197ae35264a85b14278558bfab12aceba41663f`,
+  metadata SHA-256
+  `585a0be8a3424b9114d0a8baf72ad92798c16b89295680bae702e287e779831f`):
+  all 17 parts downloaded, each part SHA-256 verified;
+- extraction of raw `blocks/blk*.dat` only: parts 15 to 17 carried no
+  raw blocks and were accepted with nothing extracted, e.g.
+  `preflight ignored 538 foreign ZIP member(s)` and
+  `preflight ignored 1080 foreign ZIP member(s); only raw blocks/blk*.dat
+  members are eligible for extraction`; derived members such as
+  `blocks/index/004089.ldb` and `assets/LOCK` were ignored, never
+  extracted;
+- `ChainStrap stage complete: 291 contiguous raw block files (291 newly
+  extracted entries) in 1h00m55s`; after completion the extraction
+  staging held exactly 291 `blk*.dat` entries and nothing else;
+- no automatic P2P fallback at any point; a first install attempt
+  failed closed (all four allowlisted IPFS gateways returned transport
+  errors) with the partial run removed and no fallback, which is the
+  intended behavior, and succeeded on retry;
+- offline Core reindex with networking disabled completed:
+  `[OK] Offline Ravencoin Core validation`, after which the normal
+  `ravencoin-core` service started first try, no argument-clobbering
+  defect, no crash loop (`RestartCount=0`, healthy), and caught up to
+  the live network tip under normal operation;
+- `blocks/` after normal operation contains 583 entries: the 291
+  extracted `blk*.dat` plus `rev*.dat` undo files and `blocks/index/`
+  written by Ravencoin Core itself during its own validated
+  operation, which is expected post-reindex state and not extraction
+  output;
+- unrelated workstation containers (open-webui, worldmonitor,
+  aentech-*) were untouched throughout.
+
+### Gate 3: post-install service state
+
+PASS. `electrumx-ravencoin-ravencoin-core-1`: healthy, RestartCount 0,
+`Raven version v4.8.0.0-225491298`. `electrumx-ravencoin-electrumx-1`:
+healthy, RestartCount 0,
+`software version: ElectrumX-RVN 1.13.10`, backend
+`/Ravencoin:4.8.0/ on main: blocks=4,509,282 headers=4,509,282
+synchronized=True`.
+
+### Gate 4: ordinary hardware update
+
+PASS, observed on the Raspberry Pi 5 node (2026-08-24). The updater
+checkpoints recorded:
+
+```
+UPDATER_CHECKPOINT storage-preflight=PASS old-stack=RUNNING storage-model=named-volumes volume-objects=3 active-mounts=PASS
+UPDATER_CHECKPOINT external-mutator-suspend=PASS service=ravencoin-bandwidth-controller.service
+UPDATER_CHECKPOINT candidate-storage=PASS old-stack=RUNNING compose-model=PASS storage-model=named-volumes volume-objects=3
+UPDATER_CHECKPOINT release-switch=PASS same-filesystem-renames=COMPLETE new-root=ACTIVE
+UPDATER_CHECKPOINT external-mutator-resume=PASS service=ravencoin-bandwidth-controller.service
+HealthVerdict.PROMOTE_TO_CURRENT: post-update health gates passed
+```
+
+State after the update: `currentRelease 1.13.10`,
+`lastKnownGoodRelease 1.13.9`, `pendingCandidate null`,
+`failureReason null`. Blockchain data, ElectrumX database, named
+volumes, `compose.tls.yaml`, the external Node Monitor and the
+bandwidth controller were preserved; ChainStrap did not rerun. An
+earlier apply attempt failed on intermittent node DNS
+(`lookup registry-1.docker.io ... server misbehaving`) and rolled
+back cleanly ("exact previous release restored"); the retry applied
+normally.
+
+Expected post-update note: the 1.13.9 to 1.13.10 switch was executed
+by the INSTALLED 1.13.9 updater (not yet containing the fix), so it
+left `.secrets/raven_rpc_user` and `.secrets/raven_rpc_password` at
+`root:root`; ownership was restored by hand to `1000:984` mode 600.
+This was anticipated and documented before the update: from 1.13.10
+onward the updater preserves ownership, and gate 6 is the proof of
+the fix.
+
+### Gate 5: public endpoint
+
+PASS, from the external workstation client on 2026-08-24:
+TLS 1.3 connection to `electrumx.raventag.com:50002` with certificate
+verification succeeded (cipher `TLS_AES_256_GCM_SHA384`), and
+`server.version` returned exactly
+`{"jsonrpc":"2.0","result":["ElectrumX-RVN 1.13.10","1.4"],"id":0}`.
+
+### Gate 6: deployed ownership preservation
+
+PASS, observed on the node with the INSTALLED 1.13.10 code, run as
+root against a scratch destination in `/tmp` (non destructive, the
+live installation untouched). `copy_persistent_state` output:
+
+```
+.env 0 0 0o600
+.secrets 0 0 0o700
+.secrets/raven_rpc_password 1000 984 0o600
+.secrets/raven_rpc_user 1000 984 0o600
+```
+
+`.secrets` content kept the operator ownership `1000:984` with mode
+600 (not `root:root`); `.env` is `root:root` in the live source tree
+as well, so `0 0` is correct preservation, not a defect. The Node
+Monitor ended the gate healthy with `RestartCount=0`, and
+`http://127.0.0.1:8899/` answered `401` (alive and authentication
+protected, the expected response).
+
+## Qualification result
+
+## RESULT: PASS
+
+All six mandatory gates were observed passing against the published
+v1.13.10 artifacts and the signed identity recorded above.
