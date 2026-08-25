@@ -6,7 +6,7 @@ Production-oriented ElectrumX infrastructure for Ravencoin with verified
 Ravencoin Core 4.8.0, Fast Verified Bootstrap, transactional updates, optional
 node monitoring, and maintained Linux amd64 / ARM64 deployment paths.
 
-**Current release: ElectrumX-RVN 1.13.10**
+**Current release: ElectrumX-RVN 1.13.11**
 
 `Install`_ · `Update`_ · `How it works`_ · `Security`_ · `Documentation`_ ·
 `Latest release <https://github.com/ALENOC/electrumx-ravencoin/releases/latest>`_
@@ -66,7 +66,7 @@ The normal data and trust path is::
    Wallet / Electrum client
              |
              v
-   ElectrumX-RVN 1.13.10
+   ElectrumX-RVN 1.13.11
              |
              v
    Ravencoin Core 4.8.0
@@ -190,6 +190,14 @@ The signed release installer is the recommended production entry point because
 it binds the downloaded bundle, release manifest, and independent Core policy
 to their verification paths.
 
+The checkout's ``core-safety/production/update-signing-public-key.hex`` retains
+the immutable historical v1 key; production packaging replaces that bundle
+member with the independently authenticated current offline public key.
+``setup.sh`` does not create signed-release updater state or install the
+``electrumx-update`` command. If an operator deliberately wires the updater to
+a source deployment without explicitly provisioning the current public key,
+the updater sees the historical key and fails closed.
+
 Supported systems
 =================
 
@@ -237,7 +245,7 @@ Update
 Updates are explicit and operator-driven. Availability of a newer release does
 not imply silent installation.
 
-Normal maintenance uses:
+For installations made by the signed release installer, normal maintenance uses:
 
 .. code-block:: sh
 

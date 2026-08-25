@@ -27,7 +27,7 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
-from packaging.version import Version
+from packaging.version import InvalidVersion, Version
 
 from electrumx_core_safety import artifact_revision
 import policy as core_policy
@@ -53,6 +53,11 @@ BUNDLE_FILENAME = "electrumx-ravencoin-bundle.tar.gz"
 MANIFEST_FILENAME = "release-manifest.json"
 PROVENANCE_FILENAME = "release-provenance.json"
 MAX_UPDATE_ARTIFACT_BYTES = update_runtime.MAX_ARTIFACT_BYTES
+
+# The schema-v1 key was reachable by CI and was retired when signing moved to
+# the offline-only schema-v2 ceremony. A stale source checkout must fail closed
+# rather than silently re-adopt that withdrawn trust root.
+RETIRED_UPDATE_KEY_IDS = frozenset({"288e85d43f792f83"})
 
 SCRIPT_PATH = Path(__file__).resolve()
 DEFAULT_INSTALL_ROOT = Path(os.environ.get(
@@ -81,6 +86,20 @@ DEFAULT_CORE_POLICY_CACHE_PATH = os.environ.get(
 DEFAULT_CORE_POLICY_URL = os.environ.get(
     "ELECTRUMX_CORE_POLICY_URL", update_policy.DEFAULT_POLICY_URL)
 PRODUCTION_APPLY_READY = True
+
+
+def load_production_trusted_keys(path=None) -> dict:
+    """Load the production update root and reject every known-retired key."""
+    if path is None:
+        path = DEFAULT_TRUSTED_KEY_PATH
+    trusted_keys = load_trusted_key(path)
+    retired = RETIRED_UPDATE_KEY_IDS.intersection(trusted_keys)
+    if retired:
+        raise ManifestError(
+            f"update trust file {path} contains retired update key(s) "
+            f"{sorted(retired)}; provision the current production public key "
+            "documented in UPDATE-SIGNING-KEY-CEREMONY.md")
+    return trusted_keys
 
 
 @dataclasses.dataclass
@@ -122,7 +141,20 @@ def run_check(*, state: UpdateState, source: ReleaseSource, host: HostFacts,
 
     considered = []
     refused_reason = None
+    authenticated_current = False
     for candidate in source.list_candidates():
+        # A retired historical release is not an update candidate. In
+        # particular, the published schema-v1 v1.13.1 manifest is signed by a
+        # deliberately withdrawn key. Skip only tags strictly older than the
+        # authenticated installed version; same-version and newer invalid
+        # manifests must still fail visibly.
+        try:
+            if Version(candidate.version) < Version(host.current_electrumx_version):
+                continue
+        except (InvalidVersion, TypeError):
+            # Invalid/malformed release identities fail through the ordinary
+            # manifest/tag checks below; they are never classified as old.
+            pass
         manifest_body = None
         if candidate.signed_manifest_document is not None:
             try:
@@ -153,7 +185,10 @@ def run_check(*, state: UpdateState, source: ReleaseSource, host: HostFacts,
             candidate_provenance_digest=manifest_body.get("provenanceDigest"),
         )
         if eligibility.verdict != EligibilityVerdict.ELIGIBLE:
-            refused_reason = eligibility.reason or eligibility.verdict.value
+            if eligibility.verdict == EligibilityVerdict.IGNORED_SAME_ARTIFACT:
+                authenticated_current = True
+            else:
+                refused_reason = eligibility.reason or eligibility.verdict.value
             continue
 
         verification = evaluate_verification(
@@ -170,7 +205,9 @@ def run_check(*, state: UpdateState, source: ReleaseSource, host: HostFacts,
     if not considered:
         record_check_result(
             state, pending_candidate=None,
-            failure_reason=refused_reason or "no eligible candidate release found")
+            failure_reason=(refused_reason if refused_reason is not None else
+                            None if authenticated_current else
+                            "no eligible candidate release found"))
         return state
 
     verified = [item for item in considered
@@ -569,7 +606,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.command == "check":
         try:
-            trusted_keys = load_trusted_key(DEFAULT_TRUSTED_KEY_PATH)
+            trusted_keys = load_production_trusted_keys(DEFAULT_TRUSTED_KEY_PATH)
             resolved_policy = resolve_production_core_policy(state)
             _high_water_path, high_water = _resolve_high_water()
         except (OSError, ValueError, ManifestError, core_policy.PolicyError,
@@ -608,7 +645,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         manifest = state.pending_candidate.get("manifest")
         result_obj = None
         try:
-            trusted_keys = load_trusted_key(DEFAULT_TRUSTED_KEY_PATH)
+            trusted_keys = load_production_trusted_keys(DEFAULT_TRUSTED_KEY_PATH)
             resolved_policy = resolve_production_core_policy(state)
             high_water_path, high_water = _resolve_high_water()
             save_state(DEFAULT_STATE_PATH, state)

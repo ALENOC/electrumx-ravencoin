@@ -10,7 +10,7 @@ on:
         description: Exact unsigned candidate artifact name
         required: true
       expected_public_key_hex:
-        description: Independently authenticated replacement Ed25519 public key (hex)
+        description: Independently authenticated current production Ed25519 public key (hex)
         required: true
 
 permissions:
@@ -58,7 +58,7 @@ jobs:
           root = pathlib.Path(os.environ["RUNNER_TEMP"]) / "candidate"
           public = os.environ["EXPECTED_PUBLIC_KEY_HEX"].strip().lower()
           if not re.fullmatch(r"[0-9a-f]{64}", public):
-              raise SystemExit("replacement public key is malformed")
+              raise SystemExit("production public key is malformed")
           if public == render_installer_v2.RETIRED_UPDATE_PUBLIC_KEY_HEX:
               raise SystemExit("retired CI-held update key is forbidden")
 

@@ -87,7 +87,7 @@ services:
     build:
       context: .
       dockerfile: contrib/Dockerfile
-    image: alenoc/electrumx-ravencoin:1.13.10
+    image: alenoc/electrumx-ravencoin:1.13.11
     depends_on:
       ravencoin-core:
         condition: service_healthy

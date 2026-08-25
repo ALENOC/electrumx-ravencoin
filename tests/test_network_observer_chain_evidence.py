@@ -14,14 +14,13 @@ import asyncio
 import hashlib
 import json
 
-import pytest
 
 from electrumx.lib.coins import Ravencoin
 from electrumx.lib.hash import hash_to_hex_str
 
-from monitor.classify import ChainObservation, compare_chains
-from monitor.crawl import PROBE_CALLS, _ravencoin_header_hash, probe_endpoint
-from monitor.model import EndpointId, Limits, Thresholds, Transport
+from network_observer.classify import ChainObservation, compare_chains
+from network_observer.crawl import PROBE_CALLS, _ravencoin_header_hash, probe_endpoint
+from network_observer.model import EndpointId, Limits, Thresholds, Transport
 
 # Real mainnet fixtures, shared with tests/lib/test_ravencoin_headers.py:
 # the header at the incident checkpoint height and the first header after it.

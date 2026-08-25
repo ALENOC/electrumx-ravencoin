@@ -15,24 +15,24 @@ import json
 
 import pytest
 
-from monitor.classify import (
+from network_observer.classify import (
     ChainObservation, classify_assets, classify_backend, compare_chains,
     count_independent_operators, independent_groups, suggest_operator_group,
 )
-from monitor.crawl import Crawler, RateLimiter, resolve_endpoint
-from monitor.directory import (
+from network_observer.crawl import Crawler, RateLimiter, resolve_endpoint
+from network_observer.directory import (
     DirectoryError, build_directory, candidates_from_directory, sign_directory,
     verify_directory,
 )
-from monitor.model import (
+from network_observer.model import (
     AssetSupport, Availability, DiscoverySource, EndpointId, EndpointState, Limits,
     ProbeResult, Security, Thresholds, Transport,
 )
-from monitor.netsafety import (
+from network_observer.netsafety import (
     UnsafeTarget, normalize_hostname, normalize_port, parse_peer_record,
     parse_peers_response, safe_resolved_addresses,
 )
-from monitor.store import Store
+from network_observer.store import Store
 
 CERTIFIED_COMMIT = "b60f50e04f1fba425b28804e61be2694faaf3469"
 OTHER_COMMIT = "d" * 40
@@ -375,7 +375,7 @@ def test_two_groups_are_counted_separately():
 def test_two_alenoc_endpoints_are_one_operator():
     """Multiple ALENOC-run endpoints must not be counted as separate,
     independent operators; that would manufacture diversity that does not
-    exist. See monitor/config/operator-registry.json."""
+    exist. See network_observer/config/operator-registry.json."""
     groups = independent_groups([
         observation("electrum-a.alenoc.example", "ALENOC"),
         observation("electrum-b.alenoc.example", "ALENOC"),
@@ -472,7 +472,7 @@ def test_independent_operator_count_ignores_unsafe_endpoints():
 
 # --------------------------------------------------------------------- store
 def test_store_round_trip_and_multiple_sources(tmp_path):
-    store = Store(str(tmp_path / "monitor.sqlite3"))
+    store = Store(str(tmp_path / "network-observer.sqlite3"))
     target = endpoint()
     store.upsert_endpoint(target, source=DiscoverySource.BOOTSTRAP, now=100)
     store.upsert_endpoint(target, source=DiscoverySource.GOSSIP,
@@ -485,7 +485,7 @@ def test_store_round_trip_and_multiple_sources(tmp_path):
 
 
 def test_store_tracks_address_changes_for_a_dynamic_host(tmp_path):
-    store = Store(str(tmp_path / "monitor.sqlite3"))
+    store = Store(str(tmp_path / "network-observer.sqlite3"))
     target = endpoint()
     store.upsert_endpoint(target, now=100)
     for address, when in (("203.0.113.7", 100), ("203.0.113.9", 200)):
@@ -497,7 +497,7 @@ def test_store_tracks_address_changes_for_a_dynamic_host(tmp_path):
 
 
 def test_store_keeps_observations_separate_by_vantage_point(tmp_path):
-    store = Store(str(tmp_path / "monitor.sqlite3"))
+    store = Store(str(tmp_path / "network-observer.sqlite3"))
     target = endpoint()
     store.upsert_endpoint(target, now=100)
     store.record_probe(ProbeResult(endpoint=target, reachable=False,
@@ -511,7 +511,7 @@ def test_store_keeps_observations_separate_by_vantage_point(tmp_path):
 
 
 def test_store_records_peer_edges_as_provenance(tmp_path):
-    store = Store(str(tmp_path / "monitor.sqlite3"))
+    store = Store(str(tmp_path / "network-observer.sqlite3"))
     store.record_peer_edge(endpoint("a.example.org"), endpoint("b.example.org"),
                            now=100)
     store.record_peer_edge(endpoint("a.example.org"), endpoint("b.example.org"),
@@ -523,7 +523,7 @@ def test_store_records_peer_edges_as_provenance(tmp_path):
 
 
 def test_store_prunes_old_observations(tmp_path):
-    store = Store(str(tmp_path / "monitor.sqlite3"))
+    store = Store(str(tmp_path / "network-observer.sqlite3"))
     target = endpoint()
     store.upsert_endpoint(target, now=0)
     store.record_probe(ProbeResult(endpoint=target, reachable=True), now=0)
@@ -534,7 +534,7 @@ def test_store_prunes_old_observations(tmp_path):
 
 
 def test_store_refuses_a_newer_schema(tmp_path):
-    path = str(tmp_path / "monitor.sqlite3")
+    path = str(tmp_path / "network-observer.sqlite3")
     store = Store(path)
     store.connection.execute("UPDATE schema_version SET version = 99")
     store.connection.commit()
@@ -645,7 +645,7 @@ def test_store_migrates_schema_v3_database_to_v4(tmp_path):
     """A database created before chain_conflicts existed (schema v3, the
     SRV-02 policy_state release) must upgrade cleanly and gain the new
     table, without disturbing what it already had."""
-    path = str(tmp_path / "monitor.sqlite3")
+    path = str(tmp_path / "network-observer.sqlite3")
     store = Store(path)
     store.record_policy_version(5)
     store.close()
@@ -667,7 +667,7 @@ def test_store_migrates_schema_v3_database_to_v4(tmp_path):
 
 
 def test_store_conflict_confirmations_increment_and_clear(tmp_path):
-    store = Store(str(tmp_path / "monitor.sqlite3"))
+    store = Store(str(tmp_path / "network-observer.sqlite3"))
     try:
         assert store.conflict_confirmations("GROUP-A") == 0
         assert store.record_conflict("GROUP-A", now=100) == 1
@@ -683,7 +683,7 @@ def test_store_conflict_confirmations_increment_and_clear(tmp_path):
 
 
 def test_store_prunes_stale_conflict_confirmations(tmp_path):
-    store = Store(str(tmp_path / "monitor.sqlite3"))
+    store = Store(str(tmp_path / "network-observer.sqlite3"))
     try:
         store.record_conflict("STALE", now=0)
         store.record_conflict("FRESH", now=9_000_000)

@@ -15,9 +15,12 @@ never collapse into one another:
     TRUSTED_BY_OPERATOR   an operator's own configuration decided to trust it
 
 Most of the underlying behaviour is already covered in depth by
-test_monitor_safe_promotion.py, test_monitor_safe_promotion_r2.py,
-test_monitor_chain_evidence.py, test_monitor_policy_verification.py,
-test_monitor_operator_diversity.py and test_monitor.py (directory signing).
+test_network_observer_safe_promotion.py,
+test_network_observer_safe_promotion_r2.py,
+test_network_observer_chain_evidence.py,
+test_network_observer_policy_verification.py,
+test_network_observer_operator_diversity.py and
+test_network_observer.py (directory signing).
 This file adds only the scenarios not already exercised elsewhere (scenario
 J), and otherwise calls the real classify.py/ravencoin_backend.py/
 directory.py primitives directly so the A-J mapping is explicit in one
@@ -31,11 +34,11 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from electrumx.server.ravencoin_backend import BackendIdentity, IdentityEvidence
-from monitor.classify import ChainObservation, classify_backend, compare_chains, is_corroborated
-from monitor.directory import (
+from network_observer.classify import ChainObservation, classify_backend, compare_chains, is_corroborated
+from network_observer.directory import (
     build_directory, sign_directory, verify_directory,
 )
-from monitor.model import Availability, EndpointId, EndpointState, Security, Thresholds, Transport
+from network_observer.model import Availability, EndpointId, EndpointState, Security, Thresholds, Transport
 
 CERTIFIED_COMMIT = "b60f50e04f1fba425b28804e61be2694faaf3469"
 CERTIFIED_POLICY = {
@@ -183,7 +186,7 @@ def test_i_tampered_entry_inside_signed_directory_is_rejected():
     document = sign_directory(build_directory(states, directory_version=1),
                               private_key, key_id=key_id)
     document["directory"]["servers"][0]["security"] = Security.SAFE.value
-    from monitor.directory import DirectoryError
+    from network_observer.directory import DirectoryError
     with pytest.raises(DirectoryError, match="does not verify"):
         verify_directory(document, {key_id: public_bytes})
 

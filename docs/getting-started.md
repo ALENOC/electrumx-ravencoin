@@ -30,6 +30,13 @@ without printing them, and validates the Compose model. It does not delete
 existing data. The user service is optional; confirm its behavior before
 relying on it for reboot recovery.
 
+The tracked `core-safety/production/update-signing-public-key.hex` in a source
+checkout retains the immutable historical v1 key. Production packaging replaces
+that bundle member with the independently authenticated current offline public
+key. `setup.sh` does not create signed-release updater state or install the
+`electrumx-update` command; a source deployment without an explicitly
+provisioned current public key therefore fails closed at updater trust loading.
+
 ### Optional fast bootstrap for a fresh node
 
 For a new bundled-Core deployment on an empty data volume, the project can use

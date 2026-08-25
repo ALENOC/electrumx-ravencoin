@@ -14,17 +14,18 @@ accumulate observations forever.
 
 from __future__ import annotations
 
+import datetime
 import json
 import sqlite3
 import time
-from typing import Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from .model import (
     Availability, DiscoverySource, EndpointId, EndpointState, ProbeResult, Security,
     Transport,
 )
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -125,13 +126,124 @@ CREATE TABLE IF NOT EXISTS chain_conflicts (
     first_seen INTEGER NOT NULL,
     last_seen INTEGER NOT NULL
 );
+
+-- Chain Quorum 2.0 (schema 5).  One row per crawl challenge round; the
+-- nonce and heights are persisted so challenge selection can be audited
+-- after the fact, and responses keep the raw per-endpoint answers for
+-- post-mortem inspection.
+CREATE TABLE IF NOT EXISTS chain_challenges (
+    id INTEGER PRIMARY KEY,
+    crawl_id TEXT NOT NULL UNIQUE,
+    anchor_height INTEGER NOT NULL,
+    challenge_nonce TEXT NOT NULL,
+    heights_json TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chain_challenge_responses (
+    id INTEGER PRIMARY KEY,
+    challenge_id INTEGER NOT NULL REFERENCES chain_challenges(id) ON DELETE CASCADE,
+    endpoint_id INTEGER NOT NULL REFERENCES endpoints(id) ON DELETE CASCADE,
+    height INTEGER NOT NULL,
+    block_hash TEXT,
+    operator_group TEXT,
+    observer TEXT NOT NULL DEFAULT 'local',
+    recorded_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS challenge_responses_challenge
+    ON chain_challenge_responses (challenge_id, height);
+
+-- Anti-replay high-water marks per trusted observer key (schema 5): a
+-- signed observation is only current while its sequence leads every
+-- previously accepted sequence for that key.
+CREATE TABLE IF NOT EXISTS observer_state (
+    observer_key_id TEXT PRIMARY KEY,
+    observer_id TEXT,
+    last_sequence INTEGER NOT NULL,
+    last_accepted INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS signed_observations (
+    id INTEGER PRIMARY KEY,
+    observer_key_id TEXT NOT NULL,
+    observer_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    crawl_id TEXT,
+    bundle_json TEXT NOT NULL,
+    accepted_at INTEGER NOT NULL,
+    UNIQUE (observer_key_id, sequence)
+);
+
+-- Cryptographic operator identity (schema 5).  accepted=1 rows are
+-- REGISTRY_ATTESTED per local policy; accepted=0 rows are SELF_SIGNED
+-- and never count toward independent quorum.
+CREATE TABLE IF NOT EXISTS operator_identities (
+    operator_key_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    operator_group TEXT NOT NULL,
+    operator_name TEXT NOT NULL,
+    endpoints_json TEXT NOT NULL,
+    valid_from TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    accepted INTEGER NOT NULL DEFAULT 0,
+    last_sequence_seen INTEGER NOT NULL,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    PRIMARY KEY (operator_key_id, sequence)
+);
+
+CREATE TABLE IF NOT EXISTS asset_quorum_samples (
+    id INTEGER PRIMARY KEY,
+    crawl_id TEXT NOT NULL,
+    data_type TEXT NOT NULL,
+    sentinel TEXT NOT NULL,
+    height INTEGER NOT NULL,
+    operator_group TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    recorded_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS asset_samples_crawl
+    ON asset_quorum_samples (crawl_id, data_type, sentinel);
+
+-- Cross-crawl confirmation for suspected asset-data mismatches,
+-- deliberately mirroring chain_conflicts: escalation to a confirmed
+-- ASSET_DATA_CONFLICT needs repeated comparable observations.
+CREATE TABLE IF NOT EXISTS asset_conflicts (
+    conflict_key TEXT PRIMARY KEY,
+    confirmations INTEGER NOT NULL DEFAULT 1,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL
+);
+
+-- Versioned, expiry-bound snapshots with their own anti-rollback mark.
+CREATE TABLE IF NOT EXISTS network_snapshots (
+    id INTEGER PRIMARY KEY,
+    snapshot_version INTEGER NOT NULL,
+    body_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE (snapshot_version)
+);
+
+CREATE TABLE IF NOT EXISTS snapshot_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    minimum_snapshot_version INTEGER NOT NULL DEFAULT 0
+);
+
+-- Monotonic sequence mark per operator key, kept even when old
+-- declaration rows are pruned, so rollback refusal survives pruning.
+CREATE TABLE IF NOT EXISTS operator_state_marker (
+    operator_key_id TEXT PRIMARY KEY,
+    last_sequence INTEGER NOT NULL
+);
 """
 
 
 class Store:
     """Thin persistence layer.  No business logic lives here."""
 
-    def __init__(self, path: str = "monitor.sqlite3"):
+    def __init__(self, path: str = "network-observer.sqlite3"):
         self.path = path
         self.connection = sqlite3.connect(path)
         self.connection.row_factory = sqlite3.Row
@@ -387,6 +499,223 @@ class Store:
             (group_key,)).fetchone()
         return row["confirmations"] if row else 0
 
+    # ------------------------------------------------------ challenges (v5)
+    def record_challenge_round(self, crawl_id: str, anchor_height: int,
+                               challenge_nonce: str, heights_json: str,
+                               verdict: str, detail: str,
+                               *, now: Optional[int] = None) -> int:
+        now = int(now if now is not None else time.time())
+        with self.connection:
+            cursor = self.connection.execute(
+                "INSERT OR REPLACE INTO chain_challenges (crawl_id, "
+                "anchor_height, challenge_nonce, heights_json, verdict, "
+                "detail, created_at) VALUES (?,?,?,?,?,?,?)",
+                (crawl_id, anchor_height, challenge_nonce, heights_json,
+                 verdict, detail, now))
+            return int(cursor.lastrowid)
+
+    def record_challenge_response(self, challenge_id: int, endpoint_id: int,
+                                  height: int, block_hash: Optional[str],
+                                  operator_group: Optional[str],
+                                  observer: str = "local",
+                                  *, now: Optional[int] = None) -> None:
+        now = int(now if now is not None else time.time())
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO chain_challenge_responses (challenge_id, "
+                "endpoint_id, height, block_hash, operator_group, observer, "
+                "recorded_at) VALUES (?,?,?,?,?,?,?)",
+                (challenge_id, endpoint_id, height, block_hash,
+                 operator_group, observer, now))
+
+    # -------------------------------------------------------- observers (v5)
+    def observer_high_water(self) -> dict:
+        rows = self.connection.execute(
+            "SELECT observer_key_id, last_sequence FROM observer_state"
+        ).fetchall()
+        return {row["observer_key_id"]: int(row["last_sequence"])
+                for row in rows}
+
+    def record_accepted_observation(self, observer_key_id: str,
+                                    observer_id: str, sequence: int,
+                                    bundle_json: str,
+                                    crawl_id: Optional[str] = None,
+                                    *, now: Optional[int] = None) -> None:
+        now = int(now if now is not None else time.time())
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO signed_observations (observer_key_id, observer_id, "
+                "sequence, crawl_id, bundle_json, accepted_at) VALUES (?,?,?,?,?,?)",
+                (observer_key_id, observer_id, sequence, crawl_id,
+                 bundle_json, now))
+            self.connection.execute(
+                "INSERT INTO observer_state (observer_key_id, observer_id, "
+                "last_sequence, last_accepted) VALUES (?,?,?,?) "
+                "ON CONFLICT (observer_key_id) DO UPDATE SET "
+                "last_sequence = MAX(last_sequence, excluded.last_sequence), "
+                "observer_id = excluded.observer_id, "
+                "last_accepted = excluded.last_accepted",
+                (observer_key_id, observer_id, sequence, now))
+
+    # -------------------------------------------------- operator identity (v5)
+    def operator_sequence_high_water(self) -> dict:
+        """Per-key anti-rollback high-water marks for operator declarations.
+
+        The authoritative source is ``operator_state_marker``, which is
+        deliberately never pruned, so rollback refusal survives deletion
+        of old ``operator_identities`` rows; that table is still merged
+        in for databases written before the marker existed."""
+        marks: Dict[str, int] = {}
+        rows = self.connection.execute(
+            "SELECT operator_key_id, last_sequence FROM operator_state_marker"
+        ).fetchall()
+        for row in rows:
+            marks[row["operator_key_id"]] = int(row["last_sequence"])
+        rows = self.connection.execute(
+            "SELECT operator_key_id, MAX(last_sequence_seen) AS seq "
+            "FROM operator_identities GROUP BY operator_key_id").fetchall()
+        for row in rows:
+            key_id, sequence = row["operator_key_id"], int(row["seq"])
+            marks[key_id] = max(marks.get(key_id, 0), sequence)
+        return marks
+
+    def record_operator_declaration(self, declaration, *,
+                                    now: Optional[int] = None) -> None:
+        """Persist a verified declaration, keyed by (key id, sequence).
+
+        last_sequence_seen is raised monotonically so a rolled-back
+        declaration is refused later even after pruning of old rows."""
+        now = int(now if now is not None else time.time())
+        accepted = 1 if declaration.state.name == "REGISTRY_ATTESTED" else 0
+        with self.connection:
+            self.connection.execute(
+                "INSERT OR REPLACE INTO operator_identities (operator_key_id, "
+                "sequence, operator_group, operator_name, endpoints_json, "
+                "valid_from, expires_at, accepted, last_sequence_seen, "
+                "first_seen, last_seen) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (declaration.operator_key_id, declaration.sequence,
+                 declaration.operator_group, declaration.operator_name,
+                 json.dumps(sorted(declaration.endpoints)),
+                 declaration.valid_from, declaration.expires_at, accepted,
+                 declaration.sequence, now, now))
+            self.connection.execute(
+                "INSERT INTO operator_state_marker (operator_key_id, "
+                "last_sequence) VALUES (?,?) ON CONFLICT (operator_key_id) "
+                "DO UPDATE SET last_sequence = MAX(last_sequence, "
+                "excluded.last_sequence)",
+                (declaration.operator_key_id, declaration.sequence))
+
+    def attested_operator_groups(self) -> dict:
+        """key id -> operator group for REGISTRY_ATTESTED identities."""
+        rows = self.connection.execute(
+            "SELECT operator_key_id, operator_group FROM operator_identities "
+            "WHERE accepted=1").fetchall()
+        return {row["operator_key_id"]: row["operator_group"] for row in rows}
+
+    def accepted_declaration_groups(self, *, now=None) -> dict:
+        """Endpoint identity (``host:port``) -> operator group for every
+        REGISTRY_ATTESTED declaration whose validity window covers ``now``.
+
+        This is what makes the documented precedence
+        (attested declaration > configured group > UNKNOWN-*) real in
+        the discovery flow: a declaration that has expired, or that was
+        only ever SELF_SIGNED, resolves nothing here.  When one key has
+        several accepted sequences only the highest one binds: a newer
+        declaration that drops an endpoint unbinds it."""
+        current = now or datetime.datetime.now(datetime.timezone.utc)
+        if isinstance(current, (int, float)):
+            current = datetime.datetime.fromtimestamp(
+                current, tz=datetime.timezone.utc)
+        groups: Dict[str, str] = {}
+        # Only the highest-sequence accepted declaration per key is
+        # current: an older declaration's endpoints must not stay bound
+        # after a newer declaration dropped them.
+        rows = self.connection.execute(
+            "SELECT oi.operator_group, oi.endpoints_json, oi.valid_from, "
+            "oi.expires_at FROM operator_identities oi JOIN ("
+            "SELECT operator_key_id, MAX(sequence) AS seq "
+            "FROM operator_identities WHERE accepted=1 "
+            "GROUP BY operator_key_id) latest "
+            "ON oi.operator_key_id = latest.operator_key_id "
+            "AND oi.sequence = latest.seq WHERE oi.accepted=1").fetchall()
+        for row in rows:
+            try:
+                valid_from = datetime.datetime.fromisoformat(row["valid_from"])
+                expires_at = datetime.datetime.fromisoformat(row["expires_at"])
+            except ValueError:
+                continue
+            if valid_from.tzinfo is None:
+                valid_from = valid_from.replace(tzinfo=datetime.timezone.utc)
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
+            if not (valid_from <= current <= expires_at):
+                continue
+            for identity in json.loads(row["endpoints_json"]):
+                groups[identity] = row["operator_group"]
+        return groups
+
+    # ---------------------------------------------------- asset quorum (v5)
+    def record_asset_samples(self, crawl_id: str, samples,
+                             *, now: Optional[int] = None) -> None:
+        now = int(now if now is not None else time.time())
+        with self.connection:
+            for sample in samples:
+                self.connection.execute(
+                    "INSERT INTO asset_quorum_samples (crawl_id, data_type, "
+                    "sentinel, height, operator_group, digest, recorded_at) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (crawl_id, sample.data_type, sample.sentinel,
+                     sample.height, sample.operator_group, sample.digest, now))
+
+    def record_asset_conflict(self, conflict_key: str,
+                              *, now: Optional[int] = None) -> int:
+        now = int(now if now is not None else time.time())
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO asset_conflicts (conflict_key, confirmations, "
+                "first_seen, last_seen) VALUES (?, 1, ?, ?) ON CONFLICT "
+                "(conflict_key) DO UPDATE SET confirmations = "
+                "confirmations + 1, last_seen = excluded.last_seen",
+                (conflict_key, now, now))
+            row = self.connection.execute(
+                "SELECT confirmations FROM asset_conflicts WHERE "
+                "conflict_key=?", (conflict_key,)).fetchone()
+        return row["confirmations"]
+
+    def clear_asset_conflict(self, conflict_key: str) -> None:
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM asset_conflicts WHERE conflict_key=?",
+                (conflict_key,))
+
+    def asset_conflict_confirmations(self, conflict_key: str) -> int:
+        row = self.connection.execute(
+            "SELECT confirmations FROM asset_conflicts WHERE conflict_key=?",
+            (conflict_key,)).fetchone()
+        return row["confirmations"] if row else 0
+
+    # --------------------------------------------------------- snapshots (v5)
+    def minimum_snapshot_version(self) -> int:
+        row = self.connection.execute(
+            "SELECT minimum_snapshot_version FROM snapshot_state WHERE id=1"
+        ).fetchone()
+        return row["minimum_snapshot_version"] if row else 0
+
+    def record_snapshot(self, snapshot_version: int, body_json: str,
+                        *, now: Optional[int] = None) -> None:
+        now = int(now if now is not None else time.time())
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO network_snapshots (snapshot_version, body_json, "
+                "created_at) VALUES (?,?,?)",
+                (snapshot_version, body_json, now))
+            self.connection.execute(
+                "INSERT INTO snapshot_state (id, minimum_snapshot_version) "
+                "VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET "
+                "minimum_snapshot_version = MAX(minimum_snapshot_version, "
+                "excluded.minimum_snapshot_version)",
+                (snapshot_version,))
+
     # ---------------------------------------------------------------- retention
     def prune(self, *, keep_observation_days: int = 7,
               now: Optional[int] = None) -> int:
@@ -401,4 +730,19 @@ class Store:
                 "DELETE FROM observations WHERE observed_at < ?", (cutoff,))
             self.connection.execute(
                 "DELETE FROM chain_conflicts WHERE last_seen < ?", (cutoff,))
+            # Schema 5: bounded history for challenge rounds, responses,
+            # ingested bundles and asset samples.  The anti-rollback
+            # high-water marks (observer_state, snapshot_state,
+            # operator_state_marker, policy_state) are deliberately NOT
+            # pruned: pruning must never lower a security floor.
+            self.connection.execute(
+                "DELETE FROM chain_challenges WHERE created_at < ?", (cutoff,))
+            self.connection.execute(
+                "DELETE FROM signed_observations WHERE accepted_at < ?",
+                (cutoff,))
+            self.connection.execute(
+                "DELETE FROM asset_quorum_samples WHERE recorded_at < ?",
+                (cutoff,))
+            self.connection.execute(
+                "DELETE FROM asset_conflicts WHERE last_seen < ?", (cutoff,))
         return cursor.rowcount

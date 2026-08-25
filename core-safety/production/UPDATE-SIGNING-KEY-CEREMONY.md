@@ -1,72 +1,88 @@
-# ElectrumX update-signing key ceremony
+# ElectrumX update-signing key ceremony and history
 
-The production ElectrumX release/update signing trust root is **provisioned**.
+This file records the two ElectrumX release/update signing roots. The tracked
+`update-signing-public-key.hex` file is an **immutable historical schema-v1
+template value**, not the live production root. Production packaging replaces
+that bundle member with the independently authenticated current offline public
+key. A source-checkout updater fails closed until the current key is explicitly
+provisioned.
 
-This key is **separate** from the safe-Core policy signing key. Never reuse
-`POLICY_SIGNING_KEY` for ElectrumX release manifests, and never reuse this key
-for safe-Core policy documents.
+The update-signing key is separate from the safe-Core policy signing key.
+Never reuse either private key across those signing domains.
 
-## Ceremony record
+## Current offline production key
 
 | Property | Value |
 | --- | --- |
-| Domain | `ALENOC-RVN-ELECTRUMX-UPDATE-MANIFEST-v1` |
-| Algorithm | Ed25519 (raw 32 byte private key, raw 32 byte public key) |
+| Status | **CURRENT — production release/update trust root** |
+| Algorithm | Ed25519 (raw 32-byte public key) |
+| Public key | `1fd5547dd69443337454f158e3985ca2b7d86657975a177b647ba69319491778` |
+| Key ID | `6f4f944c9b0a19a1` (`sha256(raw_public_key)[:16]`) |
+| Signing domain | `ALENOC-RVN-ELECTRUMX-UPDATE-MANIFEST-v2` |
+| Custody model | Offline only; CI builds unsigned candidates and has no release private-key input |
+| Production copies | Rendered standalone installer, signed release bundle, and signed release provenance |
+| Source-checkout default | Disabled/fail-closed: the tracked file contains the retired historical key |
+
+The exact published v1.13.9, v1.13.10, and v1.13.11 manifests verify under
+this key. Their standalone installers, bundled public-key files, release
+provenance, and manifest signature key IDs all name this same root. The
+replacement v2 trust architecture was introduced for the 1.13.3 transition;
+there was no bridge signature from the retired key.
+
+`core-safety/scripts/build_production_release.py` accepts the current public key
+only as an independently authenticated, non-secret input. It renders that key
+into the standalone installer, replaces the historical key member in the
+bundle, and records the same public key and derived ID in provenance and the
+offline signing handoff. `offline_sign_release.py` derives the public half from
+an owner-owned mode-`0600` offline private-key file, requires it to match the
+handoff, rejects the retired key, and signs only after verifying all bound
+digests. Private-key material must never be committed, logged, added to an
+artifact, or supplied to a job that executes repository or candidate code.
+
+The current key's private storage location and recovery details are deliberately
+not published. Loss of the private key means release signing stops; it does not
+authorize bypassing signature verification.
+
+## Historical / retired CI-held key
+
+| Property | Value |
+| --- | --- |
+| Status | **RETIRED 2026-08-22 — forbidden for production use** |
+| Algorithm | Ed25519 (raw 32-byte public key) |
 | Public key | `4dbeb6131495015b1c44d2d61f80d527217623e1b12dee8f34664509ee3d2b35` |
-| Key ID | `288e85d43f792f83` (`sha256(publicKey)[:16]`) |
-| Ceremony date | 2026-08-21 |
-| Operator | ALENOC |
-| Secret name | `ELECTRUMX_UPDATE_SIGNING_KEY` |
-| Protected environment | `electrumx-release-signing` |
+| Key ID | `288e85d43f792f83` (`sha256(raw_public_key)[:16]`) |
+| Signing domain | `ALENOC-RVN-ELECTRUMX-UPDATE-MANIFEST-v1` |
+| Provisioned | 2026-08-21 in the protected GitHub environment `electrumx-release-signing` as `ELECTRUMX_UPDATE_SIGNING_KEY` |
+| Published use | v1.13.1 release manifest |
+| Retirement reason | The private key had been reachable by CI. On 2026-08-22 release signing moved to an offline-only v2 process in which CI builds unsigned candidates and cannot sign or publish. |
 
-The published public key lives in `update-signing-public-key.hex`. The private
-key was generated under `umask 077` outside any repository working tree, was
-never written to a tracked file, a build artifact, a log, or a job environment
-that executes candidate or source code, and was provisioned into the protected
-environment by piping a file into `gh secret set` rather than passing it as a
-command argument.
+The v1 key's `update-signing-key-attestation.json` remains tracked as immutable
+historical evidence. It embeds its own public key and still verifies under the
+original v1 domain; it grants no present authority. Repository and artifact
+verifiers explicitly reject the retired public key and key ID. Repository
+evidence proves that no current workflow consumes the historical signing
+secret; secret deletion itself is an external administrative fact and is not
+asserted by this document.
 
-The protected environment requires a reviewer approval and only accepts
-deployments from protected branches, so no workflow running on a feature branch
-or on a fork can reach the private key.
+## Rotation semantics
 
-### Storage and recovery
+The v1-to-v2 change was a deliberate trust discontinuity, not an ordinary
+in-band key rotation:
 
-The only online copy of the private key is the GitHub Actions secret, which is
-write-only: it can be replaced but never read back. The operator holds the
-offline copy. If the offline copy is lost, the key cannot be recovered and the
-trust root must be rotated: generate a new keypair under this same ceremony,
-publish the new public key in a reviewed commit, re-run the security audit on
-the resulting tree, and treat every manifest signed by the old key as no longer
-trusted.
+1. v1.13.1 knows only the retired key and schema v1.
+2. The retired key did not sign or endorse its replacement.
+3. Operators had to authenticate the replacement public key out of band and
+   perform the documented manual migration before enabling v2 updates.
+4. Once on the v2 line, ordinary updates require the candidate bundle's update
+   public key to be byte-identical to the already installed key. Consequently,
+   v1.13.10 authenticated v1.13.11 with the same key; no rotation occurred.
 
-### Proof of possession
+A future replacement must update the ceremony, production packaging inputs,
+and all retirement records together, but changing repository prose or a
+template alone cannot rotate existing nodes. Existing nodes require a
+separately authenticated manual migration or an already-deployed, explicitly
+authorized governance transition. There is no inactivity, lost-key, or unsigned
+escape hatch.
 
-`update-signing-key-attestation.json` holds a statement signed by the private
-key over the same domain-separated encoding used for release manifests. It
-proves that the public key published here is the one whose private half sits in
-the protected environment, without exposing any private material.
-`tests/test_update_signing_trust_root.py` verifies that attestation, checks the
-domain binding, and proves that a manifest signed by any other key fails closed.
-
-## Required properties for any future rotation
-
-1. Generate a new Ed25519 keypair specifically for the ElectrumX release/update
-   manifest domain `ALENOC-RVN-ELECTRUMX-UPDATE-MANIFEST-v1`.
-2. Keep the private key only in the protected release-signing environment. It
-   must never be committed, logged, placed in build artifacts, or exposed to
-   jobs that execute candidate/source code.
-3. Record the 32-byte public key, its derived key ID, ceremony date,
-   operator(s), and storage/recovery procedure.
-4. Add only the public key to
-   `core-safety/production/update-signing-public-key.hex` in a reviewed commit.
-5. Keep a regression test proving that a manifest signed by the matching
-   protected private key verifies and that manifests signed by any other key
-   fail closed.
-6. Run the mandatory GLM5.3 security audit on the exact commit/tree containing
-   the production public key and release wiring before publication.
-
-Do not copy a development or test public key into
-`update-signing-public-key.hex`. If the public-key file is absent, the updater
-fails closed by design, which is safer than treating an unceremonied
-development key as a production trust anchor.
+If `update-signing-public-key.hex` is absent, malformed, or names a known-retired
+key, the production updater fails closed.

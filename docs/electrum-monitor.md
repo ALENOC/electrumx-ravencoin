@@ -1,4 +1,4 @@
-# Electrum monitor
+# Ravencoin Network Observer (was: Electrum monitor)
 
 Documentation: [Home](../README.rst) · [Docs index](README.md) ·
 [Security model](security-model.md)
@@ -57,9 +57,9 @@ quiet or stopped answering.
 ## Running it
 
 ```sh
-python -m monitor.cli status
-python -m monitor.cli discover-now --policy safe-core-policy.json
-python -m monitor.cli publish --directory-version 3
+python -m network_observer.cli status
+python -m network_observer.cli discover-now --policy safe-core-policy.json
+python -m network_observer.cli publish --directory-version 3
 ```
 
 `--policy` is verified, not merely read: the document must carry a valid

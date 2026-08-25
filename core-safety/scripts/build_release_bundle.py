@@ -6,9 +6,10 @@
 
 The bundle is not trusted by itself. Its SHA-256 becomes ``artifactDigest`` in
 our separately signed ElectrumX release manifest. The optional Node Monitor is
-vendored at one exact reviewed commit. For the 1.13.3 trust-root migration the
-builder may replace only the bundled copy of the release/update public key; the
-tracked repository trust-root file remains untouched and historical.
+vendored at one exact reviewed commit. The tracked update public-key file is an
+immutable historical schema-v1 value, not the live production root. Production
+packaging replaces only the bundled copy with the independently authenticated
+offline public key and leaves the tracked historical evidence untouched.
 
 ``release-provenance.json`` is synthetic reviewed evidence. Its exact bytes are
 included in the bundle and their SHA-256 is independently signed in manifest v2.
@@ -118,7 +119,7 @@ def build_bundle(*, monitor_dir: pathlib.Path, output: pathlib.Path,
     pin = load_pin()
     monitor = pin["nodeMonitor"]
     if update_public_key_hex is not None and not RAW_KEY_RE.fullmatch(update_public_key_hex):
-        raise BundleError("replacement update public key is malformed")
+        raise BundleError("update public key is malformed")
     if provenance_bytes is None or not isinstance(provenance_bytes, bytes) or \
             not provenance_bytes or len(provenance_bytes) > MAX_PROVENANCE_BYTES:
         raise BundleError("release provenance bytes are missing or exceed the limit")

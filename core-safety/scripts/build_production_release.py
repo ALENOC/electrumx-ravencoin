@@ -126,14 +126,13 @@ def main() -> int:
     timestamp = parse_timestamp(args.release_timestamp)
     public_key_hex = args.update_public_key_hex.strip().lower()
     if not RAW_KEY_RE.fullmatch(public_key_hex):
-        raise ReleaseBuildError("replacement update-signing public key is malformed")
+        raise ReleaseBuildError("production update-signing public key is malformed")
     if public_key_hex == render_installer_v2.RETIRED_UPDATE_PUBLIC_KEY_HEX:
         raise ReleaseBuildError("retired CI-held update-signing key is forbidden")
     public_bytes = bytes.fromhex(public_key_hex)
     public_key_id = update_manifest.key_id_for(public_bytes)
     if public_key_id == render_installer_v2.RETIRED_UPDATE_KEY_ID:
         raise ReleaseBuildError("retired update-signing key id is forbidden")
-
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
     bundle_path = output / BUNDLE_NAME

@@ -4,7 +4,8 @@ from pathlib import Path
 import pytest
 
 
-PATH = Path("core-safety/scripts/configure_monitor_admin_network.py")
+PATH = Path(__file__).resolve().parents[1] / "core-safety" / "scripts" / \
+    "configure_monitor_admin_network.py"
 SPEC = importlib.util.spec_from_file_location("monitor_network", PATH)
 network = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
