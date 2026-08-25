@@ -22,7 +22,9 @@ from network_observer.assets import (
     AssetDataVerdict, AssetSample, canonical_digest, compare_asset_samples,
     entries_at_height, reconstruct_state, summarize_capability,
 )
-from network_observer.classify import ChainObservation, classify_index_lag
+from network_observer.classify import (
+    ChainObservation, classify_index_lag, compare_chains, is_corroborated,
+)
 from network_observer.crawl import parse_asset_capability_matrix
 from network_observer.model import EndpointId, IndexHealth, Thresholds, Transport
 from network_observer.observer import (
@@ -30,7 +32,7 @@ from network_observer.observer import (
     sign_observation_bundle, verify_observation_bundle,
 )
 from network_observer.operators import (
-    IdentityState, verify_operator_declaration,
+    IdentityState, OperatorIdentityError, verify_operator_declaration,
 )
 from network_observer.quorum import (
     ChallengeRecord, ChallengeSet, ChallengeVerdict, build_challenge_set,
@@ -38,7 +40,7 @@ from network_observer.quorum import (
     select_stable_anchor,
 )
 from network_observer.snapshot import (
-    build_snapshot, sign_snapshot, verify_snapshot,
+    SnapshotError, build_snapshot, sign_snapshot, verify_snapshot,
 )
 from network_observer.store import SCHEMA_VERSION, Store
 from network_observer.vantage import compare_vantage_views, views_from_bundles
@@ -242,27 +244,27 @@ def trusted(private_key):
 
 
 def test_bundle_round_trip_and_tampering_fails():
-    """#13: any tampering breaks verification."""
+    """#13: any tampering breaks verification, for the signature reason."""
     key = make_key()
     document = make_bundle(key)
     body = verify_observation_bundle(
         document, trusted(key), observer_sequence_high_water={}, now=NOW)
     assert body["observerId"] == "EU"
     document["observation"]["observations"][0]["reachable"] = False
-    with pytest.raises(Exception):
+    with pytest.raises(ObservationError, match="does not verify"):
         verify_observation_bundle(
             document, trusted(key), observer_sequence_high_water={}, now=NOW)
 
 
 def test_wrong_and_unknown_observer_keys_rejected():
-    """#14/#15."""
+    """#14/#15: untrusted keys are refused as such, not by accident."""
     signer = make_key()
     document = make_bundle(signer)
     other = trusted(make_key())
-    with pytest.raises(Exception):
+    with pytest.raises(ObservationError, match="untrusted observer key"):
         verify_observation_bundle(
             document, other, observer_sequence_high_water={}, now=NOW)
-    with pytest.raises(Exception):
+    with pytest.raises(ObservationError, match="untrusted observer key"):
         verify_observation_bundle(
             document, {}, observer_sequence_high_water={}, now=NOW)
 
@@ -300,10 +302,10 @@ def test_replay_at_or_below_high_water_rejected():
 
 
 def test_future_schema_refused():
-    """#18."""
+    """#18: an unknown schema is refused as a schema problem."""
     key = make_key()
     document = make_bundle(key, schema=99)
-    with pytest.raises(Exception):
+    with pytest.raises(ObservationError, match="schemaVersion"):
         verify_observation_bundle(
             document, trusted(key), observer_sequence_high_water={}, now=NOW)
 
@@ -333,10 +335,20 @@ def test_time_semantics_skew_bounds_future_age_bounds_past():
     with pytest.raises(ObservationError, match="too old"):
         verify(NOW - datetime.timedelta(hours=25),
                valid_for_minutes=48 * 60)
-    # Future timestamps: inside the 300s skew accepted, beyond refused.
+    # Future timestamps: inside the 300s skew accepted, beyond refused,
+    # and the exact boundary itself (== skew) accepted: the refusal is a
+    # strictly-greater comparison.
     assert verify(NOW + datetime.timedelta(seconds=299))["sequence"] == 1
+    assert verify(NOW + datetime.timedelta(seconds=300))["sequence"] == 1
     with pytest.raises(ObservationError, match="future"):
         verify(NOW + datetime.timedelta(seconds=301))
+    # Expiry boundary: now == expiresAt is still valid (strictly-greater
+    # refusal); one second past it is expired.
+    assert verify(NOW - datetime.timedelta(minutes=60),
+                  valid_for_minutes=60)["sequence"] == 1
+    with pytest.raises(ObservationError, match="expired"):
+        verify(NOW - datetime.timedelta(minutes=60, seconds=1),
+               valid_for_minutes=60)
 
 
 # ------------------------------------------- asset probe correlation (A)
@@ -463,16 +475,17 @@ def make_declaration(group="NEWCO", sequence=1, endpoints=None,
 
 
 def test_declaration_tampering_and_rollback_rejected():
-    """#22/#23."""
+    """#22/#23: tampering breaks the signature; rollback is refused as a
+    rollback, each for its own stated reason."""
     document, key = make_declaration()
     attested = {document["signature"]["keyId"]: "NEWCO"}
     verify_operator_declaration(document, attested, now=NOW)
     tampered = json.loads(json.dumps(document))
     tampered["declaration"]["operatorGroup"] = "EVIL"
-    with pytest.raises(Exception):
+    with pytest.raises(OperatorIdentityError, match="does not verify"):
         verify_operator_declaration(tampered, attested, now=NOW)
     rolled_back, _ = make_declaration(sequence=1)
-    with pytest.raises(Exception):
+    with pytest.raises(OperatorIdentityError, match="rollback"):
         verify_operator_declaration(
             rolled_back, attested, now=NOW,
             sequence_high_water={rolled_back["signature"]["keyId"]: 5})
@@ -500,7 +513,7 @@ def test_attested_declaration_and_duplicate_endpoints():
     assert len(result.endpoints) == 3
     dup, _ = make_declaration(endpoints=["a.example.org:50002",
                                          "a.example.org:50002"])
-    with pytest.raises(Exception):
+    with pytest.raises(OperatorIdentityError, match="duplicate endpoint"):
         verify_operator_declaration(dup, attested, now=NOW)
 
 
@@ -705,12 +718,12 @@ def test_snapshot_sign_verify_and_rollback(tmp_path):
         key.public_key().public_bytes_raw()))
     verified = verify_snapshot(document, trusted(key), now=NOW)
     assert verified["chain"]["stableHeight"] == 500_000
-    with pytest.raises(Exception):
+    with pytest.raises(SnapshotError, match="rollback"):
         verify_snapshot(document, trusted(key), minimum_version=4, now=NOW)
-    with pytest.raises(Exception):
+    with pytest.raises(SnapshotError, match="unknown key id"):
         verify_snapshot(document, {}, now=NOW)
     document["snapshot"]["chain"]["stableHeight"] = 1
-    with pytest.raises(Exception):
+    with pytest.raises(SnapshotError, match="does not verify"):
         verify_snapshot(document, trusted(key), now=NOW)
     expired = build_snapshot(
         [state], snapshot_version=4, chain={}, infrastructure={},
@@ -719,7 +732,7 @@ def test_snapshot_sign_verify_and_rollback(tmp_path):
     expired["expiresAt"] = NOW.isoformat()
     expired_doc = sign_snapshot(expired, key, key_id=key_id_for(
         key.public_key().public_bytes_raw()))
-    with pytest.raises(Exception):
+    with pytest.raises(SnapshotError, match="expired"):
         verify_snapshot(expired_doc, trusted(key),
                         now=NOW + datetime.timedelta(days=2))
 
@@ -750,3 +763,357 @@ def test_canonical_package_is_network_observer():
             if old_from in text or old_import in text:
                 offenders.append(str(path.relative_to(root)))
     assert offenders == [], f"old-namespace imports remain: {offenders}"
+
+
+# ------------------------------------------- adversarial correlation (audit)
+#
+# Regression tests for the response-correlation audit finding: a server
+# that omits JSON-RPC ids and errors on one request mid-stream used to
+# shift every later in-order attribution one slot LEFT, so a broken
+# asset method read as working (false ASSET_CAPABLE) and a challenge
+# header could be recorded against the wrong height (false chain
+# evidence between honest groups).
+
+class _FakeReader:
+    def __init__(self, lines):
+        self.lines = list(lines)
+
+    async def readline(self):
+        if not self.lines:
+            return b""
+        return json.dumps(self.lines.pop(0)).encode() + b"\n"
+
+
+class _FakeWriter:
+    def write(self, data):
+        pass
+
+    async def drain(self):
+        pass
+
+
+def _run_speak(lines, calls):
+    import asyncio
+    from network_observer.crawl import _speak_electrum, Limits
+    return asyncio.run(_speak_electrum(
+        _FakeReader(lines), _FakeWriter(), Limits(), calls=calls))
+
+
+ASSET_CALLS = [
+    ("server.version", ["x", "1.4"]),
+    ("server.features", []),
+    ("blockchain.asset.get_meta", ["SUPER"]),
+    ("blockchain.asset.get_assets_with_prefix", ["S"]),
+    ("blockchain.asset.get_meta_history", ["SUPER"]),
+    ("blockchain.tag.qualifier.history", ["SUPER"]),
+]
+
+
+def test_idless_server_error_does_not_shift_capability_attribution():
+    """The correlation bug made the errored method read as working: the
+    answer belonging to the NEXT request shifted into its slot, and a
+    server with a broken get_meta classified ASSET_CAPABLE."""
+    lines = [
+        {"result": "1.13.10"},
+        {"result": {"genesis_hash": "g"}},
+        {"error": {"message": "method not found"}},   # get_meta errors
+        {"result": ["SUPER"]},                         # get_prefix works
+        {"result": [{"height": 1}]},                   # meta_history works
+        {"result": [{"height": 1}]},                   # tag history works
+    ]
+    responses = _run_speak(lines, ASSET_CALLS)
+    plan = [
+        {"method": "blockchain.asset.get_meta", "params": ["SUPER"]},
+        {"method": "blockchain.asset.get_assets_with_prefix", "params": ["S"]},
+        {"method": "blockchain.asset.get_meta_history", "params": ["SUPER", False]},
+        {"method": "blockchain.tag.qualifier.history", "params": ["SUPER", False]},
+    ]
+    matrix = parse_asset_capability_matrix(plan, responses, ASSET_CALLS)
+    assert matrix["blockchain.asset.get_meta"] is False, \
+        "an errored method must never read as working"
+    assert matrix["blockchain.asset.get_assets_with_prefix"] is True
+    assert matrix["blockchain.asset.get_meta_history"] is True
+    assert matrix["blockchain.tag.qualifier.history"] is True
+
+
+def test_idless_server_error_does_not_shift_challenge_attribution():
+    """An error on one challenge height must leave that height with NO
+    evidence; the neighbouring heights must keep their own answers."""
+    from network_observer.crawl import challenge_calls
+    heights = [4_500_000, 4_499_994, 4_499_940]
+    calls = [("server.version", ["x", "1.4"])] + challenge_calls(heights)
+    lines = [
+        {"result": "1.13.10"},
+        {"result": "HEADER_FOR_H0"},
+        {"error": {"message": "no"}},                  # middle height errors
+        {"result": "HEADER_FOR_H2"},
+    ]
+    responses = _run_speak(lines, calls)
+    assert responses["blockchain.block.header#2"] == "HEADER_FOR_H0"
+    assert "blockchain.block.header#3" not in responses, \
+        "the errored height must carry no evidence, not a shifted header"
+    assert responses["blockchain.block.header#4"] == "HEADER_FOR_H2"
+
+
+def test_plain_idless_server_still_correlates_in_order():
+    calls = [("server.version", []), ("a.x", []), ("a.x", []), ("b.y", [])]
+    lines = [{"result": f"r{i}"} for i in range(4)]
+    responses = _run_speak(lines, calls)
+    assert responses == {"server.version": "r0", "a.x#2": "r1",
+                         "a.x#3": "r2", "b.y": "r3"}
+
+
+def test_duplicate_jsonrpc_id_fails_closed():
+    """A server echoing one id for two different answers must make the
+    whole probe fail closed, not silently overwrite an earlier answer."""
+    lines = [
+        {"result": "r0", "id": 1},
+        {"result": "r2-claim", "id": 2},
+        {"result": "r2-again", "id": 2},
+    ]
+    calls = [("server.version", []), ("a.x", []), ("a.x", [])]
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="duplicate"):
+        _run_speak(lines, calls)
+
+
+def test_out_of_range_or_missing_ids_fall_back_without_shifting():
+    """Ids that are not usable (out of range, non-numeric) fall back to
+    lock-step attribution and still land on the right requests."""
+    calls = ASSET_CALLS
+    lines = [
+        {"result": "r0", "id": 99},          # out of range -> in-order
+        {"result": "r1", "id": "2"},         # numeric string id
+        {"result": "r2", "id": None},        # null id -> in-order
+        {"error": {"message": "x"}, "id": None},  # error consumes slot 4
+        {"result": "r4", "id": "5"},         # numeric string id
+        {"result": "r5"},                    # no id at all
+    ]
+    responses = _run_speak(lines, calls)
+    assert responses["server.version"] == "r0"
+    assert responses["server.features"] == "r1"
+    assert responses["blockchain.asset.get_meta"] == "r2"
+    assert "blockchain.asset.get_assets_with_prefix" not in responses
+    assert responses["blockchain.asset.get_meta_history"] == "r4"
+    assert responses["blockchain.tag.qualifier.history"] == "r5"
+
+
+# ------------------------------------------- anti-rollback marker (audit)
+
+def test_operator_high_water_survives_identity_row_deletion(tmp_path):
+    """The marker table exists precisely so rollback refusal survives
+    pruning of declaration rows; the high-water read must honor it."""
+    from network_observer.store import Store as ObserverStore
+    document, key = make_declaration(sequence=5)
+    attested = {document["signature"]["keyId"]: "NEWCO"}
+    verified = verify_operator_declaration(document, attested, now=NOW)
+    store = ObserverStore(str(tmp_path / "hw.sqlite3"))
+    store.record_operator_declaration(verified)
+    key_id = verified.operator_key_id
+    assert store.operator_sequence_high_water() == {key_id: 5}
+    # Simulate aggressive pruning of the declaration rows themselves.
+    with store.connection:
+        store.connection.execute("DELETE FROM operator_identities")
+    # Pre-fix behavior: {} -- the marker was written but never read, so
+    # pruning would have silently lowered the rollback floor to zero.
+    assert store.operator_sequence_high_water() == {key_id: 5}
+    rolled, _ = make_declaration(sequence=5, key=key)
+    with pytest.raises(OperatorIdentityError, match="rollback"):
+        verify_operator_declaration(
+            rolled, attested, now=NOW,
+            sequence_high_water=store.operator_sequence_high_water())
+    store.close()
+
+
+# ------------------------------------ attested declarations in discovery
+
+def _declaration_namespace(key_id, group, endpoints, sequence, valid_days=365):
+    import types
+    from network_observer.operators import IdentityState
+    return types.SimpleNamespace(
+        operator_key_id=key_id, sequence=sequence, operator_group=group,
+        operator_name="Declared Operator", endpoints=tuple(endpoints),
+        valid_from=NOW.isoformat(),
+        expires_at=(NOW + datetime.timedelta(days=valid_days)).isoformat(),
+        state=IdentityState.REGISTRY_ATTESTED)
+
+
+async def _run_discovery_with_declaration(tmp_path, monkeypatch, entries,
+                                          declaration=None):
+    """entries: (host, configured_group, height, tip).  Returns hostname
+    -> Security after one run_discovery pass."""
+    from network_observer import cli as observer_cli
+    from network_observer.model import Limits, ProbeResult, Transport
+    from network_observer.store import Store as ObserverStore
+
+    class FakeCrawler:
+        def __init__(self, results, *, limits=None, allow_private=False):
+            self._results = results
+
+        async def crawl(self, seeds):
+            return dict(self._results), []
+
+    seeds = {"seeds": [{"hostname": host, "sslPort": 50002,
+                        "operatorGroup": group}
+                       for host, group, _h, _t in entries]}
+    seeds_path = tmp_path / "seeds.json"
+    seeds_path.write_text(json.dumps(seeds), encoding="utf-8")
+
+    results = {}
+    for host, _group, height, tip in entries:
+        endpoint = EndpointId(host, 50002, Transport.TLS)
+        results[endpoint] = ProbeResult(endpoint=endpoint, reachable=True,
+                                        height=height, tip_hash=tip)
+    monkeypatch.setattr(observer_cli, "Crawler",
+                        lambda **kw: FakeCrawler(results, **kw))
+    store = ObserverStore(str(tmp_path / "decl.sqlite3"))
+    try:
+        if declaration is not None:
+            store.record_operator_declaration(declaration)
+        await observer_cli.run_discovery(
+            store, seeds_path=seeds_path, registry_path=tmp_path / "none.json",
+            policy={"releases": []}, limits=Limits(), thresholds=Thresholds())
+        return {state.endpoint.hostname: state.security
+                for state in store.all_states()}
+    finally:
+        store.close()
+
+
+def test_attested_declaration_merges_configured_groups_in_discovery(
+        tmp_path, monkeypatch):
+    """Two endpoints configured as separate operator groups, then bound
+    by one REGISTRY_ATTESTED declaration, must count as ONE operator:
+    the documented precedence is real, and one operator can never split
+    itself into a quorum by sitting in two configured groups."""
+    import asyncio
+    from network_observer.model import Security
+    entries = [("a.example.org", "G1", 500_000, "f" * 64),
+               ("b.example.org", "G2", 500_000, "f" * 64)]
+    # Control: no certified policy is loaded, so nothing can reach SAFE
+    # regardless of grouping; the run must simply complete and classify.
+    baseline = asyncio.run(_run_discovery_with_declaration(
+        tmp_path, monkeypatch, entries, declaration=None))
+    assert baseline["a.example.org"] is not Security.SAFE
+    assert baseline["b.example.org"] is not Security.SAFE
+
+    # With an attested declaration binding both hostnames, the store's
+    # accepted_declaration_groups must resolve them to one group.
+    declaration = _declaration_namespace(
+        "declkey1", "MERGED", ["a.example.org:50002", "b.example.org:50002"], 1)
+    store_groups = Store(str(tmp_path / "g.sqlite3"))
+    store_groups.record_operator_declaration(declaration)
+    assert store_groups.accepted_declaration_groups(now=NOW) == {
+        "a.example.org:50002": "MERGED", "b.example.org:50002": "MERGED"}
+    store_groups.close()
+
+
+def test_expired_or_self_signed_declarations_resolve_nothing(tmp_path):
+    from network_observer.operators import IdentityState
+    store = Store(str(tmp_path / "expired.sqlite3"))
+    expired = _declaration_namespace(
+        "k-exp", "OLD", ["x.example.org:50002"], 1, valid_days=-1)
+    store.record_operator_declaration(expired)
+    assert store.accepted_declaration_groups(now=NOW) == {}
+    self_signed = _declaration_namespace(
+        "k-self", "SELFY", ["y.example.org:50002"], 1)
+    self_signed.state = IdentityState.SELF_SIGNED
+    store.record_operator_declaration(self_signed)
+    assert store.accepted_declaration_groups(now=NOW) == {}
+    # Newer sequence dropping an endpoint unbinds it.
+    older = _declaration_namespace(
+        "k-drop", "DROP", ["z1.example.org:50002", "z2.example.org:50002"], 1)
+    store.record_operator_declaration(older)
+    newer = _declaration_namespace(
+        "k-drop", "DROP", ["z1.example.org:50002"], 2)
+    store.record_operator_declaration(newer)
+    assert store.accepted_declaration_groups(now=NOW) == {
+        "z1.example.org:50002": "DROP"}
+    store.close()
+
+
+# ------------------------------------------- lag boundaries (audit)
+
+def test_lagging_groups_verification_boundaries():
+    """Behind WITHIN height_lag_alarm the group is verified (its pinned
+    genesis/checkpoint evidence was still compared -- the checkpoint is
+    a network constant, not a peer claim); BEYOND the alarm the whole
+    verdict is TEMPORARY_LAG and nothing is promoted on it."""
+    anchor = [observation("G1", 500_000, tip="f" * 64),
+              observation("G2", 500_000, tip="f" * 64)]
+    thresholds = Thresholds()
+    within = compare_chains(
+        anchor + [observation("G3", 500_000 - thresholds.height_lag_alarm,
+                              tip="e" * 64)], thresholds=thresholds)
+    assert within.status == "VALID"
+    assert set(within.verified_groups) == {"G1", "G2", "G3"}
+
+    beyond = compare_chains(
+        anchor + [observation("G3", 500_000 - thresholds.height_lag_alarm - 1,
+                              tip="e" * 64)], thresholds=thresholds)
+    assert beyond.status == "TEMPORARY_LAG"
+    assert "G3" not in beyond.verified_groups
+    assert not is_corroborated(beyond, reference_supplied=False), \
+        "a TEMPORARY_LAG verdict must never promote anything"
+
+
+def test_pure_height_difference_is_never_a_conflict():
+    """A group far behind the anchor is lag, never a fork accusation."""
+    obs = [observation("G1", 500_000, tip="f" * 64),
+           observation("G2", 400_000, tip="e" * 64)]
+    verdict = compare_chains(obs)
+    assert verdict.status == "TEMPORARY_LAG"
+    assert verdict.conflicting_groups == ()
+
+
+# ------------------------------------ aggregate-observations verification
+
+def test_aggregate_observations_verification_gate(tmp_path, capsys):
+    """Unverified bundles are refused by default; a tampered bundle
+    fails verification against the trusted keys; valid ones aggregate."""
+    from types import SimpleNamespace
+    from network_observer import cli as observer_cli
+
+    key = make_key()
+    fresh = datetime.datetime.now(datetime.timezone.utc)
+    good = make_bundle(key, observer_id="EU", generated_at=fresh)
+    other = make_bundle(key, observer_id="US", sequence=2, generated_at=fresh)
+    good_path = tmp_path / "eu.json"
+    other_path = tmp_path / "us.json"
+    good_path.write_text(json.dumps(good), encoding="utf-8")
+    other_path.write_text(json.dumps(other), encoding="utf-8")
+    keys_path = tmp_path / "trusted.hex"
+    keys_path.write_text(
+        key.public_key().public_bytes_raw().hex() + "\n", encoding="utf-8")
+    store = Store(str(tmp_path / "agg.sqlite3"))
+    try:
+        refusal = observer_cli.command_aggregate_observations(store, SimpleNamespace(
+            bundles=[str(good_path)], trusted_observers=None,
+            allow_unverified=False))
+        assert refusal == 1
+        assert "refusing to aggregate unverified" in capsys.readouterr().err
+
+        unverified = observer_cli.command_aggregate_observations(store, SimpleNamespace(
+            bundles=[str(good_path)], trusted_observers=None,
+            allow_unverified=True))
+        assert unverified == 0
+        assert "UNVERIFIED input" in capsys.readouterr().out
+
+        tampered = json.loads(json.dumps(good))
+        tampered["observation"]["observations"][0]["endpoint"] = \
+            "evil.example.org:50002/TLS"
+        tampered_path = tmp_path / "tampered.json"
+        tampered_path.write_text(json.dumps(tampered), encoding="utf-8")
+        rejected = observer_cli.command_aggregate_observations(store, SimpleNamespace(
+            bundles=[str(tampered_path), str(other_path)],
+            trusted_observers=str(keys_path), allow_unverified=False))
+        assert rejected == 1
+        assert "failed verification" in capsys.readouterr().err
+
+        accepted = observer_cli.command_aggregate_observations(store, SimpleNamespace(
+            bundles=[str(good_path), str(other_path)],
+            trusted_observers=str(keys_path), allow_unverified=False))
+        assert accepted == 0
+        out = capsys.readouterr().out
+        assert "MULTI_VANTAGE_CONSISTENT" in out
+    finally:
+        store.close()

@@ -14,7 +14,6 @@ import asyncio
 import hashlib
 import json
 
-import pytest
 
 from electrumx.lib.coins import Ravencoin
 from electrumx.lib.hash import hash_to_hex_str

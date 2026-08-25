@@ -23,7 +23,7 @@ clean comparison, not merely one crawl where the offender went quiet.
 
 These all run the real (async) run_discovery(), the code path that had
 the bugs, with a fake Crawler standing in for the network -- the same
-pattern as tests/test_monitor_safe_promotion.py.
+pattern as tests/test_network_observer_safe_promotion.py.
 """
 
 import asyncio

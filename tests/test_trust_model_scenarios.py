@@ -15,9 +15,12 @@ never collapse into one another:
     TRUSTED_BY_OPERATOR   an operator's own configuration decided to trust it
 
 Most of the underlying behaviour is already covered in depth by
-test_monitor_safe_promotion.py, test_monitor_safe_promotion_r2.py,
-test_monitor_chain_evidence.py, test_monitor_policy_verification.py,
-test_monitor_operator_diversity.py and test_monitor.py (directory signing).
+test_network_observer_safe_promotion.py,
+test_network_observer_safe_promotion_r2.py,
+test_network_observer_chain_evidence.py,
+test_network_observer_policy_verification.py,
+test_network_observer_operator_diversity.py and
+test_network_observer.py (directory signing).
 This file adds only the scenarios not already exercised elsewhere (scenario
 J), and otherwise calls the real classify.py/ravencoin_backend.py/
 directory.py primitives directly so the A-J mapping is explicit in one

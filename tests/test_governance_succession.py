@@ -313,10 +313,11 @@ def test_transition_binding_blocks_substitution(five_keys):
 
 def test_release_multi_signature_threshold(five_keys):
     """#19: a compromised single key cannot reach 3-of-5 release
-    authorization; three honest keys can."""
+    authorization; three honest keys can; a policy-domain signature
+    never authorizes a release payload."""
     active, _ = active_policy(five_keys)
     payload = {"electrumxVersion": "1.14.0", "artifactDigest": "sha256:" + "a" * 64}
-    signed_payload = governance.POLICY_SIGNATURE_DOMAIN \
+    signed_payload = governance.RELEASE_SIGNATURE_DOMAIN \
         + governance.canonical_bytes(payload)
     document = {"governedPayload": payload,
                 "signatures": [sign(five_keys[4], signed_payload)]}
@@ -324,6 +325,14 @@ def test_release_multi_signature_threshold(five_keys):
     document["signatures"] = [sign(five_keys[i], signed_payload)
                               for i in (0, 2, 4)]
     assert governance.verify_release_governance(document, active) == 3
+    # Cross-domain replay: valid maintainers signing the same payload
+    # under the POLICY domain authorize nothing here.
+    policy_domain_payload = governance.POLICY_SIGNATURE_DOMAIN \
+        + governance.canonical_bytes(payload)
+    replayed = {"governedPayload": payload,
+                "signatures": [sign(five_keys[i], policy_domain_payload)
+                               for i in (0, 2, 4)]}
+    assert governance.verify_release_governance(replayed, active) == 0
     with pytest.raises(governance.GovernanceError, match="release-domain"):
         core_policy = governance.validate_policy_body(
             policy_body(five_keys, domain=governance.DOMAIN_CORE_SAFETY))

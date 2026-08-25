@@ -18,8 +18,6 @@ had the bug, with a fake Crawler standing in for the network.
 import asyncio
 import json
 
-import pytest
-
 from network_observer import cli
 from network_observer.classify import ChainObservation
 from network_observer.model import (
@@ -35,7 +33,6 @@ CERTIFIED_POLICY = {
         "certification": {"profile": "rvn-consensus-2026-08-v1", "result": "PASS"},
     }]
 }
-
 
 def _backend_payload():
     core = {
@@ -57,9 +54,8 @@ def _backend_payload():
         "observedAt": 1786790000,
     }
 
-
 class _FakeCrawler:
-    """Stands in for monitor.crawl.Crawler: returns pre-built probe results
+    """Stands in for network_observer.crawl.Crawler: returns pre-built probe results
     instead of touching the network."""
 
     def __init__(self, results, *, limits=None, allow_private=False):
@@ -67,7 +63,6 @@ class _FakeCrawler:
 
     async def crawl(self, seeds):
         return dict(self._results), []
-
 
 def _write_seeds(tmp_path, entries):
     """entries: list of (hostname, port, operatorGroup)."""
@@ -79,7 +74,6 @@ def _write_seeds(tmp_path, entries):
     path.write_text(json.dumps(seeds), encoding="utf-8")
     return path
 
-
 def _probe_result(endpoint, *, height, tip_hash):
     return ProbeResult(
         endpoint=endpoint, reachable=True,
@@ -87,7 +81,6 @@ def _probe_result(endpoint, *, height, tip_hash):
         height=height, tip_hash=tip_hash, backend=_backend_payload(),
         asset_support=AssetSupport.CAPABLE,
     )
-
 
 async def _run(monkeypatch, tmp_path, entries, *, reference=None):
     """entries: list of (hostname, port, operatorGroup, height, tip_hash)."""
@@ -112,13 +105,11 @@ async def _run(monkeypatch, tmp_path, entries, *, reference=None):
     finally:
         store.close()
 
-
 def test_single_endpoint_alone_is_not_sufficient_for_safe(monkeypatch, tmp_path):
     security = asyncio.run(_run(monkeypatch, tmp_path, [
         ("solo.example.org", 50002, "OPERATOR-A", 4_500_000, "a" * 64),
     ]))
     assert security["solo.example.org"] is not Security.SAFE
-
 
 def test_two_endpoints_same_operator_are_not_independent(monkeypatch, tmp_path):
     security = asyncio.run(_run(monkeypatch, tmp_path, [
@@ -128,7 +119,6 @@ def test_two_endpoints_same_operator_are_not_independent(monkeypatch, tmp_path):
     assert security["one.example.org"] is not Security.SAFE
     assert security["two.example.org"] is not Security.SAFE
 
-
 def test_two_independent_agreeing_endpoints_are_eligible_for_safe(monkeypatch, tmp_path):
     security = asyncio.run(_run(monkeypatch, tmp_path, [
         ("one.example.org", 50002, "OPERATOR-A", 4_500_000, "a" * 64),
@@ -137,7 +127,6 @@ def test_two_independent_agreeing_endpoints_are_eligible_for_safe(monkeypatch, t
     assert security["one.example.org"] is Security.SAFE
     assert security["two.example.org"] is Security.SAFE
 
-
 def test_two_independent_conflicting_endpoints_fail_closed(monkeypatch, tmp_path):
     security = asyncio.run(_run(monkeypatch, tmp_path, [
         ("one.example.org", 50002, "OPERATOR-A", 4_500_000, "a" * 64),
@@ -145,7 +134,6 @@ def test_two_independent_conflicting_endpoints_fail_closed(monkeypatch, tmp_path
     ]))
     assert security["one.example.org"] is not Security.SAFE
     assert security["two.example.org"] is not Security.SAFE
-
 
 def test_conflict_suspected_does_not_promote(monkeypatch, tmp_path):
     """A single disagreement (one confirmation) is CONFLICT_SUSPECTED, not a
@@ -157,7 +145,6 @@ def test_conflict_suspected_does_not_promote(monkeypatch, tmp_path):
     ]))
     assert all(value is not Security.SAFE for value in security.values())
 
-
 def test_highest_self_reported_height_alone_does_not_promote(monkeypatch, tmp_path):
     """An attacker claiming the highest height, alone, must not become a
     trust anchor that grants itself SAFE: it is still exactly one operator
@@ -167,7 +154,6 @@ def test_highest_self_reported_height_alone_does_not_promote(monkeypatch, tmp_pa
     ]))
     assert security["attacker.example.org"] is not Security.SAFE
 
-
 def test_many_hostnames_under_one_operator_do_not_manufacture_quorum(monkeypatch, tmp_path):
     """Many self-consistent hostnames under a single operator group are
     still one group: SRV-05's Sybil concern applied to the SRV-04 gate."""
@@ -176,13 +162,11 @@ def test_many_hostnames_under_one_operator_do_not_manufacture_quorum(monkeypatch
     security = asyncio.run(_run(monkeypatch, tmp_path, entries))
     assert all(value is not Security.SAFE for value in security.values())
 
-
 def test_reference_anchor_missing_is_conservative(monkeypatch, tmp_path):
     security = asyncio.run(_run(monkeypatch, tmp_path, [
         ("solo.example.org", 50002, "OPERATOR-A", 4_500_000, "a" * 64),
     ], reference=None))
     assert security["solo.example.org"] is not Security.SAFE
-
 
 def test_reference_anchor_present_allows_promotion_with_one_group(monkeypatch, tmp_path):
     reference = ChainObservation(
@@ -192,7 +176,6 @@ def test_reference_anchor_present_allows_promotion_with_one_group(monkeypatch, t
         ("solo.example.org", 50002, "OPERATOR-A", 4_500_000, "a" * 64),
     ], reference=reference))
     assert security["solo.example.org"] is Security.SAFE
-
 
 def test_unknown_operator_hostnames_do_not_manufacture_promotion_quorum(monkeypatch, tmp_path):
     """SRV-05 applied to the SRV-04 gate: endpoints with no known operator
@@ -206,7 +189,6 @@ def test_unknown_operator_hostnames_do_not_manufacture_promotion_quorum(monkeypa
     ]))
     assert all(value is not Security.SAFE for value in security.values())
 
-
 def test_one_known_and_one_unknown_group_does_not_promote(monkeypatch, tmp_path):
     """A single attested operator plus an unrelated unknown hostname is
     still only one attested independent group."""
@@ -215,7 +197,6 @@ def test_one_known_and_one_unknown_group_does_not_promote(monkeypatch, tmp_path)
         ("unknown.example.org", 50002, None, 4_500_000, "a" * 64),
     ]))
     assert all(value is not Security.SAFE for value in security.values())
-
 
 def test_reference_anchor_present_but_disagreeing_does_not_promote(monkeypatch, tmp_path):
     reference = ChainObservation(
