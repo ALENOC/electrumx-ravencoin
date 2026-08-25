@@ -6,7 +6,7 @@
 This program performs no network I/O. Signing accepts the candidate handoff
 created by ``build_production_release.py``, verifies every bound digest again,
 verifies that the private key derives the independently authenticated
-replacement public key, rejects the retired CI-held key, and writes the signed
+current production public key, rejects the retired CI-held key, and writes the signed
 manifest plus final checksums.
 
 ``--verify-only`` never opens a private key. It verifies the signed manifest
@@ -61,7 +61,7 @@ def sha256(path: pathlib.Path) -> str:
 def _normalize_public_key(value: str) -> str:
     normalized = value.strip().lower()
     if not HEX_RE.fullmatch(normalized):
-        raise OfflineSigningError("expected replacement public key is malformed")
+        raise OfflineSigningError("expected production public key is malformed")
     return normalized
 
 
@@ -109,7 +109,7 @@ def verify_candidate(directory: pathlib.Path, expected_public_key: str) -> tuple
         raise OfflineSigningError("handoff public key differs from independently supplied key")
     key_id = update_manifest.key_id_for(bytes.fromhex(expected_public_key))
     if inputs.get("expectedKeyId") != key_id:
-        raise OfflineSigningError("handoff key id differs from replacement public key")
+        raise OfflineSigningError("handoff key id differs from production public key")
     if inputs.get("retiredKeyIdForbidden") != render_installer_v2.RETIRED_UPDATE_KEY_ID:
         raise OfflineSigningError("handoff does not bind the retired-key prohibition")
     if key_id == render_installer_v2.RETIRED_UPDATE_KEY_ID or \

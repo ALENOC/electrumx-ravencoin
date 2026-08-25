@@ -190,6 +190,13 @@ The signed release installer is the recommended production entry point because
 it binds the downloaded bundle, release manifest, and independent Core policy
 to their verification paths.
 
+The checkout's ``core-safety/production/update-signing-public-key.hex`` is the
+live production update trust root, not a packaging template. ``setup.sh`` does
+not create signed-release updater state or install the ``electrumx-update``
+command; operators who deliberately wire the updater to a source deployment
+still use that canonical key, and the updater refuses a stale checkout naming a
+known-retired root.
+
 Supported systems
 =================
 
@@ -237,7 +244,7 @@ Update
 Updates are explicit and operator-driven. Availability of a newer release does
 not imply silent installation.
 
-Normal maintenance uses:
+For installations made by the signed release installer, normal maintenance uses:
 
 .. code-block:: sh
 

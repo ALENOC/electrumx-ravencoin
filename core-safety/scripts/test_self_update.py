@@ -72,14 +72,15 @@ def _signed_manifest(key_pair, *, core_commit="c" * 40, architecture="linux/amd6
                      artifact_digest="sha256:" + "d" * 64, channel="stable",
                      electrumx_version="1.3.0", rollback_safe=True,
                      consensus_impact=False, cert_digest="c" * 64,
-                     db_schema=1, auto_update_eligible=True):
+                     db_schema=1, auto_update_eligible=True,
+                     provenance_digest=CANDIDATE_PROVENANCE_DIGEST):
         private_key, public_bytes = key_pair
         body = um.build_manifest(
             electrumx_version=electrumx_version,
             artifact_revision=0,
             channel=channel,
             artifact_digest=artifact_digest,
-            provenance_digest=CANDIDATE_PROVENANCE_DIGEST,
+            provenance_digest=provenance_digest,
             architecture=architecture,
             core_version="4.8.0", core_repository="RavenProject/Ravencoin",
             core_tag="v4.8.0", core_commit=core_commit,
@@ -367,11 +368,60 @@ class RunCheckAndApplyIntegrationTests(unittest.TestCase):
         self.high_water = _empty_high_water()
 
     def _candidate(self, **overrides):
+        version = overrides.pop(
+            "version", overrides.get("electrumx_version", "1.3.0"))
         signed, _, _ = _signed_manifest(self.key_pair, **overrides)
-        defaults = dict(version="1.3.0", channel="stable", is_prerelease=False,
+        defaults = dict(version=version, channel="stable", is_prerelease=False,
                         signed_manifest_document=signed, artifact_bytes=b"x",
-                        artifact_digest="sha256:" + "d" * 64)
+                        artifact_digest=overrides.get(
+                            "artifact_digest", "sha256:" + "d" * 64))
         return ReleaseCandidate(**defaults)
+
+    def test_current_release_check_ignores_retired_strictly_older_manifest(self):
+        current = self._candidate(
+            electrumx_version="1.2.0",
+            artifact_digest=CURRENT_ARTIFACT_DIGEST,
+            provenance_digest=CURRENT_PROVENANCE_DIGEST)
+        retired = ReleaseCandidate(
+            version="1.1.0", channel="stable", is_prerelease=False,
+            signed_manifest_document={
+                "manifest": {"schemaVersion": 1},
+                "signature": {
+                    "algorithm": "ed25519",
+                    "keyId": "288e85d43f792f83",
+                    "value": "historical",
+                },
+            },
+            artifact_bytes=None, artifact_digest=None)
+        state = run_check(
+            state=UpdateState(current_release=_current_release()),
+            source=ReleaseSource(list_candidates=lambda: [current, retired]),
+            host=self.host, trusted_keys=self.trusted_keys,
+            safe_core_certified_commits=self.safe_commits,
+            artifact_high_water=self.high_water, auto_update_mode="stable")
+        self.assertIsNone(state.pending_candidate)
+        self.assertIsNone(state.failure_reason)
+
+    def test_same_version_retired_key_manifest_still_fails_visible(self):
+        retired = ReleaseCandidate(
+            version="1.2.0", channel="stable", is_prerelease=False,
+            signed_manifest_document={
+                "manifest": {"schemaVersion": 1},
+                "signature": {
+                    "algorithm": "ed25519",
+                    "keyId": "288e85d43f792f83",
+                    "value": "historical",
+                },
+            },
+            artifact_bytes=None, artifact_digest=None)
+        state = run_check(
+            state=UpdateState(current_release=_current_release()),
+            source=ReleaseSource(list_candidates=lambda: [retired]),
+            host=self.host, trusted_keys=self.trusted_keys,
+            safe_core_certified_commits=self.safe_commits,
+            artifact_high_water=self.high_water, auto_update_mode="stable")
+        self.assertIsNone(state.pending_candidate)
+        self.assertIn("unknown key id '288e85d43f792f83'", state.failure_reason)
 
     def test_successful_check_then_apply_promotes(self):
         state = UpdateState(current_release=_current_release())

@@ -18,7 +18,7 @@ on:
         description: Reviewed ISO-8601 timestamp with timezone
         required: true
       update_public_key_hex:
-        description: Out-of-band authenticated replacement Ed25519 public key (hex)
+        description: Independently authenticated current production Ed25519 public key (hex)
         required: true
 
 permissions:
@@ -54,7 +54,7 @@ jobs:
 
           retired = "4dbeb6131495015b1c44d2d61f80d527217623e1b12dee8f34664509ee3d2b35"
           public = os.environ["UPDATE_PUBLIC_KEY_HEX"].strip().lower()
-          assert re.fullmatch(r"[0-9a-f]{64}", public), "replacement public key is malformed"
+          assert re.fullmatch(r"[0-9a-f]{64}", public), "production public key is malformed"
           assert public != retired, "retired CI-held update key is forbidden"
           revision = os.environ["ARTIFACT_REVISION"]
           assert re.fullmatch(r"0|[1-9][0-9]*", revision), "artifact_revision is not canonical"

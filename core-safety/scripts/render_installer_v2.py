@@ -48,7 +48,7 @@ def _embedded_revision_block() -> str:
 def render(*, output: pathlib.Path, public_key_hex: str) -> None:
     public_key_hex = public_key_hex.strip().lower()
     if not KEY_RE.fullmatch(public_key_hex):
-        raise RenderError("replacement update public key is malformed")
+        raise RenderError("update public key is malformed")
     if public_key_hex == RETIRED_UPDATE_PUBLIC_KEY_HEX:
         raise RenderError("retired CI-held update key is forbidden for 1.13.11")
     if hashlib.sha256(bytes.fromhex(public_key_hex)).hexdigest()[:16] == RETIRED_UPDATE_KEY_ID:
