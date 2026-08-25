@@ -194,3 +194,36 @@ transactional migrations, bounded retention). Known limitation, stated
 plainly: with exactly two attested operators, a hash or asset-data
 disagreement identifies a conflict between them but cannot say which
 one lies; the monitor reports exactly that and never guesses.
+
+## Architecture and boundaries
+
+```
+Ravencoin Core
+      |
+      v
+  ElectrumX
+      |  +-- wallet / RavenTag clients
+      |  +-- observed by
+      |          |
+      |          v
+      |   Ravencoin Network Observer
+      |          |
+      |   +------+------+
+      |   v     v      v
+      | Node A Node B Node C
+      |   |      |      |
+      | Core A  Core B  Core C
+      |
+ravencoin-node-monitor  (separate component)
+      |
+      +-- local Core / ElectrumX / system health only
+```
+
+The Ravencoin Network Observer is not in the wallet transaction path,
+is not a proxy, is not a Ravencoin consensus authority, does not
+replace `server.ravencoin_backend`, and does not modify legacy
+Electrum clients.  The bundled `vendor/ravencoin-node-monitor` remains
+the LOCAL node health dashboard and is a distinct codebase on purpose.
+Terminology: "Ravencoin Network Observer" is the system; an "observer
+instance" is one independently deployed vantage point (EU, US, Asia);
+the "Network Observer Aggregator" compares signed observer bundles.
