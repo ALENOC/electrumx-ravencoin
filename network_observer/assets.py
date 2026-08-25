@@ -60,7 +60,7 @@ REQUIRED_METHODS = (
 #: Domain separator per data type for canonical digests, so a digest of
 #: verifier-string state can never collide with one of tag state by
 #: accident of shape.
-DIGEST_DOMAIN = b"ALENOC-RVN-ASSET-QUORUM-v1\x00"
+DIGEST_DOMAIN = b"RAVENCOIN-NETWORK-OBSERVER-ASSET-QUORUM-v1\x00"
 
 #: Data types whose histories allow exact height-bound reconstruction
 #: (see module docstring).  Anything else must answer
@@ -91,7 +91,7 @@ def default_sentinels() -> dict:
     query on the real chain, and inventing one without operator review
     would be this repository guessing what is worth monitoring.  The
     mechanism is complete; operators opt in by editing
-    monitor/config/asset-sentinels.json.  An empty list disables active
+    network_observer/config/asset-sentinels.json.  An empty list disables active
     asset probing cleanly (capability falls back to the features flag,
     quorum reports INSUFFICIENT_QUORUM rather than fabricating samples).
     """

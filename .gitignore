@@ -18,9 +18,10 @@ docs/_build
 .env.before-chainstrap-test
 contrib/electrumx.env
 .venv-monitor/
-monitor.sqlite3
+network-observer.sqlite3
 .secrets/
 tls/
 test_get_ops.py
 test_address.py
 test_advance.py
+monitor.sqlite3

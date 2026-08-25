@@ -15,7 +15,7 @@ The pipeline never collapses these into one another:
    it exists, answers, or is honest.
 2. **CAPABILITY_SUPPORTED** - the endpoint answered `server.ravencoin_backend`.
    This is a self-report from a third party who can simply lie about it
-   (`monitor/classify.py`, module docstring, rule 1). It decides only
+   (`network_observer/classify.py`, module docstring, rule 1). It decides only
    whether the endpoint is worth checking further.
 3. **BACKEND_VERIFIED** - the endpoint's self-reported Core repository and
    commit match a certified-release policy entry (`classify_backend`),
@@ -31,7 +31,7 @@ The pipeline never collapses these into one another:
 
 Explicit invariants held throughout:
 
-- Seed-list membership is not trust. `monitor/config/seeds.json` is a
+- Seed-list membership is not trust. `network_observer/config/seeds.json` is a
   discovery hint; every entry is probed and classified like any other
   candidate.
 - Answering `server.ravencoin_backend` is not trust. It is a claim that
@@ -43,7 +43,7 @@ Explicit invariants held throughout:
   elevate its own evidence level.
 - A height strictly ahead of the corroborated comparison anchor is never
   itself verification, no matter how internally consistent it looks in
-  isolation (`_verified_groups` in `monitor/classify.py`). The highest
+  isolation (`_verified_groups` in `network_observer/classify.py`). The highest
   self-reported height is used only as a starting point for conflict
   detection, never as proof of agreement.
 
@@ -60,7 +60,7 @@ attacker could self-report a certified `repository@commit`, an arbitrary
 height above a configured `--reference` anchor, and an arbitrary tip, and
 be promoted to `SAFE` because `compare_chains` never validated
 observations strictly ahead of the anchor. That bypass has since been
-fixed (`monitor/classify.py`, commit `c758aa95`): every observation's
+fixed (`network_observer/classify.py`, commit `c758aa95`): every observation's
 `checkpoint_hash` is now checked against the network's pinned incident
 checkpoint regardless of anchor position, and `_verified_groups` never
 credits a group whose height is ahead of the corroborated anchor as
@@ -85,7 +85,7 @@ verifying claims against reality, not authenticating who made the claim.
 What is signed today, and what it is not
 ------------------------------------------
 
-`monitor/directory.py` signs a *snapshot of this operator's own
+`network_observer/directory.py` signs a *snapshot of this operator's own
 classification*, not a per-peer credential. Ed25519, canonical
 `sort_keys`/compact-separator serialization, a pinned external key,
 `schemaVersion` fixed at 1, monotonic `directoryVersion` for rollback
@@ -98,7 +98,7 @@ in `tests/test_trust_model_scenarios.py`), while every field this code
 does understand is still fully validated.
 
 The code is explicit that this is not itself trust:
-`monitor/directory.py`'s module docstring calls it "a discovery hint and
+`network_observer/directory.py`'s module docstring calls it "a discovery hint and
 nothing more", and `candidates_from_directory` "deliberately returns
 candidates, not approved servers". A wallet or operator still has to run
 its own checks; a signed directory only prevents the snapshot from being
@@ -108,13 +108,13 @@ The monitor / server boundary
 -------------------------------
 
 `electrumx/server/peers.py` (the server's own Electrum-protocol peer
-gossip) and `monitor/` (the discovery, classification, and signed
+gossip) and `network_observer/` (the discovery, classification, and signed
 directory pipeline) are intentionally two separate systems with no
 imports between them. `on_peers_subscribe` returns endpoints the server
 has gossiped with in the last 24 hours, with no trust weighting, which is
 correct for what it is: Electrum peer gossip is discovery-only by
 protocol, and the client on the other end is expected to apply its own
-judgment, exactly as `monitor/` does for wallets that choose to consult
+judgment, exactly as `network_observer/` does for wallets that choose to consult
 its signed directory instead. Wiring monitor's classification into the
 server's own gossip responses would turn a discovery mechanism into an
 enforcement mechanism the Electrum protocol was never designed to carry,
@@ -126,7 +126,7 @@ closed.
 Peer selection preference
 ----------------------------
 
-`monitor/config/seeds.json` lists `electrumx.raventag.com` (the reference
+`network_observer/config/seeds.json` lists `electrumx.raventag.com` (the reference
 deployment of this codebase) first, then the Cipig operator group, then
 `rvn4lyfe.com` and other upstream defaults. This is a preference hint for
 where to try first, never a trust decision: every entry, first or last, is

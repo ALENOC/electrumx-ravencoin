@@ -4,7 +4,7 @@
 
 """Cryptographic operator identity (Ed25519 operator declarations).
 
-The existing operatorGroup registry (monitor/config/operator-registry.json)
+The existing operatorGroup registry (network_observer/config/operator-registry.json)
 groups endpoints by configured name and is kept intact: it remains valid
 with its existing semantics, and this module adds a *preferred*
 cryptographic layer on top.  An operator key signs a declaration binding
@@ -40,7 +40,7 @@ from enum import Enum
 from typing import Dict, List, Mapping, Optional
 
 DECLARATION_SCHEMA_VERSION = 1
-SIGNATURE_DOMAIN = b"ALENOC-RVN-OPERATOR-DECLARATION-v1\x00"
+SIGNATURE_DOMAIN = b"RAVENCOIN-NETWORK-OBSERVER-OPERATOR-DECLARATION-v1\x00"
 
 #: operatorGroup names are security-relevant identifiers; keep them tight.
 _GROUP_NAME = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,31}$")

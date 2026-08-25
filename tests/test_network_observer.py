@@ -18,29 +18,30 @@ import json
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from monitor.assets import (
+from network_observer.assets import (
     AssetDataVerdict, AssetSample, canonical_digest, compare_asset_samples,
     entries_at_height, reconstruct_state, summarize_capability,
 )
-from monitor.classify import ChainObservation, classify_index_lag
-from monitor.model import EndpointId, IndexHealth, Thresholds, Transport
-from monitor.observer import (
-    build_observation_bundle, canonical_bytes, sign_observation_bundle,
-    verify_observation_bundle,
+from network_observer.classify import ChainObservation, classify_index_lag
+from network_observer.crawl import parse_asset_capability_matrix
+from network_observer.model import EndpointId, IndexHealth, Thresholds, Transport
+from network_observer.observer import (
+    ObservationError, build_observation_bundle, canonical_bytes,
+    sign_observation_bundle, verify_observation_bundle,
 )
-from monitor.operators import (
+from network_observer.operators import (
     IdentityState, verify_operator_declaration,
 )
-from monitor.quorum import (
+from network_observer.quorum import (
     ChallengeRecord, ChallengeSet, ChallengeVerdict, build_challenge_set,
     derive_challenge_heights, evaluate_challenges, new_challenge_nonce,
     select_stable_anchor,
 )
-from monitor.snapshot import (
+from network_observer.snapshot import (
     build_snapshot, sign_snapshot, verify_snapshot,
 )
-from monitor.store import SCHEMA_VERSION, Store
-from monitor.vantage import compare_vantage_views, views_from_bundles
+from network_observer.store import SCHEMA_VERSION, Store
+from network_observer.vantage import compare_vantage_views, views_from_bundles
 
 NOW = datetime.datetime(2026, 8, 24, 12, 0, 0,
                         tzinfo=datetime.timezone.utc)
@@ -218,7 +219,8 @@ def key_id_for(public_bytes):
 
 
 def make_bundle(private_key, observer_id="EU", sequence=1,
-                observations=None, generated_at=NOW, schema=None):
+                observations=None, generated_at=NOW, schema=None,
+                valid_for_minutes=60):
     public_hex = private_key.public_key().public_bytes_raw().hex()
     body = build_observation_bundle(
         observer_id=observer_id, observer_key_id=key_id_for(
@@ -227,7 +229,7 @@ def make_bundle(private_key, observer_id="EU", sequence=1,
         challenge_heights=[500_000, 499_994],
         observations=observations if observations is not None else
         [{"endpoint": "a.example.org:50002/TLS", "reachable": True}],
-        generated_at=generated_at)
+        generated_at=generated_at, valid_for_minutes=valid_for_minutes)
     if schema is not None:
         body["schemaVersion"] = schema
     return sign_observation_bundle(
@@ -265,24 +267,36 @@ def test_wrong_and_unknown_observer_keys_rejected():
             document, {}, observer_sequence_high_water={}, now=NOW)
 
 
-def test_expired_or_replayed_bundle_rejected():
-    """#16/#17: expiry, and sequence at/below the high-water mark."""
+def test_expired_bundle_rejected():
+    """#16: expiry, asserting the actual reason."""
     key = make_key()
     expired = make_bundle(key, generated_at=NOW - datetime.timedelta(hours=25))
-    with pytest.raises(Exception):
+    with pytest.raises(ObservationError, match="expired"):
         verify_observation_bundle(
             expired, trusted(key), observer_sequence_high_water={}, now=NOW)
+
+
+def test_replay_at_or_below_high_water_rejected():
+    """#17: sequence == and < high-water are both refused, and the
+    rejection comes from verify_observation_bundle itself (the key id is
+    taken from the document, which is already the key id string)."""
+    key = make_key()
     document = make_bundle(key, sequence=7)
-    with pytest.raises(Exception):
+    key_id = document["signature"]["keyId"]
+    assert isinstance(key_id, str)
+    with pytest.raises(ObservationError, match="high-water"):
         verify_observation_bundle(
             document, trusted(key),
-            observer_sequence_high_water={key_id_for(
-                document["signature"]["keyId"]): 7}, now=NOW)
-    ok = verify_observation_bundle(
+            observer_sequence_high_water={key_id: 7}, now=NOW)
+    older = make_bundle(key, sequence=3)
+    with pytest.raises(ObservationError, match="replay or rollback"):
+        verify_observation_bundle(
+            older, trusted(key),
+            observer_sequence_high_water={key_id: 7}, now=NOW)
+    accepted = verify_observation_bundle(
         make_bundle(key, sequence=8), trusted(key),
-        observer_sequence_high_water={document["signature"]["keyId"]: 7},
-        now=NOW)
-    assert ok["sequence"] == 8
+        observer_sequence_high_water={key_id: 7}, now=NOW)
+    assert accepted["sequence"] == 8
 
 
 def test_future_schema_refused():
@@ -294,17 +308,129 @@ def test_future_schema_refused():
             document, trusted(key), observer_sequence_high_water={}, now=NOW)
 
 
-def test_clock_skew_tolerance():
+def test_time_semantics_skew_bounds_future_age_bounds_past():
+    """Documented model: generatedAt <= now + skew; now - generatedAt <=
+    max_age; now <= expiresAt.  A bundle minutes or hours old is still
+    current while unexpired and under the hard age bound; only future
+    timestamps beyond the skew are refused on skew grounds."""
     key = make_key()
-    slightly_old = make_bundle(
-        key, generated_at=NOW - datetime.timedelta(seconds=120))
-    verify_observation_bundle(
-        slightly_old, trusted(key), observer_sequence_high_water={}, now=NOW)
-    too_old = make_bundle(
-        key, generated_at=NOW - datetime.timedelta(hours=2))
-    with pytest.raises(Exception):
-        verify_observation_bundle(
-            too_old, trusted(key), observer_sequence_high_water={}, now=NOW)
+
+    def verify(generated_at, valid_for_minutes=60):
+        return verify_observation_bundle(
+            make_bundle(key, generated_at=generated_at,
+                        valid_for_minutes=valid_for_minutes), trusted(key),
+            observer_sequence_high_water={}, now=NOW)
+
+    # Past ages inside the 1h validity: accepted.
+    assert verify(NOW - datetime.timedelta(seconds=120))["sequence"] == 1
+    # 2h old: expired by the default 60-minute validity window.
+    with pytest.raises(ObservationError, match="expired"):
+        verify(NOW - datetime.timedelta(hours=2))
+    # Long-lived bundles (48h validity): age bounded by the hard 24h
+    # maximum, not by skew: 23h accepted, 25h refused as too old.
+    assert verify(NOW - datetime.timedelta(hours=23),
+                  valid_for_minutes=48 * 60)["sequence"] == 1
+    with pytest.raises(ObservationError, match="too old"):
+        verify(NOW - datetime.timedelta(hours=25),
+               valid_for_minutes=48 * 60)
+    # Future timestamps: inside the 300s skew accepted, beyond refused.
+    assert verify(NOW + datetime.timedelta(seconds=299))["sequence"] == 1
+    with pytest.raises(ObservationError, match="future"):
+        verify(NOW + datetime.timedelta(seconds=301))
+
+
+# ------------------------------------------- asset probe correlation (A)
+
+def probe_round(sentinels, results_by_method_position):
+    """Build calls + a responses dict exactly as _speak_electrum would
+    key them, then correlate through the shared scheme.
+
+    ``results_by_method_position`` maps 1-based request position to the
+    payload the server returned (None for no result)."""
+    from network_observer.assets import capability_probe_plan
+    from network_observer.crawl import asset_capability_calls
+    plan = capability_probe_plan({"sentinels": sentinels}, limit=4)
+    calls = ([("server.version", ["x", "1.4"])] + asset_capability_calls(plan))
+    responses = {}
+    for position, payload in results_by_method_position.items():
+        method, _ = calls[position - 1]
+        names = [name for name, _ in calls]
+        key = f"{method}#{position}" if names.count(method) > 1 else method
+        if payload is not None:
+            responses[key] = payload
+    return plan, calls, responses
+
+
+def sentinel(name):
+    return {"asset": name}
+
+
+def test_capability_correlation_with_one_sentinel():
+    plan, calls, responses = probe_round(
+        [sentinel("SUPER")], {1: "1.13.10", 2: {"sats": 1}, 3: ["SUPER"],
+                              4: [], 5: []})
+    matrix = parse_asset_capability_matrix(plan, responses, calls)
+    assert matrix == {
+        "blockchain.asset.get_meta": True,
+        "blockchain.asset.get_assets_with_prefix": True,
+        "blockchain.asset.get_meta_history": True,
+        "blockchain.tag.qualifier.history": True,
+    }
+
+
+def test_capability_correlation_with_two_and_four_sentinels():
+    """Two sentinels: every method is asked twice, so every answer key
+    is indexed; a method counts as working only when ALL its positions
+    were answered with a non-error result."""
+    two = [sentinel("SUPER"), sentinel("MINT")]
+    # The plan iterates sentinels outermost: sentinel 1 asks its four
+    # methods at positions 2-5, sentinel 2 at 6-9.
+    # Failures: 6 (get_meta error), 8 (meta_history missing),
+    # 9 (qualifier history missing).
+    plan, calls, responses = probe_round(two, {
+        1: "1.13.10",
+        2: {"sats": 1}, 3: ["SUPER"], 4: [{"height": 1}],
+        6: {"error": "x"}, 7: ["MINT"],
+    })
+    matrix = parse_asset_capability_matrix(plan, responses, calls)
+    assert matrix == {
+        "blockchain.asset.get_meta": False,
+        "blockchain.asset.get_assets_with_prefix": True,
+        "blockchain.asset.get_meta_history": False,
+        "blockchain.tag.qualifier.history": False,
+    }
+
+    four = [sentinel(f"S{i}") for i in range(4)]
+    plan, calls, responses = probe_round(
+        four, {position: {"ok": True} for position in range(2, 2 + 16)})
+    matrix = parse_asset_capability_matrix(plan, responses, calls)
+    assert len(matrix) == 4 and all(matrix.values())
+
+
+def test_capability_correlation_mixed_and_duplicate_divergence():
+    """Mixed outcomes per method, and duplicate method names returning
+    different results: correlation is by position, so a method failing
+    at ANY of its positions is reported not-working even when another
+    position of the same method succeeded."""
+    two = [sentinel("SUPER"), sentinel("MINT")]
+    # Sentinel-major positions: 2-5 first sentinel, 6-9 second.
+    plan, calls, responses = probe_round(two, {
+        1: "1.13.10",
+        # get_meta: ok then error.
+        2: {"sats": 1}, 6: {"error": "no such asset"},
+        # prefix: both ok.
+        3: ["SUPER"], 7: ["MINT"],
+        # meta_history: first missing, second ok.
+        8: [{"height": 1}],
+        # qualifier history: both missing.
+    })
+    matrix = parse_asset_capability_matrix(plan, responses, calls)
+    assert matrix == {
+        "blockchain.asset.get_meta": False,
+        "blockchain.asset.get_assets_with_prefix": True,
+        "blockchain.asset.get_meta_history": False,
+        "blockchain.tag.qualifier.history": False,
+    }
 
 
 # ------------------------------------------------------ operator identity
@@ -313,7 +439,7 @@ def make_declaration(group="NEWCO", sequence=1, endpoints=None,
                      key=None, valid_days=365):
     key = key or make_key()
     public_hex = key.public_key().public_bytes_raw().hex()
-    from monitor.operators import canonical_bytes as op_canonical
+    from network_observer.operators import canonical_bytes as op_canonical
     body = {
         "schemaVersion": 1,
         "operatorName": "New Co",
@@ -441,7 +567,7 @@ def test_same_height_mismatch_detected_and_needs_confirmation():
     verdict, _, _ = compare_asset_samples(agree, chain_comparable=True)
     assert verdict is AssetDataVerdict.AGREE
     # One observation never confirms a conflict.
-    from monitor.assets import escalate_asset_verdict
+    from network_observer.assets import escalate_asset_verdict
     assert escalate_asset_verdict(AssetDataVerdict.MISMATCH_SUSPECTED, 1) \
         is AssetDataVerdict.MISMATCH_SUSPECTED
     assert escalate_asset_verdict(AssetDataVerdict.MISMATCH_SUSPECTED, 2) \
@@ -513,7 +639,7 @@ def test_selective_chain_serving_surfaced():
 def test_store_upgrades_from_v4_and_refuses_future(tmp_path):
     """#37/#38: migration from schema 4 works; a newer schema refuses."""
     import sqlite3
-    path = tmp_path / "monitor.sqlite3"
+    path = tmp_path / "network-observer.sqlite3"
     connection = sqlite3.connect(path)
     connection.executescript("""
         CREATE TABLE schema_version (version INTEGER NOT NULL);
@@ -564,7 +690,7 @@ def test_prune_preserves_high_water_marks(tmp_path):
 # ------------------------------------------------------------- snapshot
 
 def test_snapshot_sign_verify_and_rollback(tmp_path):
-    from monitor.model import Availability, EndpointState, Security
+    from network_observer.model import Availability, EndpointState, Security
     state = EndpointState(endpoint=endpoint(),
                           availability=Availability.REACHABLE,
                           security=Security.SAFE)
@@ -596,3 +722,31 @@ def test_snapshot_sign_verify_and_rollback(tmp_path):
     with pytest.raises(Exception):
         verify_snapshot(expired_doc, trusted(key),
                         now=NOW + datetime.timedelta(days=2))
+
+
+# --------------------------------------------------- package identity (naming)
+
+def test_canonical_package_is_network_observer():
+    """Import-level regression: the subsystem's canonical package is
+    network_observer, and no production code reintroduces an import from
+    the old monitor namespace."""
+    import network_observer
+    import network_observer.cli  # noqa: F401
+    assert network_observer.__file__.endswith("network_observer/__init__.py")
+
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    # Split so this file's own source does not match what it scans for.
+    old_from = "from " + "monitor."
+    old_import = "import " + "monitor\n"
+    offenders = []
+    for path in sorted(root.glob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        if old_from in text or old_import in text:
+            offenders.append(str(path))
+    for directory in ("network_observer", "electrumx", "core-safety/scripts", "tests"):
+        for path in sorted((root / directory).rglob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            if old_from in text or old_import in text:
+                offenders.append(str(path.relative_to(root)))
+    assert offenders == [], f"old-namespace imports remain: {offenders}"

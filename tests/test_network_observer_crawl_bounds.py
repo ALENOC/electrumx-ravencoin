@@ -5,10 +5,10 @@
 """Regression test: probe_endpoint()'s real open_connection() path did not
 pass `limit=` to asyncio, so the StreamReader silently enforced asyncio's
 unrelated 64 KiB default instead of the configured Limits.max_response_bytes
-declared in monitor/model.py. A legitimate response between 64 KiB and the
+declared in network_observer/model.py. A legitimate response between 64 KiB and the
 configured budget was misclassified as RPC_MALFORMED ("chunk is longer than
 limit") even though it was well within the operator's configured policy -
-the size bound in monitor/model.py was dead configuration.
+the size bound in network_observer/model.py was dead configuration.
 """
 
 import asyncio
@@ -16,8 +16,8 @@ import json
 
 import pytest
 
-from monitor.crawl import probe_endpoint
-from monitor.model import EndpointId, Limits, Transport
+from network_observer.crawl import probe_endpoint
+from network_observer.model import EndpointId, Limits, Transport
 
 
 class _FakeWriter:

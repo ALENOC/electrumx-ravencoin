@@ -31,11 +31,11 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from electrumx.server.ravencoin_backend import BackendIdentity, IdentityEvidence
-from monitor.classify import ChainObservation, classify_backend, compare_chains, is_corroborated
-from monitor.directory import (
+from network_observer.classify import ChainObservation, classify_backend, compare_chains, is_corroborated
+from network_observer.directory import (
     build_directory, sign_directory, verify_directory,
 )
-from monitor.model import Availability, EndpointId, EndpointState, Security, Thresholds, Transport
+from network_observer.model import Availability, EndpointId, EndpointState, Security, Thresholds, Transport
 
 CERTIFIED_COMMIT = "b60f50e04f1fba425b28804e61be2694faaf3469"
 CERTIFIED_POLICY = {
@@ -183,7 +183,7 @@ def test_i_tampered_entry_inside_signed_directory_is_rejected():
     document = sign_directory(build_directory(states, directory_version=1),
                               private_key, key_id=key_id)
     document["directory"]["servers"][0]["security"] = Security.SAFE.value
-    from monitor.directory import DirectoryError
+    from network_observer.directory import DirectoryError
     with pytest.raises(DirectoryError, match="does not verify"):
         verify_directory(document, {key_id: public_bytes})
 

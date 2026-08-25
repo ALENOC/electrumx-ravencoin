@@ -44,7 +44,7 @@ from .model import EndpointId, Thresholds
 #: Domain separation for the challenge-height derivation.  Without it the
 #: same nonce reused in another context could be steered into predictable
 #: heights.
-CHALLENGE_DERIVATION_DOMAIN = b"ALENOC-RVN-CHAIN-CHALLENGE-v1\x00"
+CHALLENGE_DERIVATION_DOMAIN = b"RAVENCOIN-NETWORK-OBSERVER-CHAIN-CHALLENGE-v1\x00"
 
 #: Ravencoin targets one block per minute.  The deterministic challenge
 #: deltas therefore cover roughly "now" (6 blocks), "the last hour"

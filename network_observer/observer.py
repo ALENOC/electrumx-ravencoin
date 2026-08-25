@@ -32,13 +32,17 @@ from typing import Dict, List, Mapping, Optional
 from .model import EndpointId
 
 SCHEMA_VERSION = 1
-SIGNATURE_DOMAIN = b"ALENOC-RVN-NETWORK-OBSERVATION-v1\x00"
+SIGNATURE_DOMAIN = b"RAVENCOIN-NETWORK-OBSERVER-OBSERVATION-v1\x00"
 
-#: How far in the past or future a bundle timestamp may sit relative to
-#: the verifier's clock.  Large enough to survive ordinary NTP skew
-#: between unrelated networks, small enough that a stolen bundle has a
-#: short replay window, which the per-observer sequence high-water mark
-#: closes anyway.
+#: How far in the FUTURE a bundle timestamp may sit relative to the
+#: verifier's clock.  Large enough to survive ordinary NTP skew between
+#: unrelated networks.  Age is deliberately NOT bounded by skew: old
+#: observations are bounded by ``expiresAt`` and by
+#: ``DEFAULT_MAX_BUNDLE_AGE_SECONDS``, and a bundle that is still
+#: within both has value (a vantage point that uploads hourly, for
+#: example) and must not be discarded merely for being minutes old.
+#: Replay of anything old is closed by the per-observer sequence
+#: high-water mark, not by the skew window.
 DEFAULT_MAX_CLOCK_SKEW_SECONDS = 300
 
 #: A bundle older than this is refused no matter what its expiry says,
@@ -178,8 +182,12 @@ def verify_observation_bundle(document: Mapping, trusted_keys: Dict[str, bytes],
       (signing your own key proves nothing);
     * the Ed25519 signature over the canonical body;
     * exact schema version: a future version is refused, not guessed;
-    * expiry, generation time inside the tolerated clock skew, and a
-      hard maximum age;
+    * time semantics, deliberately one-sided: ``generatedAt`` may sit at
+      most ``max_clock_ske_seconds`` in the future (clock skew bounds
+      FUTURE timestamps, so a fast attacker clock cannot mint fresh
+      bundles), while age is bounded by ``expiresAt`` and by
+      ``max_age_seconds``: an observation that is still valid and under
+      the hard maximum age is current, not stale;
     * sequence must exceed the per-observer high-water mark, so a
       replayed or rolled-back bundle is refused however valid its
       signature is.
@@ -236,9 +244,16 @@ def verify_observation_bundle(document: Mapping, trusted_keys: Dict[str, bytes],
     if current > expires:
         raise ObservationError("observation bundle has expired")
     skew = datetime.timedelta(seconds=max_clock_skew_seconds)
-    if abs(current - generated) > skew:
+    # Skew bounds FUTURE timestamps only: an honest observer whose clock
+    # runs slightly fast must not be able to mint bundles from "later
+    # than now", but a verifier checking a few minutes after signing (or
+    # with mild clock drift of its own) must not refuse a fresh,
+    # unexpired bundle.  Age is bounded by expiresAt above and by the
+    # hard maximum age below; replay is bounded by the mandatory
+    # sequence high-water check, which no timestamp resets.
+    if generated - current > skew:
         raise ObservationError(
-            "generatedAt is outside the tolerated clock skew")
+            "generatedAt is further in the future than the tolerated skew")
     if current - generated > datetime.timedelta(seconds=max_age_seconds):
         raise ObservationError("observation bundle is too old to be current")
 

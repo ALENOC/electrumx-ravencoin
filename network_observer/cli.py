@@ -5,9 +5,9 @@
 
 """Command line entry point for the Electrum monitor.
 
-    python -m monitor.cli status
-    python -m monitor.cli discover-now
-    python -m monitor.cli publish --directory-version 3
+    python -m network_observer.cli status
+    python -m network_observer.cli discover-now
+    python -m network_observer.cli publish --directory-version 3
 
 Nothing here deletes data.  A rescan adds observations; it never resets history.
 """
@@ -29,7 +29,8 @@ from .classify import (
     independent_groups, is_corroborated, operator_group_key,
 )
 from .crawl import (
-    Crawler, asset_capability_calls, challenge_calls, parse_challenge_responses,
+    Crawler, asset_capability_calls, challenge_calls, parse_asset_capability_matrix,
+    parse_challenge_responses,
     probe_endpoint,
 )
 from .directory import build_directory
@@ -281,18 +282,20 @@ async def run_discovery(store: Store, *, seeds_path: pathlib.Path,
                 best = tips_by_group.get(group)
                 if best is None or result.height > best:
                     tips_by_group[group] = result.height
+            challenge_calls_list = (
+                [("server.version", ["Ravencoin-Network-Observer/1.0", "1.4"])]
+                + challenge_calls(heights))
             try:
                 challenge_result = await probe_endpoint(
                     endpoint, limits=limits, allow_private=allow_private,
-                    calls=[("server.version", ["Ravencoin-Electrum-Monitor/1.0",
-                                               "1.4"])]
-                    + challenge_calls(heights))
+                    calls=challenge_calls_list)
             except (OSError, ValueError):
                 continue
             if not challenge_result.reachable:
                 continue
             answers = parse_challenge_responses(
-                challenge_result.extra_responses or {}, heights)
+                challenge_calls_list, challenge_result.extra_responses or {},
+                heights)
             challenge_results[str(endpoint)] = answers
             endpoint_id = store.endpoint_id(endpoint)
             if endpoint_id is None:
@@ -348,22 +351,23 @@ async def run_discovery(store: Store, *, seeds_path: pathlib.Path,
         for endpoint, result in results.items():
             if not result.reachable:
                 continue
+            calls = ([("server.version", ["Ravencoin-Network-Observer/1.0",
+                                          "1.4"])]
+                     + asset_capability_calls(plan))
             try:
                 asset_result = await probe_endpoint(
                     endpoint, limits=limits, allow_private=allow_private,
-                    calls=[("server.version", ["Ravencoin-Electrum-Monitor/1.0",
-                                               "1.4"])]
-                    + asset_capability_calls(plan))
+                    calls=calls)
             except (OSError, ValueError):
                 continue
             if not asset_result.reachable:
                 continue
             extra = asset_result.extra_responses or {}
-            matrix = {}
-            for item in plan:
-                raw = extra.get(item["method"])
-                matrix[item["method"]] = raw is not None and not (
-                    isinstance(raw, dict) and raw.get("error"))
+            # Correlate through the shared request-key scheme: with more
+            # than one sentinel the same method is asked once per sentinel
+            # and answers are keyed method#request_index, so a lookup by
+            # bare method name would misread every answer as missing.
+            matrix = parse_asset_capability_matrix(plan, extra, calls)
             result.asset_methods = matrix
             asset_summary["capability"][str(endpoint)] = (
                 assets_module.summarize_capability(matrix, result.features).value)
@@ -527,9 +531,28 @@ def generate_key_id(public_bytes: bytes) -> str:
     return hashlib.sha256(public_bytes).hexdigest()[:16]
 
 
+def resolve_database_path(explicit: Optional[str]) -> str:
+    """Pick the observer database file without ever abandoning an
+    existing one: an explicit --database wins; otherwise a new install
+    uses network-observer.sqlite3, and an installation that already has
+    the legacy monitor.sqlite3 keeps using it until the operator moves
+    it deliberately."""
+    if explicit:
+        return explicit
+    new = pathlib.Path("network-observer.sqlite3")
+    legacy = pathlib.Path("monitor.sqlite3")
+    if legacy.exists() and not new.exists():
+        print("note: continuing with the legacy database monitor.sqlite3")
+        return str(legacy)
+    return str(new)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--database", default="monitor.sqlite3")
+    parser.add_argument("--database", default=None,
+                        help="observer database; defaults to "
+                             "network-observer.sqlite3, or the legacy "
+                             "monitor.sqlite3 when only that exists")
     parser.add_argument("--seeds", default=str(DEFAULT_SEEDS))
     parser.add_argument("--registry", default=str(DEFAULT_REGISTRY))
     parser.add_argument("--policy", default=None,
@@ -572,7 +595,7 @@ def main(argv=None) -> int:
     subparsers.add_parser("discover-now")
     publish = subparsers.add_parser("publish")
     publish.add_argument("--directory-version", type=int, required=True)
-    publish.add_argument("--output", default="monitor-directory.json")
+    publish.add_argument("--output", default="network-observer-directory.json")
 
     keygen = subparsers.add_parser(
         "observer-keygen",
@@ -607,7 +630,8 @@ def main(argv=None) -> int:
         "publish-snapshot",
         help="build and sign the network observation snapshot")
     publish_snapshot.add_argument("--snapshot-version", type=int, required=True)
-    publish_snapshot.add_argument("--output", default="network-snapshot.json")
+    publish_snapshot.add_argument("--output",
+                                  default="network-observer-snapshot.json")
     publish_snapshot.add_argument("--signing-key", required=True,
                                   help="local Ed25519 signing key (hex seed file)")
     publish_snapshot.add_argument("--chain-summary", default=None)
@@ -618,7 +642,7 @@ def main(argv=None) -> int:
     arguments = parser.parse_args(argv)
     if arguments.command == "observer-keygen":
         return command_observer_keygen(arguments)
-    store = Store(arguments.database)
+    store = Store(resolve_database_path(arguments.database))
     try:
         if arguments.command == "status":
             return command_status(store)

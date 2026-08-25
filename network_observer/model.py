@@ -133,7 +133,7 @@ class Thresholds:
     #: than once, never a height difference on its own.
     conflict_confirmations: int = 2
 
-    # --- Chain Quorum 2.0 (monitor/quorum.py) -----------------------------
+    # --- Chain Quorum 2.0 (network_observer/quorum.py) -----------------------------
     #: How far below the k-th highest attested height the shared anchor sits,
     #: so propagation skew and shallow reorgs do not become disagreements.
     #: Six blocks is the same tolerance as height_lag_tolerance: minutes on a

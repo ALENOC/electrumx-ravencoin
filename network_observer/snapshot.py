@@ -26,7 +26,7 @@ from typing import Dict, Iterable, Mapping, Optional
 from .model import Availability, Security
 
 SCHEMA_VERSION = 1
-SNAPSHOT_DOMAIN = b"ALENOC-RVN-NETWORK-SNAPSHOT-v1\x00"
+SNAPSHOT_DOMAIN = b"RAVENCOIN-NETWORK-OBSERVER-SNAPSHOT-v1\x00"
 
 DISCLAIMER = (
     "This document is an observation/discovery aid. Ravencoin consensus "

@@ -36,7 +36,7 @@ from .netsafety import UnsafeTarget, parse_peers_response, safe_resolved_address
 
 #: Sent as the client name in server.version.  Honest identification, never an
 #: imitation of a wallet, so operators can tell who is probing them.
-CLIENT_NAME = "Ravencoin-Electrum-Monitor/1.0"
+CLIENT_NAME = "Ravencoin-Network-Observer/1.0"
 PROTOCOL_VERSION = "1.4"
 
 PROBE_CALLS = (
@@ -287,37 +287,93 @@ def asset_capability_calls(plan: Sequence[dict]) -> List[tuple]:
     return [(item["method"], list(item["params"])) for item in plan]
 
 
-def parse_challenge_responses(extra: Mapping, heights: Sequence[int],
-                              ) -> Dict[int, Optional[str]]:
+def response_key(requests: Sequence[tuple], index: int) -> str:
+    """Deterministic response key for the request at 1-based ``index``.
+
+    A method that appears once keeps its plain name; a method sent more
+    than once (challenge heights, per-sentinel asset probes) is keyed
+    ``method#request_index`` so every answer stays addressable.  This is
+    the single definition of the keying scheme: ``_speak_electrum``
+    stores answers under these keys and every consumer must compute its
+    keys with this function rather than guessing by method name alone.
+    """
+    method = requests[index - 1][0]
+    names = [name for name, _ in requests]
+    if names.count(method) > 1:
+        return f"{method}#{index}"
+    return method
+
+
+def parse_challenge_responses(calls: Sequence[tuple], extra: Mapping,
+                              heights: Sequence[int]) -> Dict[int, Optional[str]]:
     """Compute real Ravencoin header hashes for answered challenges.
 
-    A missing, malformed or wrong-length header yields None: no evidence
-    rather than a hash of the wrong thing.
+    ``heights`` must be in the same order as the header requests inside
+    ``calls``; correlation goes through the shared ``response_key``
+    scheme so a leading server.version (or any other request) cannot
+    shift the keys.  A missing, malformed or wrong-length header yields
+    None: no evidence rather than a hash of the wrong thing.
     """
+    header_positions = [index for index, (method, _)
+                        in enumerate(calls, start=1)
+                        if method == "blockchain.block.header"]
     answers: Dict[int, Optional[str]] = {}
-    for index, height in enumerate(heights, start=1):
-        raw = extra.get(f"blockchain.block.header#{index}")
+    for height, position in zip(heights, header_positions):
+        raw = extra.get(response_key(calls, position))
         answers[int(height)] = (
             _ravencoin_header_hash(raw, int(height))
             if isinstance(raw, str) else None)
     return answers
 
 
+def parse_asset_capability_matrix(plan: Sequence[Mapping],
+                                  extra: Mapping,
+                                  calls: Sequence[tuple]) -> Dict[str, bool]:
+    """Build the per-method capability matrix from one probe round.
+
+    ``calls`` is the exact request list handed to the probe (including
+    any leading server.version), so every plan item correlates with its
+    own response through the shared ``response_key`` scheme instead of a
+    method name that may be ambiguous when several sentinels ask the
+    same method.
+
+    A method counts as working only when every probe of it was answered
+    with a result that is not an error object: a server that serves one
+    sentinel and errors on another is inconsistent, and inconsistent is
+    reported, never averaged away.
+    """
+    offset = len(calls) - len(plan)
+    if offset < 0:
+        raise ValueError("calls must contain every plan request")
+    outcomes: Dict[str, list] = {}
+    for position, item in enumerate(plan, start=offset + 1):
+        raw = extra.get(response_key(calls, position))
+        outcomes.setdefault(item["method"], []).append(raw)
+    return {
+        method: all(raw is not None and not (
+            isinstance(raw, dict) and raw.get("error"))
+            for raw in answers)
+        for method, answers in outcomes.items()
+    }
+
+
 async def _speak_electrum(reader, writer, limits: Limits,
                           calls: Optional[Sequence[tuple]] = None) -> dict:
     """Issue the probe calls and collect whatever answers arrive.
 
-    Repeated methods (the challenge round asks blockchain.block.header
-    once per height) are keyed ``method#request_index`` so individual
+    Each request carries a numeric JSON-RPC id equal to its position,
+    and answers are correlated by that id when the server echoes it
+    (as the Electrum protocol requires), with an in-order fallback for
+    servers that omit ids.  Repeated methods are keyed
+    ``method#request_index`` (see ``response_key``) so individual
     answers stay addressable; the single-shot probe calls keep their
     plain names for backward compatibility with existing tests.
     """
     requests = list(calls if calls is not None else PROBE_CALLS)
-    duplicates = {name for name, _ in requests
-                  if [n for n, _ in requests].count(name) > 1}
     responses: Dict[str, object] = {}
+    answered: Set[int] = set()
+    answered_in_order = 0
     for index, (method, params) in enumerate(requests, start=1):
-        key = f"{method}#{index}" if method in duplicates else method
         request = json.dumps({"id": index, "method": method, "params": params})
         writer.write((request + "\n").encode())
         await writer.drain()
@@ -330,11 +386,47 @@ async def _speak_electrum(reader, writer, limits: Limits,
             payload = json.loads(line.decode("utf-8", errors="replace"))
         except json.JSONDecodeError:
             raise ValueError(f"{method} returned malformed JSON") from None
-        if isinstance(payload, dict) and "result" in payload:
-            responses[key] = payload["result"]
-    if "server.version" not in responses:
+        if not isinstance(payload, dict) or "result" not in payload:
+            continue
+        # Correlate by echoed request id; fall back to in-order only when
+        # the server did not echo a usable id for this line.
+        request_index = _request_index_from_payload(payload, len(requests))
+        if request_index is None:
+            while (answered_in_order + 1 in answered
+                   and answered_in_order + 1 <= len(requests)):
+                answered_in_order += 1
+            answered_in_order += 1
+            if answered_in_order > len(requests):
+                raise ValueError(
+                    f"{method} answered more lines than requests were sent")
+            request_index = answered_in_order
+        if request_index in answered:
+            raise ValueError(
+                f"{method} returned a duplicate answer for request id "
+                f"{request_index}")
+        answered.add(request_index)
+        responses[response_key(requests, request_index)] = payload["result"]
+    if not any(key.split("#", 1)[0] == "server.version"
+               for key in responses):
         raise ValueError("server did not answer server.version")
     return responses
+
+
+def _request_index_from_payload(payload: Mapping, total: int) -> Optional[int]:
+    """The request position a response payload claims to answer.
+
+    Accepts an integer id or a decimal string id (both are seen in the
+    wild); anything else — missing, non-numeric, out of range — means
+    the caller must fall back to in-order attribution.
+    """
+    value = payload.get("id")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str) and value.isdigit():
+        value = int(value)
+    if not isinstance(value, int):
+        return None
+    return value if 1 <= value <= total else None
 
 
 class Crawler:

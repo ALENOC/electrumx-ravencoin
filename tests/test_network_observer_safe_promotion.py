@@ -20,12 +20,12 @@ import json
 
 import pytest
 
-from monitor import cli
-from monitor.classify import ChainObservation
-from monitor.model import (
+from network_observer import cli
+from network_observer.classify import ChainObservation
+from network_observer.model import (
     AssetSupport, EndpointId, Limits, ProbeResult, Security, Thresholds, Transport,
 )
-from monitor.store import Store
+from network_observer.store import Store
 
 CERTIFIED_COMMIT = "b60f50e04f1fba425b28804e61be2694faaf3469"
 CERTIFIED_POLICY = {
@@ -102,7 +102,7 @@ async def _run(monkeypatch, tmp_path, entries, *, reference=None):
 
     monkeypatch.setattr(cli, "Crawler", lambda **kw: _FakeCrawler(results, **kw))
 
-    store = Store(str(tmp_path / "monitor.sqlite3"))
+    store = Store(str(tmp_path / "network-observer.sqlite3"))
     try:
         await cli.run_discovery(
             store, seeds_path=seeds_path, registry_path=registry_path,

@@ -16,10 +16,10 @@ import pathlib
 
 import pytest
 
-from monitor import cli
-from monitor import directory as directory_mod
-from monitor.classify import Security, classify_backend
-from monitor.store import Store
+from network_observer import cli
+from network_observer import directory as directory_mod
+from network_observer.classify import Security, classify_backend
+from network_observer.store import Store
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CERTIFIED_COMMIT = "b60f50e04f1fba425b28804e61be2694faaf3469"
@@ -170,7 +170,7 @@ def test_rolled_back_policy_is_rejected_via_persisted_high_water_mark(
         tmp_path, keypair, pinned_key_file):
     private_key, _public_bytes, key_id = keypair
     trusted = cli.load_trusted_policy_keys(pinned_key_file)
-    store = Store(str(tmp_path / "monitor.sqlite3"))
+    store = Store(str(tmp_path / "network-observer.sqlite3"))
     try:
         newer_path = _write(tmp_path, "newer.json", _signed_policy(private_key, key_id, version=2))
         body = cli.load_policy(

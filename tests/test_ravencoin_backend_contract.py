@@ -152,7 +152,7 @@ def test_rpc_has_no_dependency_on_monitor_or_observer_code():
     affect the monitor, never this RPC."""
     from electrumx.server import session as session_module
     source = open(session_module.__file__, encoding="utf-8").read()
-    assert "import monitor" not in source
+    assert "import network_observer" not in source
     assert "from monitor" not in source
     # And building the response document loads no monitor code as a side
     # effect (other test modules in the same process may have imported

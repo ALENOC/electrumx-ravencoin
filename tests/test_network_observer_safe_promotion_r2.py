@@ -31,13 +31,13 @@ import json
 
 from electrumx.lib.coins import Ravencoin
 
-from monitor import cli
-from monitor.classify import ChainObservation
-from monitor.model import (
+from network_observer import cli
+from network_observer.classify import ChainObservation
+from network_observer.model import (
     AssetSupport, Availability, EndpointId, Limits, ProbeResult, Security, Thresholds,
     Transport,
 )
-from monitor.store import Store
+from network_observer.store import Store
 
 CERTIFIED_COMMIT = "b60f50e04f1fba425b28804e61be2694faaf3469"
 CERTIFIED_POLICY = {
@@ -113,7 +113,7 @@ def _reference(height, tip, *, checkpoint_hash=None, genesis_hash=None):
 
 
 async def _run(monkeypatch, tmp_path, entries, *, reference=None, store=None,
-               db_name="monitor.sqlite3"):
+               db_name="network-observer.sqlite3"):
     """entries: list of (hostname, port, operatorGroup, height, tip_hash[, checkpoint_hash])."""
     seed_entries = [(e[0], e[1], e[2]) for e in entries]
     seeds_path = _write_seeds(tmp_path, seed_entries)
@@ -306,7 +306,7 @@ def test_r03_second_independent_crawl_confirms_and_demotes(monkeypatch, tmp_path
     (a second run_discovery() call against the same store) must actually
     reach CHAIN_CONFLICT and demote it -- the finding was that this path
     was dead code in production."""
-    store = Store(str(tmp_path / "monitor.sqlite3"))
+    store = Store(str(tmp_path / "network-observer.sqlite3"))
     try:
         entries = [
             ("one.example.org", 50002, "OPERATOR-A", 4_500_000, "a" * 64, CANONICAL_CHECKPOINT),
@@ -326,7 +326,7 @@ def test_r03_same_crawl_does_not_double_count(monkeypatch, tmp_path):
     """Multiple conflicting endpoints under one group within a single crawl
     must bump that group's confirmation counter once, not once per
     endpoint."""
-    store = Store(str(tmp_path / "monitor.sqlite3"))
+    store = Store(str(tmp_path / "network-observer.sqlite3"))
     try:
         entries = [
             ("anchor.example.org", 50002, "OPERATOR-A", 4_500_000, "a" * 64,
@@ -345,7 +345,7 @@ def test_r03_recovery_requires_a_verified_clean_crawl_not_mere_silence(monkeypat
     clear its confirmation count by simply going quiet (omitting
     checkpoint evidence) for one crawl -- only a positively verified clean
     comparison clears it."""
-    store = Store(str(tmp_path / "monitor.sqlite3"))
+    store = Store(str(tmp_path / "network-observer.sqlite3"))
     try:
         conflicting = [
             ("one.example.org", 50002, "OPERATOR-A", 4_500_000, "a" * 64, CANONICAL_CHECKPOINT),
@@ -382,7 +382,7 @@ def test_r03_recovery_requires_a_verified_clean_crawl_not_mere_silence(monkeypat
 
 
 def test_r03_recovery_clears_after_a_verified_clean_crawl(monkeypatch, tmp_path):
-    store = Store(str(tmp_path / "monitor.sqlite3"))
+    store = Store(str(tmp_path / "network-observer.sqlite3"))
     try:
         conflicting = [
             ("one.example.org", 50002, "OPERATOR-A", 4_500_000, "a" * 64, CANONICAL_CHECKPOINT),
@@ -416,7 +416,7 @@ def test_r03_confirmed_conflict_survives_the_endpoint_going_unreachable(monkeypa
     regain SAFE: its state.security must stay CONFLICT, and its stale
     persisted confirmation count must not be cleared just because it
     disappeared from the crawl."""
-    store = Store(str(tmp_path / "monitor.sqlite3"))
+    store = Store(str(tmp_path / "network-observer.sqlite3"))
     try:
         entries = [
             ("one.example.org", 50002, "OPERATOR-A", 4_500_000, "a" * 64, CANONICAL_CHECKPOINT),
@@ -447,7 +447,7 @@ def test_r03_confirmations_persist_across_a_store_restart(monkeypatch, tmp_path)
         ("one.example.org", 50002, "OPERATOR-A", 4_500_000, "a" * 64, CANONICAL_CHECKPOINT),
         ("two.example.org", 50002, "OPERATOR-B", 4_500_000, "a" * 64, "f" * 64),
     ]
-    db_path = tmp_path / "monitor.sqlite3"
+    db_path = tmp_path / "network-observer.sqlite3"
 
     store1 = Store(str(db_path))
     try:
@@ -488,7 +488,7 @@ def test_interaction_confirmed_conflict_remains_effective_as_highest_endpoint_mo
     """Once a group is confirmed conflicting, it must not regain effect
     merely by changing what height or hash it claims next -- the
     demotion re-applies on the very next crawl where it is still lying."""
-    store = Store(str(tmp_path / "monitor.sqlite3"))
+    store = Store(str(tmp_path / "network-observer.sqlite3"))
     try:
         entries = [
             ("one.example.org", 50002, "OPERATOR-A", 4_500_000, "a" * 64, CANONICAL_CHECKPOINT),
@@ -530,7 +530,7 @@ def test_interaction_invalid_policy_plus_two_agreeing_groups_never_safe(monkeypa
             results[endpoint] = _probe_result(
                 endpoint, height=height, tip_hash=tip, checkpoint_hash=checkpoint)
         monkeypatch.setattr(cli, "Crawler", lambda **kw: _FakeCrawler(results, **kw))
-        store = Store(str(tmp_path / "monitor.sqlite3"))
+        store = Store(str(tmp_path / "network-observer.sqlite3"))
         try:
             await cli.run_discovery(
                 store, seeds_path=seeds_path, registry_path=registry_path,
@@ -559,7 +559,7 @@ def test_cli_wires_optional_reference_checkpoint_and_genesis_hash(monkeypatch, t
 
     monkeypatch.setattr(cli, "run_discovery", fake_run_discovery)
     seeds_path = _write_seeds(tmp_path, [])
-    db_path = tmp_path / "monitor.sqlite3"
+    db_path = tmp_path / "network-observer.sqlite3"
     argv = [
         "--database", str(db_path),
         "--seeds", str(seeds_path),

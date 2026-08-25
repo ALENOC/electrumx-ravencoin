@@ -10,12 +10,12 @@ this, and pure peer-gossip discovery must never itself grant an endpoint an
 operator identity.
 """
 
-from monitor.classify import (
+from network_observer.classify import (
     ChainObservation, count_independent_operators, count_unknown_safe_endpoints,
     independent_groups, known_group_count,
 )
-from monitor.model import DiscoverySource, EndpointId, EndpointState, Security, Transport
-from monitor.store import Store
+from network_observer.model import DiscoverySource, EndpointId, EndpointState, Security, Transport
+from network_observer.store import Store
 
 
 def endpoint(host, port=50002, transport=Transport.TLS):
@@ -90,7 +90,7 @@ def test_pure_gossip_discovery_never_grants_an_operator_identity(tmp_path):
     operator independence: an endpoint learned only via record_peer_edge
     (never listed in the operator's own seeds or registry file) must come
     back with operator_group unset."""
-    store = Store(str(tmp_path / "monitor.sqlite3"))
+    store = Store(str(tmp_path / "network-observer.sqlite3"))
     try:
         source = endpoint("known.example.org")
         gossiped = endpoint("stranger.example.org")

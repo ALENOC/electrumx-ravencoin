@@ -242,7 +242,7 @@ CREATE TABLE IF NOT EXISTS operator_state_marker (
 class Store:
     """Thin persistence layer.  No business logic lives here."""
 
-    def __init__(self, path: str = "monitor.sqlite3"):
+    def __init__(self, path: str = "network-observer.sqlite3"):
         self.path = path
         self.connection = sqlite3.connect(path)
         self.connection.row_factory = sqlite3.Row

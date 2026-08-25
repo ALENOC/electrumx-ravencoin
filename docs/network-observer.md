@@ -9,30 +9,30 @@ evolution started from is `docs/network-observer-audit.md`.
 
 ## What exists now, module by module
 
-* `monitor/quorum.py`: Chain Quorum 2.0. Shared-height anchor selection,
+* `network_observer/quorum.py`: Chain Quorum 2.0. Shared-height anchor selection,
   deterministic plus nonce-derived challenge heights, structured
   verdicts (VALID, TEMPORARY_LAG, INSUFFICIENT_CORROBORATION,
   CHALLENGE_INCOMPLETE, CONFLICT_SUSPECTED, CHAIN_CONFLICT).
-* `monitor/observer.py`: signed observation bundles (Ed25519, domain
+* `network_observer/observer.py`: signed observation bundles (Ed25519, domain
   separated), anti-replay (per-observer sequence high-water, expiry,
   clock-skew tolerance), local-only observer key generation.
-* `monitor/operators.py`: cryptographic operator identity. Signed
+* `network_observer/operators.py`: cryptographic operator identity. Signed
   operator declarations with sequence anti-rollback and the trust
   states UNKNOWN / SELF_SIGNED / REGISTRY_ATTESTED / INVALID / EXPIRED.
-* `monitor/vantage.py`: multi-vantage aggregation and selective-serving
+* `network_observer/vantage.py`: multi-vantage aggregation and selective-serving
   categories (MULTI_VANTAGE_CONSISTENT, DNS_VARIANCE, TLS_VARIANCE,
   BACKEND_IDENTITY_VARIANCE, CHAIN_SELECTIVE_SERVING_SUSPECTED,
   DATA_SELECTIVE_SERVING_SUSPECTED).
-* `monitor/assets.py`: active asset capability probes and Asset Data
+* `network_observer/assets.py`: active asset capability probes and Asset Data
   Quorum v1 (canonical digests, height-bound comparison, verdicts
   AGREE / MISMATCH_SUSPECTED / CONFLICT / INSUFFICIENT_QUORUM /
   NOT_COMPARABLE / UNSUPPORTED).
-* `monitor/snapshot.py`: the signed network observation snapshot
+* `network_observer/snapshot.py`: the signed network observation snapshot
   (separate schema from the signed directory, which is unchanged).
-* `monitor/store.py`: schema 5, forward-safe migration, bounded
+* `network_observer/store.py`: schema 5, forward-safe migration, bounded
   retention that never prunes a security high-water mark.
 * Index lag (backend Core height minus ElectrumX tip) is classified in
-  `monitor/classify.classify_index_lag` as INDEX_SYNCED / LAGGING /
+  `network_observer/classify.classify_index_lag` as INDEX_SYNCED / LAGGING /
   STALE / UNKNOWN, an operational axis strictly separate from Security.
 
 ## The security model, restated
@@ -117,7 +117,7 @@ UNSAFE for lagging above it. Thresholds are configurable in
 ## Asset capability and Asset Data Quorum v1
 
 Capability is actively probed, not trusted from `"assets": true`:
-`monitor/config/asset-sentinels.json` (shipped EMPTY by default;
+`network_observer/config/asset-sentinels.json` (shipped EMPTY by default;
 operators opt in with cheap, public, permanent queries; never create
 assets, never spend RVN). Results form a per-method matrix and the
 classes ASSET_CAPABLE / PARTIAL / UNSUPPORTED / UNKNOWN / LEGACY (a
