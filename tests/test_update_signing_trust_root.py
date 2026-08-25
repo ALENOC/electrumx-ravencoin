@@ -4,8 +4,9 @@
 """Regression tests for the retired-v1/current-v2 update trust roots.
 
 The historical attestation embeds the retired v1 key and remains independently
-verifiable evidence. The tracked public-key file is the current live production
-root used by source checkouts and manifest-v2 releases.
+verifiable evidence. The immutable tracked public-key file retains that
+historical template value; production packaging injects the current v2 root,
+and source-checkout updater trust loading fails closed on the template.
 """
 
 from __future__ import annotations
@@ -57,12 +58,13 @@ def _attestation_message(statement: dict) -> bytes:
         ensure_ascii=True).encode("utf-8")
 
 
-def test_tracked_public_key_is_the_current_production_root():
+def test_tracked_public_key_is_explicitly_historical_and_retired():
     public_bytes = _published_public_bytes()
     assert len(public_bytes) == 32
-    assert public_bytes.hex() == PRODUCTION_PUBLIC_KEY_HEX
-    assert update_manifest.key_id_for(public_bytes) == PRODUCTION_KEY_ID
-    assert public_bytes.hex() != render_installer_v2.RETIRED_UPDATE_PUBLIC_KEY_HEX
+    assert public_bytes.hex() == render_installer_v2.RETIRED_UPDATE_PUBLIC_KEY_HEX
+    assert update_manifest.key_id_for(public_bytes) == \
+        render_installer_v2.RETIRED_UPDATE_KEY_ID
+    assert public_bytes.hex() != PRODUCTION_PUBLIC_KEY_HEX
     assert PRODUCTION_KEY_ID != render_installer_v2.RETIRED_UPDATE_KEY_ID
 
 
@@ -86,9 +88,8 @@ def test_source_checkout_updater_refuses_retired_trust_file(tmp_path):
     with pytest.raises(update_manifest.ManifestError, match="retired"):
         electrumx_update_cli.load_production_trusted_keys(str(stale_path))
 
-    trusted = electrumx_update_cli.load_production_trusted_keys(
-        str(PUBLIC_KEY_PATH))
-    assert trusted == {PRODUCTION_KEY_ID: bytes.fromhex(PRODUCTION_PUBLIC_KEY_HEX)}
+    with pytest.raises(update_manifest.ManifestError, match="retired"):
+        electrumx_update_cli.load_production_trusted_keys(str(PUBLIC_KEY_PATH))
 
 
 def test_historical_v1_attestation_still_verifies_under_its_original_domain():

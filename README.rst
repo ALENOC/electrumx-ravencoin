@@ -190,12 +190,13 @@ The signed release installer is the recommended production entry point because
 it binds the downloaded bundle, release manifest, and independent Core policy
 to their verification paths.
 
-The checkout's ``core-safety/production/update-signing-public-key.hex`` is the
-live production update trust root, not a packaging template. ``setup.sh`` does
-not create signed-release updater state or install the ``electrumx-update``
-command; operators who deliberately wire the updater to a source deployment
-still use that canonical key, and the updater refuses a stale checkout naming a
-known-retired root.
+The checkout's ``core-safety/production/update-signing-public-key.hex`` retains
+the immutable historical v1 key; production packaging replaces that bundle
+member with the independently authenticated current offline public key.
+``setup.sh`` does not create signed-release updater state or install the
+``electrumx-update`` command. If an operator deliberately wires the updater to
+a source deployment without explicitly provisioning the current public key,
+the updater sees the historical key and fails closed.
 
 Supported systems
 =================

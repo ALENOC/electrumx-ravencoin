@@ -31,10 +31,11 @@ existing data. The user service is optional; confirm its behavior before
 relying on it for reboot recovery.
 
 The tracked `core-safety/production/update-signing-public-key.hex` in a source
-checkout is the live production public trust root. It is not a historical value
-that packaging later replaces. `setup.sh` does not create signed-release updater
-state or install the `electrumx-update` command; if an operator deliberately
-wires the updater to a source deployment, a known-retired trust file is refused.
+checkout retains the immutable historical v1 key. Production packaging replaces
+that bundle member with the independently authenticated current offline public
+key. `setup.sh` does not create signed-release updater state or install the
+`electrumx-update` command; a source deployment without an explicitly
+provisioned current public key therefore fails closed at updater trust loading.
 
 ### Optional fast bootstrap for a fresh node
 

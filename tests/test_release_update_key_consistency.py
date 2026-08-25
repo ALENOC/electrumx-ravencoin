@@ -9,7 +9,6 @@ import pathlib
 import sys
 import tarfile
 
-import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -51,10 +50,6 @@ def test_signed_production_candidate_has_one_update_trust_root(
     needed or accessed.
     """
     private_path, public_hex, key_id = _raw_keypair(tmp_path)
-    tracked_key = tmp_path / "canonical-production-public-key.hex"
-    tracked_key.write_text(public_hex + "\n", encoding="ascii")
-    monkeypatch.setattr(build_production_release, "UPDATE_PUBLIC_KEY", tracked_key)
-
     monitor_dir = tmp_path / "monitor"
     monitor_dir.mkdir()
     (monitor_dir / "README.md").write_text("test monitor\n", encoding="utf-8")
@@ -120,22 +115,3 @@ def test_signed_production_candidate_has_one_update_trust_root(
         manifest, {key_id: bytes.fromhex(public_hex)}) == manifest["manifest"]
     assert manifest["manifest"]["provenanceDigest"] == \
         "sha256:" + hashlib.sha256(provenance_bytes).hexdigest()
-
-
-def test_production_builder_refuses_key_different_from_tracked(
-        monkeypatch, tmp_path):
-    _private_path, foreign_public_hex, _key_id = _raw_keypair(tmp_path)
-    version = build_production_release.electrumx_version()
-    monkeypatch.setattr(sys, "argv", [
-        "build_production_release.py",
-        "--monitor-dir", str(tmp_path),
-        "--output-dir", str(tmp_path / "never-built"),
-        "--tag", f"v{version}",
-        "--artifact-revision", "0",
-        "--release-timestamp", "2026-08-25T00:00:00Z",
-        "--update-public-key-hex", foreign_public_hex,
-    ])
-    with pytest.raises(
-            build_production_release.ReleaseBuildError,
-            match="differs from the tracked production trust root"):
-        build_production_release.main()

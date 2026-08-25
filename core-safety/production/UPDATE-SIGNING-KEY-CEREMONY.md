@@ -1,9 +1,11 @@
 # ElectrumX update-signing key ceremony and history
 
 This file records the two ElectrumX release/update signing roots. The tracked
-`update-signing-public-key.hex` file is the **live production trust root**, not
-a historical template. Release candidates, source-checkout deployments, and
-installed release bundles must all use that same public key.
+`update-signing-public-key.hex` file is an **immutable historical schema-v1
+template value**, not the live production root. Production packaging replaces
+that bundle member with the independently authenticated current offline public
+key. A source-checkout updater fails closed until the current key is explicitly
+provisioned.
 
 The update-signing key is separate from the safe-Core policy signing key.
 Never reuse either private key across those signing domains.
@@ -18,7 +20,8 @@ Never reuse either private key across those signing domains.
 | Key ID | `6f4f944c9b0a19a1` (`sha256(raw_public_key)[:16]`) |
 | Signing domain | `ALENOC-RVN-ELECTRUMX-UPDATE-MANIFEST-v2` |
 | Custody model | Offline only; CI builds unsigned candidates and has no release private-key input |
-| Repository copy | `core-safety/production/update-signing-public-key.hex` — canonical live public root |
+| Production copies | Rendered standalone installer, signed release bundle, and signed release provenance |
+| Source-checkout default | Disabled/fail-closed: the tracked file contains the retired historical key |
 
 The exact published v1.13.9, v1.13.10, and v1.13.11 manifests verify under
 this key. Their standalone installers, bundled public-key files, release
@@ -26,15 +29,15 @@ provenance, and manifest signature key IDs all name this same root. The
 replacement v2 trust architecture was introduced for the 1.13.3 transition;
 there was no bridge signature from the retired key.
 
-`core-safety/scripts/build_production_release.py` requires the independently
-supplied release key to equal the canonical tracked public key. It then renders
-that key into the standalone installer, writes the same key into the bundle,
-and records its public key and derived ID in provenance and the offline signing
-handoff. `offline_sign_release.py` derives the public half from an owner-owned
-mode-`0600` offline private-key file, requires it to match the handoff, rejects
-the retired key, and signs only after verifying all bound digests. Private-key
-material must never be committed, logged, added to an artifact, or supplied to
-a job that executes repository or candidate code.
+`core-safety/scripts/build_production_release.py` accepts the current public key
+only as an independently authenticated, non-secret input. It renders that key
+into the standalone installer, replaces the historical key member in the
+bundle, and records the same public key and derived ID in provenance and the
+offline signing handoff. `offline_sign_release.py` derives the public half from
+an owner-owned mode-`0600` offline private-key file, requires it to match the
+handoff, rejects the retired key, and signs only after verifying all bound
+digests. Private-key material must never be committed, logged, added to an
+artifact, or supplied to a job that executes repository or candidate code.
 
 The current key's private storage location and recovery details are deliberately
 not published. Loss of the private key means release signing stops; it does not
@@ -74,11 +77,12 @@ in-band key rotation:
    public key to be byte-identical to the already installed key. Consequently,
    v1.13.10 authenticated v1.13.11 with the same key; no rotation occurred.
 
-A future replacement must therefore update this canonical public file and all
-retirement records in one reviewed change, but that change alone cannot rotate
-existing nodes. Existing nodes require a separately authenticated manual
-migration or an already-deployed, explicitly authorized governance transition.
-There is no inactivity, lost-key, or unsigned escape hatch.
+A future replacement must update the ceremony, production packaging inputs,
+and all retirement records together, but changing repository prose or a
+template alone cannot rotate existing nodes. Existing nodes require a
+separately authenticated manual migration or an already-deployed, explicitly
+authorized governance transition. There is no inactivity, lost-key, or unsigned
+escape hatch.
 
 If `update-signing-public-key.hex` is absent, malformed, or names a known-retired
 key, the production updater fails closed.

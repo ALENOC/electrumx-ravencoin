@@ -6,10 +6,10 @@
 
 The bundle is not trusted by itself. Its SHA-256 becomes ``artifactDigest`` in
 our separately signed ElectrumX release manifest. The optional Node Monitor is
-vendored at one exact reviewed commit. The tracked update public-key file is the
-live production trust root. The low-level builder still accepts an explicit key
-so a reviewed rotation can be assembled atomically, but the production builder
-requires that value to equal the tracked canonical key.
+vendored at one exact reviewed commit. The tracked update public-key file is an
+immutable historical schema-v1 value, not the live production root. Production
+packaging replaces only the bundled copy with the independently authenticated
+offline public key and leaves the tracked historical evidence untouched.
 
 ``release-provenance.json`` is synthetic reviewed evidence. Its exact bytes are
 included in the bundle and their SHA-256 is independently signed in manifest v2.

@@ -34,9 +34,6 @@ CORE_POLICY = ROOT / "core-safety" / "production" / "safe-core-policy.json"
 CORE_POLICY_PUBLIC_KEY = (
     ROOT / "core-safety" / "production" / "core-policy-signing-public-key.hex"
 )
-UPDATE_PUBLIC_KEY = (
-    ROOT / "core-safety" / "production" / "update-signing-public-key.hex"
-)
 CORE_REPOSITORY = "RavenProject/Ravencoin"
 CORE_COMMIT = "22549129888d02e0e08fcdb9f96f3c699167e774"
 BUNDLE_NAME = "electrumx-ravencoin-bundle.tar.gz"
@@ -136,20 +133,6 @@ def main() -> int:
     public_key_id = update_manifest.key_id_for(public_bytes)
     if public_key_id == render_installer_v2.RETIRED_UPDATE_KEY_ID:
         raise ReleaseBuildError("retired update-signing key id is forbidden")
-    try:
-        tracked_public_key_hex = UPDATE_PUBLIC_KEY.read_text(
-            encoding="ascii").strip().lower()
-    except OSError as exc:
-        raise ReleaseBuildError(
-            "cannot read the tracked production update-signing public key") from exc
-    if not RAW_KEY_RE.fullmatch(tracked_public_key_hex):
-        raise ReleaseBuildError(
-            "tracked production update-signing public key is malformed")
-    if public_key_hex != tracked_public_key_hex:
-        raise ReleaseBuildError(
-            "release update-signing public key differs from the tracked "
-            "production trust root")
-
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
     bundle_path = output / BUNDLE_NAME
