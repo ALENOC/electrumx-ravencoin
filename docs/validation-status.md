@@ -45,9 +45,14 @@ the release manifest's exact Core repository, commit, tag, version, policy
 version and certification report digest all match one `KNOWN_SAFE` policy
 entry with passing certification evidence.
 
-The ElectrumX release/update public key was provisioned through its recorded
-ceremony and is pinned independently. The private key is available only inside
-the protected `electrumx-release-signing` environment.
+The current ElectrumX release/update public key is independently authenticated
+and pinned into each production release candidate. Its private key remains
+offline and is unavailable to CI; CI builds only unsigned candidates. The
+historical v1 public key and attestation remain in the repository as immutable
+evidence, but that CI-held signing identity was retired on 2026-08-22 and grants
+no current signing authority. The complete public-key identities, signing
+domains and transition semantics are recorded in
+`core-safety/production/UPDATE-SIGNING-KEY-CEREMONY.md`.
 
 For pre-release end-to-end testing only,
 `core-safety/scripts/build_local_release_validation_bundle.py` creates an
