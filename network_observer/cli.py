@@ -168,6 +168,16 @@ async def run_discovery(store: Store, *, seeds_path: pathlib.Path,
         if endpoint not in seeds:
             seeds.append(endpoint)
 
+    # Documented operator-group precedence, applied at classification
+    # time (never persisted into the endpoints table, because a
+    # declaration's binding is time-bound and must stop the moment it
+    # expires): attested declaration > configured group > UNKNOWN-*.
+    attested_groups = store.accepted_declaration_groups()
+
+    def effective_group(state, endpoint: EndpointId) -> Optional[str]:
+        identity = f"{endpoint.hostname.lower().rstrip('.')}:{endpoint.port}"
+        return attested_groups.get(identity) or state.operator_group
+
     crawler = Crawler(limits=limits, allow_private=allow_private)
     results, edges = await crawler.crawl(seeds)
 
@@ -191,7 +201,7 @@ async def run_discovery(store: Store, *, seeds_path: pathlib.Path,
                 endpoint=endpoint, height=result.height, tip_hash=result.tip_hash,
                 genesis_hash=result.genesis_hash,
                 checkpoint_hash=result.checkpoint_hash,
-                operator_group=state.operator_group))
+                operator_group=effective_group(state, endpoint)))
         else:
             state.register_failure(thresholds)
             state.reason = result.error or "probe failed"
@@ -232,7 +242,8 @@ async def run_discovery(store: Store, *, seeds_path: pathlib.Path,
 
     if verdict.status == "CHAIN_CONFLICT":
         for state in store.all_states():
-            group = operator_group_key(state.operator_group, state.endpoint.hostname)
+            group = operator_group_key(
+                effective_group(state, state.endpoint), state.endpoint.hostname)
             if group in verdict.conflicting_groups:
                 state.security = Security.CONFLICT
                 state.reason = verdict.detail
@@ -248,7 +259,8 @@ async def run_discovery(store: Store, *, seeds_path: pathlib.Path,
         # what let an uncorroborated rider ride a genuine corroboration to
         # SAFE.
         for state in store.all_states():
-            group = operator_group_key(state.operator_group, state.endpoint.hostname)
+            group = operator_group_key(
+                effective_group(state, state.endpoint), state.endpoint.hostname)
             if state.security is Security.UNVERIFIED \
                     and state.availability is Availability.REACHABLE \
                     and group in verdict.verified_groups:
@@ -277,7 +289,8 @@ async def run_discovery(store: Store, *, seeds_path: pathlib.Path,
                 continue
             state = store.load_state(endpoint)
             group = operator_group_key(
-                state.operator_group if state else None, endpoint.hostname)
+                effective_group(state, endpoint) if state else None,
+                endpoint.hostname)
             if result.height is not None:
                 best = tips_by_group.get(group)
                 if best is None or result.height > best:
@@ -379,8 +392,25 @@ async def run_discovery(store: Store, *, seeds_path: pathlib.Path,
             "assets": asset_summary}
 
 
+def _apply_effective_groups(store: Store, states: list) -> list:
+    """Overlay attested declaration groups onto freshly loaded states.
+
+    ``all_states()`` returns fresh objects, so in-place adjustment is
+    safe here; the persisted ``operator_group`` is never rewritten,
+    because a declaration's binding is time-bound.  Reporting must use
+    the same group resolution the classifier used, or the diversity
+    numbers would diverge from the promotion decisions they describe."""
+    attested = store.accepted_declaration_groups()
+    for state in states:
+        endpoint = state.endpoint
+        identity = f"{endpoint.hostname.lower().rstrip('.')}:{endpoint.port}"
+        if identity in attested:
+            state.operator_group = attested[identity]
+    return states
+
+
 def command_status(store: Store) -> int:
-    states = store.all_states()
+    states = _apply_effective_groups(store, store.all_states())
     by_availability = {}
     by_security = {}
     for state in states:
@@ -413,7 +443,8 @@ def command_status(store: Store) -> int:
 
 
 def command_publish(store: Store, *, version: int, output: str) -> int:
-    body = build_directory(store.all_states(), directory_version=version)
+    body = build_directory(_apply_effective_groups(store, store.all_states()),
+                           directory_version=version)
     path = pathlib.Path(output)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -437,17 +468,25 @@ def command_observer_keygen(args) -> int:
 
 def command_verify_observation(store: Store, args) -> int:
     from .observer import verify_observation_bundle
-    document = json.loads(pathlib.Path(args.bundle).read_text(encoding="utf-8"))
-    trusted = {}
-    for line in pathlib.Path(args.trusted_observers).read_text(
-            encoding="utf-8").splitlines():
-        line = line.strip()
-        if line:
-            public = bytes.fromhex(line)
-            trusted[generate_key_id(public)] = public
-    body = verify_observation_bundle(
-        document, trusted,
-        observer_sequence_high_water=store.observer_high_water())
+    try:
+        document = json.loads(pathlib.Path(args.bundle).read_text(
+            encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"error: cannot read bundle {args.bundle}: {exc}", file=sys.stderr)
+        return 1
+    try:
+        trusted = _load_trusted_observer_keys(args.trusted_observers)
+    except (OSError, ValueError) as exc:
+        print(f"error: cannot read trusted observer keys "
+              f"{args.trusted_observers}: {exc}", file=sys.stderr)
+        return 1
+    try:
+        body = verify_observation_bundle(
+            document, trusted,
+            observer_sequence_high_water=store.observer_high_water())
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: bundle failed verification: {exc}", file=sys.stderr)
+        return 1
     store.record_accepted_observation(
         body["observerKeyId"], body["observerId"], body["sequence"],
         json.dumps(document), body.get("crawlId"))
@@ -457,14 +496,71 @@ def command_verify_observation(store: Store, args) -> int:
     return 0
 
 
+def _load_trusted_observer_keys(path: str) -> dict:
+    """Hex Ed25519 public keys of trusted observers, keyed by key id."""
+    trusted = {}
+    for line in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            public = bytes.fromhex(line)
+            trusted[generate_key_id(public)] = public
+    return trusted
+
+
 def command_aggregate_observations(store: Store, args) -> int:
+    """Cross-compare observer bundles, verifying each one first.
+
+    A forged bundle must never be able to drive selective-serving
+    accusations, so aggregation refuses unverified input by default:
+    every bundle is signature-verified against the trusted-observer
+    keys before any comparison.  Ingest-order replay protection stays
+    in ``verify-observation`` (which records sequences); analysis here
+    is deliberately idempotent, so the high-water check is not applied
+    and already-ingested bundles can be re-analysed.  Aggregating
+    genuinely unverified bundles requires the explicit
+    ``--allow-unverified`` acknowledgment."""
+    from .observer import verify_observation_bundle
     from .vantage import compare_vantage_views, views_from_bundles
     bundles = []
     for path in args.bundles:
-        bundles.append(json.loads(pathlib.Path(path).read_text(encoding="utf-8")))
-    if len(bundles) > Limits().max_observation_bundles:
+        try:
+            bundles.append(json.loads(
+                pathlib.Path(path).read_text(encoding="utf-8")))
+        except (OSError, ValueError) as exc:
+            print(f"error: cannot read bundle {path}: {exc}", file=sys.stderr)
+            return 1
+    # max_observation_bundles is a Thresholds bound (model.py), not a
+    # Limits one; this call path previously died on an AttributeError.
+    if len(bundles) > Thresholds().max_observation_bundles:
         print("error: too many bundles for one aggregation", file=sys.stderr)
         return 1
+    if args.trusted_observers:
+        try:
+            trusted = _load_trusted_observer_keys(args.trusted_observers)
+        except (OSError, ValueError) as exc:
+            print(f"error: cannot read trusted observer keys "
+                  f"{args.trusted_observers}: {exc}", file=sys.stderr)
+            return 1
+        verified = []
+        for index, document in enumerate(bundles):
+            try:
+                # Empty high-water map: see the docstring -- replay
+                # ordering belongs to verify-observation, not here.
+                verified.append(verify_observation_bundle(
+                    document, trusted, observer_sequence_high_water={}))
+            except Exception as exc:  # noqa: BLE001
+                print(f"error: bundle {args.bundles[index]} failed "
+                      f"verification: {exc}", file=sys.stderr)
+                return 1
+        bundles = verified
+    elif not args.allow_unverified:
+        print("error: refusing to aggregate unverified bundles; pass "
+              "--trusted-observers <keys.hex> (recommended) or the explicit "
+              "--allow-unverified acknowledgment", file=sys.stderr)
+        return 1
+    else:
+        print("warning: UNVERIFIED input -- signatures were not checked; "
+              "treat every category below as untrusted analysis")
     summaries = compare_vantage_views(views_from_bundles(bundles))
     for summary in summaries:
         print(f"{summary.endpoint:<44} {summary.agreement.value:<40} "
@@ -614,8 +710,18 @@ def main(argv=None) -> int:
 
     aggregate = subparsers.add_parser(
         "aggregate-observations",
-        help="cross-compare verified bundles from several vantage points")
+        help="cross-compare observer bundles from several vantage points; "
+             "bundles are signature-verified against --trusted-observers "
+             "before any comparison")
     aggregate.add_argument("bundles", nargs="+")
+    aggregate.add_argument(
+        "--trusted-observers", default=None,
+        help="hex Ed25519 public keys of observers this aggregator trusts, "
+             "one per line; every bundle must verify before aggregation")
+    aggregate.add_argument(
+        "--allow-unverified", action="store_true",
+        help="explicit acknowledgment for analysing bundles whose "
+             "signatures are NOT checked; output is marked untrusted")
 
     operator_verify = subparsers.add_parser(
         "operator-verify",

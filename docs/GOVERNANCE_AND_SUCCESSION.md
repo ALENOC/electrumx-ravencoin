@@ -19,7 +19,7 @@ Precise status language, used consistently:
 
 | Trust domain | Root | Classification | Evidence |
 | --- | --- | --- | --- |
-| Release/update signing | Ed25519 key id `6f4f944c9b0a19a1`, pinned in installer | SINGLE-MAINTAINER | `electrumx-ravencoin-install.py:RELEASE_PUBLIC_KEY_HEX`; verifier `core-safety/scripts/update_manifest.py:verify_manifest`; domain `ALENOC-RVN-ELECTRUMX-UPDATE-MANIFEST-v1` (update_manifest.py) |
+| Release/update signing | Ed25519 key id `6f4f944c9b0a19a1`, pinned in installer | SINGLE-MAINTAINER | `electrumx-ravencoin-install.py:RELEASE_PUBLIC_KEY_HEX`; verifier `core-safety/scripts/update_manifest.py:verify_manifest`; domain `ALENOC-RVN-ELECTRUMX-UPDATE-MANIFEST-v2` (update_manifest.py) |
 | Release anti-rollback | per-node high-water state | SELF-SIGNED / LOCAL | `/var/lib/electrumx-ravencoin/security-state.json` (locator module embedded in installer; `enforce_high_water`) |
 | Safe-Core policy signing | pinned public key | SINGLE-MAINTAINER | `core-safety/production/core-policy-signing-public-key.hex`; verifier `core-safety/scripts/policy.py:verify_policy`; domain `ALENOC-RVN-CORE-POLICY-v1` |
 | Policy anti-rollback | policyVersion floor | SELF-SIGNED / LOCAL | `core-safety/scripts/policy.py`; observer side `network_observer/store.py:record_policy_version` |

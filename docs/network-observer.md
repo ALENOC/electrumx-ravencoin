@@ -80,9 +80,13 @@ portion: the anchor never validates itself.
 ## Multi-vantage observers
 
 Each observer runs this monitor on an unrelated network and publishes a
-signed bundle (`monitor observe` flow, `verify-observation`,
-`aggregate-observations`). The aggregator trusts only observer keys it
-configured itself; an observation signing its own key proves nothing.
+signed bundle (`observer-keygen` + `publish-snapshot` flow,
+`verify-observation`, `aggregate-observations`). The aggregator trusts
+only observer keys it configured itself; an observation signing its own
+key proves nothing. `aggregate-observations` verifies every bundle
+against `--trusted-observers` before comparing anything, and refuses
+unverified input unless the operator passes an explicit
+`--allow-unverified` acknowledgment.
 Replay protection: sequence must exceed the persisted per-key
 high-water mark, timestamps must sit inside a 300-second tolerated
 skew, bundles expire, and nothing older than 24 hours is current.

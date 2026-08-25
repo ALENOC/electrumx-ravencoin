@@ -19,9 +19,9 @@ Invariants carried over from the Phase 1 monitor and made stronger here:
   reached it;
 * unknown operators never manufacture quorum (``UNKNOWN-*`` groups are
   excluded from anchor support exactly as in
-  ``monitor.classify.known_group_count``);
+  ``network_observer.classify.known_group_count``);
 * a malformed or missing header is no evidence at all, never a hash of
-  the wrong thing (see ``monitor.crawl._ravencoin_header_hash``);
+  the wrong thing (see ``network_observer.crawl._ravencoin_header_hash``);
 * conflict requires hash disagreement at the SAME height between
   independently attested operator groups;
 * absence of answers is absence of evidence: missing responses yield
@@ -320,9 +320,9 @@ def evaluate_challenges(records: Sequence[ChallengeRecord],
                 if group_tip is None or group_tip >= height:
                     # Could (or might) have answered but did not: the
                     # round is incomplete for this group either way when
-                    # we cannot prove it was below the height.
-                    if group_tip is not None and group_tip < height:
-                        continue
+                    # we cannot prove it was below the height.  A group
+                    # whose tip is below the height could not have
+                    # answered, so silence there is not incompleteness.
                     incomplete.add(group)
                 continue
             if len(valid) > 1:

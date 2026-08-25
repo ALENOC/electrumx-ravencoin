@@ -14,10 +14,11 @@ accumulate observations forever.
 
 from __future__ import annotations
 
+import datetime
 import json
 import sqlite3
 import time
-from typing import Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from .model import (
     Availability, DiscoverySource, EndpointId, EndpointState, ProbeResult, Security,
@@ -558,10 +559,25 @@ class Store:
 
     # -------------------------------------------------- operator identity (v5)
     def operator_sequence_high_water(self) -> dict:
+        """Per-key anti-rollback high-water marks for operator declarations.
+
+        The authoritative source is ``operator_state_marker``, which is
+        deliberately never pruned, so rollback refusal survives deletion
+        of old ``operator_identities`` rows; that table is still merged
+        in for databases written before the marker existed."""
+        marks: Dict[str, int] = {}
+        rows = self.connection.execute(
+            "SELECT operator_key_id, last_sequence FROM operator_state_marker"
+        ).fetchall()
+        for row in rows:
+            marks[row["operator_key_id"]] = int(row["last_sequence"])
         rows = self.connection.execute(
             "SELECT operator_key_id, MAX(last_sequence_seen) AS seq "
             "FROM operator_identities GROUP BY operator_key_id").fetchall()
-        return {row["operator_key_id"]: int(row["seq"]) for row in rows}
+        for row in rows:
+            key_id, sequence = row["operator_key_id"], int(row["seq"])
+            marks[key_id] = max(marks.get(key_id, 0), sequence)
+        return marks
 
     def record_operator_declaration(self, declaration, *,
                                     now: Optional[int] = None) -> None:
@@ -595,6 +611,48 @@ class Store:
             "SELECT operator_key_id, operator_group FROM operator_identities "
             "WHERE accepted=1").fetchall()
         return {row["operator_key_id"]: row["operator_group"] for row in rows}
+
+    def accepted_declaration_groups(self, *, now=None) -> dict:
+        """Endpoint identity (``host:port``) -> operator group for every
+        REGISTRY_ATTESTED declaration whose validity window covers ``now``.
+
+        This is what makes the documented precedence
+        (attested declaration > configured group > UNKNOWN-*) real in
+        the discovery flow: a declaration that has expired, or that was
+        only ever SELF_SIGNED, resolves nothing here.  When one key has
+        several accepted sequences only the highest one binds: a newer
+        declaration that drops an endpoint unbinds it."""
+        current = now or datetime.datetime.now(datetime.timezone.utc)
+        if isinstance(current, (int, float)):
+            current = datetime.datetime.fromtimestamp(
+                current, tz=datetime.timezone.utc)
+        groups: Dict[str, str] = {}
+        # Only the highest-sequence accepted declaration per key is
+        # current: an older declaration's endpoints must not stay bound
+        # after a newer declaration dropped them.
+        rows = self.connection.execute(
+            "SELECT oi.operator_group, oi.endpoints_json, oi.valid_from, "
+            "oi.expires_at FROM operator_identities oi JOIN ("
+            "SELECT operator_key_id, MAX(sequence) AS seq "
+            "FROM operator_identities WHERE accepted=1 "
+            "GROUP BY operator_key_id) latest "
+            "ON oi.operator_key_id = latest.operator_key_id "
+            "AND oi.sequence = latest.seq WHERE oi.accepted=1").fetchall()
+        for row in rows:
+            try:
+                valid_from = datetime.datetime.fromisoformat(row["valid_from"])
+                expires_at = datetime.datetime.fromisoformat(row["expires_at"])
+            except ValueError:
+                continue
+            if valid_from.tzinfo is None:
+                valid_from = valid_from.replace(tzinfo=datetime.timezone.utc)
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
+            if not (valid_from <= current <= expires_at):
+                continue
+            for identity in json.loads(row["endpoints_json"]):
+                groups[identity] = row["operator_group"]
+        return groups
 
     # ---------------------------------------------------- asset quorum (v5)
     def record_asset_samples(self, crawl_id: str, samples,

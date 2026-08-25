@@ -36,6 +36,10 @@ from typing import Dict, List, Mapping, Optional, Sequence
 GOVERNANCE_SCHEMA_VERSION = 1
 POLICY_SIGNATURE_DOMAIN = b"RVN-ELECTRUMX-GOVERNANCE-POLICY-v1\x00"
 TRANSITION_SIGNATURE_DOMAIN = b"RVN-ELECTRUMX-GOVERNANCE-TRANSITION-v1\x00"
+#: Release payloads get their own domain so a maintainer signature over
+#: a policy body can never be replayed as authorization of a release
+#: artifact (or vice versa), even if a future payload shape collides.
+RELEASE_SIGNATURE_DOMAIN = b"RVN-ELECTRUMX-GOVERNANCE-RELEASE-v1\x00"
 
 #: The governance domains.  Release and core-safety governance are the
 #: two software-trust domains; observer/operator identities are local
@@ -254,7 +258,7 @@ def verify_release_governance(document: Mapping, active: GovernancePolicy,
     payload = document.get("governedPayload")
     _require(payload is not None, "document must carry governedPayload")
     return distinct_valid_signers(
-        POLICY_SIGNATURE_DOMAIN + canonical_bytes(payload), signatures, keys)
+        RELEASE_SIGNATURE_DOMAIN + canonical_bytes(payload), signatures, keys)
 
 
 # ------------------------------------------------------------- local state
@@ -306,9 +310,15 @@ class GovernanceState:
              "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
              "note": note})
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
+        # Atomic replace: a crash mid-write must never leave a truncated
+        # state file, because a corrupt file takes the node's ability to
+        # accept transitions with it (fail closed, but unnecessarily).
+        temporary = self.path.with_name(self.path.name + ".tmp")
+        temporary.write_text(
             json.dumps(self._data, indent=2, sort_keys=True) + "\n",
             encoding="utf-8")
+        import os
+        os.replace(temporary, self.path)
 
 
 def adopt_successor(state: GovernanceState, policy: GovernancePolicy,

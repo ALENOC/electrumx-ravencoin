@@ -364,10 +364,15 @@ async def _speak_electrum(reader, writer, limits: Limits,
     Each request carries a numeric JSON-RPC id equal to its position,
     and answers are correlated by that id when the server echoes it
     (as the Electrum protocol requires), with an in-order fallback for
-    servers that omit ids.  Repeated methods are keyed
-    ``method#request_index`` (see ``response_key``) so individual
-    answers stay addressable; the single-shot probe calls keep their
-    plain names for backward compatibility with existing tests.
+    servers that omit ids.  An error response consumes its request slot
+    (by echoed id when present, else by lock-step position) WITHOUT
+    storing a result: a later id-less answer must never shift into the
+    slot of a request the server explicitly errored on, which is what
+    previously let a broken asset method read as working.  Repeated
+    methods are keyed ``method#request_index`` (see ``response_key``)
+    so individual answers stay addressable; the single-shot probe calls
+    keep their plain names for backward compatibility with existing
+    tests.
     """
     requests = list(calls if calls is not None else PROBE_CALLS)
     responses: Dict[str, object] = {}
@@ -387,6 +392,20 @@ async def _speak_electrum(reader, writer, limits: Limits,
         except json.JSONDecodeError:
             raise ValueError(f"{method} returned malformed JSON") from None
         if not isinstance(payload, dict) or "result" not in payload:
+            if isinstance(payload, dict) and "error" in payload:
+                # An error RESPONSE answers one request (a server push
+                # notification never carries "error"): consume that
+                # request's slot, storing nothing, so the in-order
+                # fallback below attributes the NEXT id-less result to
+                # the request that produced it instead of shifting one
+                # slot left past the errored one.
+                error_index = _request_index_from_payload(
+                    payload, len(requests)) or index
+                if error_index in answered:
+                    raise ValueError(
+                        f"{method} returned a duplicate answer for request "
+                        f"id {error_index}")
+                answered.add(error_index)
             continue
         # Correlate by echoed request id; fall back to in-order only when
         # the server did not echo a usable id for this line.
