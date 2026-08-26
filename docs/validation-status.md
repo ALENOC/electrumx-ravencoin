@@ -84,8 +84,8 @@ high-water state, and governance domain separation.
 
 ## Real-node qualification
 
-The published v1.13.11 artifact was qualified on the Raspberry Pi 5 node at
-`192.168.1.244` through the ordinary signed update path from v1.13.10.
+The published v1.13.11 artifact was qualified on a Raspberry Pi 5 qualification
+node through the ordinary signed update path from v1.13.10.
 
 Observed PASS evidence includes:
 
