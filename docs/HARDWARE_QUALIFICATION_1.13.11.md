@@ -195,8 +195,7 @@ Gate 2 (ordinary hardware update) on the Raspberry Pi 5 qualification node
   log records the successful promotion. No manual mutation of release state
   occurred at any point.
 
-Gate 3 (post-install service state): Core healthy `4.8.0`
-(`/Ravencoin:4.8.0(RG5MujXzxARjWChWdU2awbAQa9ZCH52yrh)/`), mainnet,
+Gate 3 (post-install service state): Core healthy `4.8.0`, mainnet,
 blocks == headers, 17 peers, restart count 0; ElectrumX healthy, reporting
 `ElectrumX-RVN 1.13.11`, restart count 0, db height == daemon height at every
 hourly checkpoint since the update.
@@ -210,10 +209,10 @@ unchanged semantics (BUILD_IDENTITY_VERIFIED, RavenProject/Ravencoin @
 fresh observedAt); `blockchain.asset.get_meta` answers on the live node.
 
 Gate 5 (deployed ownership preservation): `.secrets/raven_rpc_user` and
-`.secrets/raven_rpc_password` kept `lexnox:docker` mode `600` across the
-release switch; Node Monitor healthy with restart count `0` (its HTTP port
-answers with authentication as designed) and the ElectrumX admin poller
-service active.
+`.secrets/raven_rpc_password` retained the operator uid/gid and mode `600`
+across the release switch; Node Monitor healthy with restart count `0` (its
+HTTP port answers with authentication as designed) and the ElectrumX admin
+poller service active.
 
 Gate 6 (Network Observer on the node): `network_observer` package present in
 the installed tree with no stale `monitor/` package and no old-namespace
