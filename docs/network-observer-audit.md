@@ -9,4 +9,5 @@ multi-vantage observation signatures, operator identity, SSRF/rate limits,
 asset capability probing, Asset Data Quorum, compatibility boundaries, and
 known limitations.
 
-The original audit remains recoverable from Git history for provenance.
+This short file intentionally remains as a stable redirect for old external
+links. The original audit remains recoverable from Git history for provenance.
