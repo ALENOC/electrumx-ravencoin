@@ -6,6 +6,13 @@ Documentation: [Home](../README.rst) · [Docs index](README.md) ·
 [v1.13.11 overview](release-1.13.11.md) ·
 [Security model](security-model.md)
 
+## Documentation retention
+
+The active documentation tree keeps the hardware qualification and offline
+signing procedure only for the current release. Superseded per-release working
+papers remain recoverable from Git history; the concise compatibility, defect,
+and trust-transition record below is the maintained historical reference.
+
 ## 1.13.11
 
 `v1.13.11` adds Ravencoin Network Observer Phase 1 and the tested governance
@@ -25,9 +32,9 @@ public endpoint, Network Observer, and regression gates recorded in
 `docs/HARDWARE_QUALIFICATION_1.13.11.md`.
 
 The superseded GitHub Release entries for v1.13.9 and v1.13.10 were removed on
-2026-08-25 after v1.13.11 became current. Their Git tags and the historical
-qualification and revision documents remain available for auditability. Their
-removal does not alter the signed identity or artifacts of v1.13.11.
+2026-08-25 after v1.13.11 became current. Their Git tags, this revision history,
+and the original per-release records in Git history preserve auditability.
+Their removal does not alter the signed identity or artifacts of v1.13.11.
 
 ## Withdrawn 1.13.2 candidate
 
@@ -68,7 +75,9 @@ ordering is parsed, not compared as a string: `classify_release_order` and the
 host anti-rollback state both order versions through `packaging.version.Version`,
 so `1.13.10` is newer than `1.13.9`.
 
-Qualification evidence is recorded in `docs/HARDWARE_QUALIFICATION_1.13.10.md`.
+The original 1.13.10 qualification record remains available in Git history;
+the current end-to-end compatibility evidence is recorded in the 1.13.11
+qualification.
 
 ## 1.13.9
 
@@ -93,7 +102,7 @@ The ChainStrap trust boundary is unchanged. Only `blocks/blk*.dat` is ever
 written into the Ravencoin datadir, the marker mismatch refusal still fails
 closed, and Ravencoin Core still performs the local full reindex/revalidation.
 
-Qualification evidence is recorded in `docs/HARDWARE_QUALIFICATION_1.13.9.md`.
+The original 1.13.9 qualification record remains available in Git history.
 
 ## 1.13.8
 
@@ -114,7 +123,7 @@ The extraction allowlist is unchanged. Only `blocks/blk*.dat` is ever written
 into the Ravencoin datadir, and ChainStrap remains transport acceleration rather
 than a consensus trust source.
 
-Qualification evidence is recorded in `docs/HARDWARE_QUALIFICATION_1.13.8.md`.
+The original 1.13.8 qualification record remains available in Git history.
 
 ## 1.13.6
 
@@ -133,7 +142,7 @@ and requires a version bump for a behavioural change. 1.13.6 starts again at
 1.13.5 `artifact_revision 1` remains the last installable 1.13.5 artifact. It is
 not withdrawn, but it cannot install the advanced host controller.
 
-Qualification evidence is recorded in `docs/HARDWARE_QUALIFICATION_1.13.6.md`.
+The original 1.13.6 qualification record remains available in Git history.
 
 ## 1.13.5 artifact revisions
 
@@ -145,7 +154,7 @@ Qualification evidence is recorded in `docs/HARDWARE_QUALIFICATION_1.13.6.md`.
 
 Revision 1 changes updater code inside the bundle and is therefore not scope-preserving against revision 0. That is not a violation of the frozen-scope rule below: the rule protects operators of a revision that was actually qualified and published as installable, and revision 0 never reached that state. The offline scope verifier must not be used to compare revision 0 with revision 1.
 
-Full evidence is recorded in `docs/HARDWARE_QUALIFICATION_1.13.5.md`.
+The original 1.13.5 qualification record remains available in Git history.
 
 ## 1.13.1 requires a manual trust transition
 

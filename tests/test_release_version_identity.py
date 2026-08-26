@@ -1,8 +1,8 @@
 """Guard the 1.13.11 release identity.
 
 1.13.2 and 1.13.3 were built, failed real hardware qualification and were
-withdrawn. Historical qualification/signing material may name those candidates;
-release identity surfaces for the replacement candidate must pin 1.13.11.
+withdrawn. The maintained historical summary may name those candidates;
+current release identity surfaces must pin 1.13.11.
 """
 import re
 import subprocess
@@ -13,13 +13,11 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_VERSION = "1.13.11"
 WITHDRAWN_VERSION = "1.13.2"
-PREVIOUS_WITHDRAWN_VERSION = "1.13.3"
 
-# Historical-by-design: these record withdrawn candidates on purpose.
+# Historical-by-design: these summarize withdrawn candidates or exercise
+# migration behavior on purpose.
 HISTORICAL_FILES = {
     "docs/release-artifact-revisions.md",
-    "docs/HARDWARE_QUALIFICATION_1.13.3.md",
-    "docs/OFFLINE_RELEASE_SIGNING_1.13.3.md",
     "tests/test_update_staging_compose_resolution.py",
 }
 
@@ -89,12 +87,13 @@ def test_v1_installer_template_needle_is_not_bumped():
     assert "'\"alenoc/electrumx-ravencoin:1.13.1\", \"-ec\",'" in renderer
 
 
-def test_qualification_and_signing_docs_track_the_current_release():
-    assert (ROOT / f"docs/HARDWARE_QUALIFICATION_{RELEASE_VERSION}.md").is_file()
-    assert (ROOT / f"docs/OFFLINE_RELEASE_SIGNING_{RELEASE_VERSION}.md").is_file()
-    # 1.13.3 remains as historical evidence of the failed qualification.
-    assert (ROOT / f"docs/HARDWARE_QUALIFICATION_{PREVIOUS_WITHDRAWN_VERSION}.md").is_file()
-    assert (ROOT / f"docs/OFFLINE_RELEASE_SIGNING_{PREVIOUS_WITHDRAWN_VERSION}.md").is_file()
+def test_only_current_qualification_and_signing_docs_are_active():
+    qualification_docs = sorted(
+        path.name for path in (ROOT / "docs").glob("HARDWARE_QUALIFICATION_*.md"))
+    signing_docs = sorted(
+        path.name for path in (ROOT / "docs").glob("OFFLINE_RELEASE_SIGNING_*.md"))
+    assert qualification_docs == [f"HARDWARE_QUALIFICATION_{RELEASE_VERSION}.md"]
+    assert signing_docs == [f"OFFLINE_RELEASE_SIGNING_{RELEASE_VERSION}.md"]
     assert not (ROOT / f"docs/HARDWARE_QUALIFICATION_{WITHDRAWN_VERSION}.md").exists()
     assert not (ROOT / f"docs/OFFLINE_RELEASE_SIGNING_{WITHDRAWN_VERSION}.md").exists()
 
@@ -113,12 +112,6 @@ def test_current_qualification_records_chainstrap_mixed_content_contract():
     assert "Ravencoin Core still performs a local full reindex/revalidation" in text
 
 
-def test_superseded_1_13_7_release_docs_are_retained():
-    """1.13.7 material stays as history: the tag/release is never rewritten."""
-    assert (ROOT / "docs/HARDWARE_QUALIFICATION_1.13.7.md").is_file()
-    assert (ROOT / "docs/OFFLINE_RELEASE_SIGNING_1.13.7.md").is_file()
-
-
 def test_current_qualification_records_persistent_state_ownership_contract():
     """1.13.10 introduced the ownership-preservation release contract; the current doc must still say so."""
     text = (ROOT / f"docs/HARDWARE_QUALIFICATION_{RELEASE_VERSION}.md").read_text(
@@ -127,15 +120,3 @@ def test_current_qualification_records_persistent_state_ownership_contract():
     assert "`.secrets`" in text
     assert "preserve operator ownership" in text
     assert "keeps its source uid and gid" in text
-
-
-def test_superseded_1_13_9_release_docs_are_retained():
-    """1.13.9 material stays as history: the tag/release is never rewritten."""
-    assert (ROOT / "docs/HARDWARE_QUALIFICATION_1.13.9.md").is_file()
-    assert (ROOT / "docs/OFFLINE_RELEASE_SIGNING_1.13.9.md").is_file()
-
-
-def test_superseded_1_13_8_release_docs_are_retained():
-    """1.13.8 material stays as history: the tag/release is never rewritten."""
-    assert (ROOT / "docs/HARDWARE_QUALIFICATION_1.13.8.md").is_file()
-    assert (ROOT / "docs/OFFLINE_RELEASE_SIGNING_1.13.8.md").is_file()
