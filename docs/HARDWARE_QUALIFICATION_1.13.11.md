@@ -178,8 +178,8 @@ Gate 1 (regression/security suite), local venv on the reviewed source:
   verification, declaration application and rollback high-water, source trust
   loading, artifact-wide key consistency, and governance domain separation.
 
-Gate 2 (ordinary hardware update) on the Raspberry Pi 5 node
-(192.168.1.244, aarch64, Docker 29.7.2):
+Gate 2 (ordinary hardware update) on the Raspberry Pi 5 qualification node
+(aarch64, Docker 29.7.2):
 
 - `check`: candidate 1.13.11 r0 VERIFIED and ELIGIBLE against the pinned
   trust key; digests equal the signed ceremony output;
