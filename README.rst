@@ -9,7 +9,7 @@ optional node monitoring, Network Observer tooling, and maintained Linux amd64
 
 **Current release: ElectrumX-RVN 1.13.11**
 
-`Install`_ · `What's new`_ · `Architecture`_ · `Security`_ ·
+`Install`_ · `Fork features`_ · `What's new`_ · `Architecture`_ · `Security`_ ·
 `Network Observer`_ · `Documentation`_ ·
 `Latest release <https://github.com/ALENOC/electrumx-ravencoin/releases/latest>`_
 
@@ -61,6 +61,22 @@ wallet private keys or signing transactions.
 
 More independently operated Electrum servers improve availability, privacy,
 infrastructure decentralization, and network resilience.
+
+.. _Fork features:
+
+What this fork adds
+===================
+
+The maintained fork adds a production deployment and security layer around the
+historical ElectrumX-Ravencoin server: exact official Core identity and
+certification, Fast Verified Bootstrap, a signed standalone installer,
+revision-aware releases, host-wide anti-rollback, transactional updates and
+rollback, database consistency hardening, maintained amd64/ARM64 deployment,
+optional local monitoring, Ravencoin Network Observer, and a tested governance
+and succession framework.
+
+The permanent feature map explains each subsystem, its trust boundary, and what
+it deliberately does not claim to prove. See `Fork feature guide`_.
 
 .. _What's new:
 
@@ -123,8 +139,9 @@ Bootstrap by default. ChainStrap accelerates acquisition of historical raw
 block data; it is **not** a consensus trust source and it does not replace Core
 validation. Only verified raw block files may enter staging; downloaded
 chainstate and indexes are never installed. The pinned Core performs a complete
-local ``-reindex -assumevalid=0`` before ElectrumX starts. Failures remain
-fail-closed rather than silently switching to P2P synchronization.
+local ``-reindex -assumevalid=0`` and an offline post-reindex chain/index gate
+before ElectrumX starts. Failures remain fail-closed rather than silently
+switching to P2P synchronization.
 
 See `Fast bootstrap`_ for the archive rules, resume behavior, storage needs,
 P2P alternative, and complete threat model.
@@ -291,6 +308,7 @@ Start with the guide that matches the task:
 =============================  =================================================
 Task                           Guide
 =============================  =================================================
+Understand what the fork adds  `Fork feature guide`_
 Install a first node           `Getting started`_
 Review 1.13.11 changes         `1.13.11 overview`_
 Understand the architecture    `Architecture guide`_
@@ -326,6 +344,7 @@ See ``LICENCE``.
 
 .. _Architecture: docs/architecture.md
 .. _Network Observer: docs/network-observer.md
+.. _Fork feature guide: docs/fork-features.md
 .. _1.13.11 overview: docs/release-1.13.11.md
 .. _Architecture guide: docs/architecture.md
 .. _Getting started: docs/getting-started.md
