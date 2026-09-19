@@ -187,6 +187,8 @@ class Controller(ServerBase):
     
         async with Daemon(env.coin, env.daemon_url) as daemon:
             db = DB(env)
+            # lets the DB rewrite a damaged header record instead of serving it
+            db.header_repairer = daemon.raw_block_headers
             backend_status = await daemon.refresh_ravencoin_backend_status(env.coin.NET)
             unsafe_warning = enforce_backend_policy(
                 backend_status, env.allow_unsafe_ravencoin_core
