@@ -2,6 +2,8 @@
 # preserving the exact candidate-source build path for ARM64.
 FROM debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792 AS fetch
 
+#: Timestamped Debian snapshot the build resolves its packages from.
+ARG DEBIAN_SNAPSHOT=20260801T000000Z
 ARG TARGETARCH
 ARG RAVENCOIN_VERSION=4.8.0
 ARG RAVENCOIN_SOURCE_COMMIT=22549129888d02e0e08fcdb9f96f3c699167e774
@@ -11,6 +13,18 @@ ARG RAVEND_SHA256=885f6670c819e3a48339bbc596f1a224fe41af21ae7a0db57b2ebca700d050
 ARG RAVEN_CLI_SHA256=8fde2465b2bd50d0db2d873fd02a6a4ce6a6be84ed03d32b094a9862febb594b
 
 RUN test "$TARGETARCH" = amd64 || test "$TARGETARCH" = arm64
+
+# Bullseye has left regular security support: its indexes still advertise
+# package versions that the pools no longer carry, so apt-get install dies with
+# 404s on both deb.debian.org and security.debian.org. Pin both suites to a
+# timestamped snapshot instead, which is immutable and internally consistent,
+# and which the deterministic Wine image already relies on for the same reason.
+RUN printf '%s\n' \
+        "deb http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/ bullseye main" \
+        "deb http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/ bullseye-security main" \
+        > /etc/apt/sources.list \
+    && printf '%s\n' 'Acquire::Check-Valid-Until "false";' \
+        > /etc/apt/apt.conf.d/99electrumx-snapshot
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -57,6 +71,8 @@ RUN set -eux; \
 
 FROM debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792
 
+#: Timestamped Debian snapshot the runtime image resolves its packages from.
+ARG DEBIAN_SNAPSHOT=20260801T000000Z
 ARG RAVENCOIN_VERSION=4.8.0
 ARG RAVENCOIN_SOURCE_COMMIT=22549129888d02e0e08fcdb9f96f3c699167e774
 ARG TARGETARCH
@@ -66,6 +82,18 @@ LABEL org.opencontainers.image.title="Ravencoin Core" \
       org.opencontainers.image.source="https://github.com/RavenProject/Ravencoin" \
       org.opencontainers.image.revision="${RAVENCOIN_SOURCE_COMMIT}" \
       org.opencontainers.image.architecture="${TARGETARCH}"
+
+# Bullseye has left regular security support: its indexes still advertise
+# package versions that the pools no longer carry, so apt-get install dies with
+# 404s on both deb.debian.org and security.debian.org. Pin both suites to a
+# timestamped snapshot instead, which is immutable and internally consistent,
+# and which the deterministic Wine image already relies on for the same reason.
+RUN printf '%s\n' \
+        "deb http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/ bullseye main" \
+        "deb http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/ bullseye-security main" \
+        > /etc/apt/sources.list \
+    && printf '%s\n' 'Acquire::Check-Valid-Until "false";' \
+        > /etc/apt/apt.conf.d/99electrumx-snapshot
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
