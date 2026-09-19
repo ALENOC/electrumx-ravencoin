@@ -309,6 +309,11 @@ class DB:
 
     DB_VERSIONS = [0]
 
+    #: Most blank header records repaired in one go.  A handful is damage worth
+    #: healing in place; thousands means the store is wrong in a way an
+    #: operator needs to look at, not something to paper over silently.
+    MAX_HEADER_REPAIR = 64
+
     class DBError(Exception):
         '''Raised on general DB errors generally indicating corruption.'''
 
@@ -319,6 +324,10 @@ class DB:
 
         self.header_offset = self.coin.static_header_offset
         self.header_len = self.coin.static_header_len
+
+        # Set by the controller to Daemon.raw_block_headers.  Without it a
+        # damaged header record can only be reported, not repaired.
+        self.header_repairer = None
 
         self.logger.info(f'switching current directory to {env.db_dir}')
         os.chdir(env.db_dir)
@@ -493,6 +502,14 @@ class DB:
 
         # Read TX counts (requires meta directory)
         await self._read_tx_counts()
+
+        # A blank header record is invisible until a client stalls on it, so
+        # look before serving rather than after a user reports a wallet that
+        # will not sync.  Repair needs the daemon, which is only wired up when
+        # serving or syncing, so a scan without it just reports.
+        if self.env.header_scan_on_startup and not compacting:
+            await self.scan_header_records(repair=self.header_repairer is not None)
+
         return self.state
 
     async def open_for_compacting(self):
@@ -911,6 +928,35 @@ class DB:
             raise IndexError(f'height {height:,d} out of range')
         return header
 
+    def _read_headers_from_disk(self, start_height, count):
+        # Read some from disk
+        disk_count = max(0, min(count, self.state.height + 1 - start_height))
+        if disk_count:
+            offset = self.header_offset(start_height)
+            size = self.header_offset(start_height + disk_count) - offset
+            return self.headers_file.read(offset, size), disk_count
+        return b'', 0
+
+    def blank_header_heights(self, raw, start_height, count):
+        '''Return the heights in a just-read range whose record is all zero bytes.
+
+        No chain has an all-zero header, so such a record is always damage: a
+        write that never reached the platter, a truncated restore, a bad
+        sector.  It has to be found here because serving it is worse than
+        failing: a client cannot tell a zero-filled header from a real one
+        without verifying it, and one bad record stalls every client that
+        reaches that height.
+        '''
+        blanks = []
+        pos = 0
+        for i in range(count):
+            height = start_height + i
+            size = self.header_len(height)
+            if raw[pos:pos + size] == bytes(size):
+                blanks.append(height)
+            pos += size
+        return blanks
+
     async def read_headers(self, start_height, count):
         '''Requires start_height >= 0, count >= 0.  Reads as many headers as are available
         starting at start_height up to count.  This would be zero if start_height is
@@ -918,21 +964,135 @@ class DB:
 
         Returns a (binary, n) pair where binary is the concatenated binary headers, and n
         is the count of headers returned.
+
+        A damaged record is repaired from the daemon rather than served.  If it
+        cannot be repaired the read fails, because returning zeros silently
+        breaks every client that reads them.
         '''
         if start_height < 0 or count < 0:
             raise self.DBError(f'{count:,d} headers starting at '
                                f'{start_height:,d} not on disk')
 
-        def read_headers():
-            # Read some from disk
-            disk_count = max(0, min(count, self.state.height + 1 - start_height))
-            if disk_count:
-                offset = self.header_offset(start_height)
-                size = self.header_offset(start_height + disk_count) - offset
-                return self.headers_file.read(offset, size), disk_count
-            return b'', 0
+        raw, n = await run_in_thread(self._read_headers_from_disk, start_height, count)
+        if n:
+            blanks = self.blank_header_heights(raw, start_height, n)
+            if blanks:
+                await self.repair_header_records(blanks)
+                raw, n = await run_in_thread(self._read_headers_from_disk,
+                                             start_height, count)
+                still_blank = self.blank_header_heights(raw, start_height, n)
+                if still_blank:
+                    raise self.DBError(
+                        f'header record at height {still_blank[0]:,d} is still '
+                        f'blank after repair')
+        return raw, n
 
-        return await run_in_thread(read_headers)
+    async def repair_header_records(self, heights):
+        '''Rewrite damaged header records from the daemon copy.
+
+        Each replacement is checked before it is written: it must have the
+        length this height expects, and it must link to the headers already on
+        disk around it.  A replacement that fails either check is not written,
+        so a confused or hostile daemon response cannot turn a detectable hole
+        into undetectable wrong data.
+        '''
+        heights = sorted(set(heights))
+        if not heights:
+            return
+        self.logger.error(f'{len(heights):,d} blank header record(s) on disk, '
+                          f'first at height {heights[0]:,d}')
+        if self.header_repairer is None:
+            raise self.DBError(f'blank header record at height {heights[0]:,d} '
+                               f'and no daemon is available to repair it')
+        if len(heights) > self.MAX_HEADER_REPAIR:
+            raise self.DBError(
+                f'{len(heights):,d} blank header records starting at height '
+                f'{heights[0]:,d} is beyond automatic repair')
+
+        replacements = await self.header_repairer(heights)
+        for height in heights:
+            raw = replacements.get(height)
+            expected_len = self.header_len(height)
+            if not raw or len(raw) != expected_len:
+                raise self.DBError(
+                    f'daemon returned {0 if not raw else len(raw)} bytes for the '
+                    f'header at height {height:,d}, expected {expected_len}')
+            await run_in_thread(self._verify_replacement, height, raw)
+            await run_in_thread(self._write_header_record, height, raw)
+            self.logger.info(f'repaired header record at height {height:,d}')
+
+    def _verify_replacement(self, height, raw):
+        """Check a replacement header against the chain already on disk.
+
+        The daemon is trusted to say which block belongs at a height, but a
+        replacement is still only written if it links to its neighbours: its
+        previous hash must match the header below it, and the header above it
+        must point back at it.  At the committed tip the chain state is the
+        witness instead.  Anything that satisfies those links is the real
+        header, short of a hash collision.
+        """
+        linked = False
+
+        if height > 0:
+            below, n = self._read_headers_from_disk(height - 1, 1)
+            if n == 1 and not self.blank_header_heights(below, height - 1, 1):
+                if self.coin.header_prevhash(raw) != self.coin.header_hash(below):
+                    raise self.DBError(
+                        f'replacement header at height {height:,d} does not follow '
+                        f'the header below it')
+                linked = True
+
+        if height < self.state.height:
+            above, n = self._read_headers_from_disk(height + 1, 1)
+            if n == 1 and not self.blank_header_heights(above, height + 1, 1):
+                if self.coin.header_prevhash(above) != self.coin.header_hash(raw):
+                    raise self.DBError(
+                        f'replacement header at height {height:,d} is not the parent '
+                        f'of the header above it')
+                linked = True
+        elif height == self.state.height:
+            if self.coin.header_hash(raw) != self.state.tip:
+                raise self.DBError(
+                    f'replacement header at height {height:,d} does not match the '
+                    f'committed chain tip')
+            linked = True
+
+        if not linked:
+            raise self.DBError(
+                f'replacement header at height {height:,d} could not be linked to '
+                f'the chain on disk')
+
+    def _write_header_record(self, height, raw):
+        self.headers_file.write(self.header_offset(height), raw, sync=True)
+
+    async def scan_header_records(self, *, repair=False, batch_size=20000):
+        '''Walk every stored header looking for damaged records.
+
+        Returns the list of heights found blank.  With repair set, they are
+        rewritten from the daemon as they are found.  This is the check that
+        turns a silent hole into something an operator can see.
+        '''
+        blanks = []
+        height = 0
+        last = self.state.height
+        while height <= last:
+            count = min(batch_size, last - height + 1)
+            raw, n = await run_in_thread(self._read_headers_from_disk, height, count)
+            if not n:
+                break
+            found = self.blank_header_heights(raw, height, n)
+            if found:
+                blanks.extend(found)
+                if repair:
+                    for pos in range(0, len(found), self.MAX_HEADER_REPAIR):
+                        await self.repair_header_records(found[pos:pos + self.MAX_HEADER_REPAIR])
+            height += n
+        if blanks:
+            self.logger.error(f'header scan found {len(blanks):,d} blank record(s), '
+                              f'first at height {blanks[0]:,d}')
+        else:
+            self.logger.info(f'header scan clean through height {last:,d}')
+        return blanks
 
     def fs_tx_hash(self, tx_num):
         '''Return a pair (tx_hash, tx_height) for the given tx number.

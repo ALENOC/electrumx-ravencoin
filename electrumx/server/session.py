@@ -585,6 +585,22 @@ class SessionManager:
             raise RPCError(BAD_REQUEST, 'still catching up with daemon')
         return f'scheduled a reorg of {count:,d} blocks'
 
+    async def rpc_verifyheaders(self, repair=False):
+        '''Scan every stored header record for damage.
+
+        repair: rewrite damaged records from the daemon
+        '''
+        if isinstance(repair, str):
+            repair = repair.lower() in ('1', 'true', 'yes', 'on')
+        blanks = await self.db.scan_header_records(repair=bool(repair))
+        if not blanks:
+            return f'header records clean through height {self.db.state.height:,d}'
+        listed = ', '.join(f'{height:,d}' for height in blanks[:16])
+        if len(blanks) > 16:
+            listed += ', ...'
+        verb = 'repaired' if repair else 'found'
+        return f'{verb} {len(blanks):,d} damaged header record(s): {listed}'
+
     # --- External Interface
 
     async def serve(self, notifications, event):
