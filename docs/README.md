@@ -11,7 +11,7 @@ path.
    maintained subsystem, improvement, trust boundary, and compatibility promise.
 2. [Getting started](getting-started.md) — install a private node and understand
    the Core/ElectrumX service path.
-3. [Current release: v1.13.12](release-1.13.12.md) — changes and qualification
+3. [Current release: v1.13.13](release-1.13.13.md) — changes and qualification
    specific to the current production release.
 4. [Architecture](architecture.md) — serving, installation, update, observation,
    monitoring, and governance planes.
