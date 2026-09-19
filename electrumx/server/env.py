@@ -57,6 +57,10 @@ class Env(EnvBase):
         self.peer_discovery = self.peer_discovery_enum()
         self.peer_announce = self.boolean('PEER_ANNOUNCE', True)
         self.force_proxy = self.boolean('FORCE_PROXY', False)
+        # A damaged header record is invisible until a client trips over it, so
+        # the store is checked at startup.  It is a sequential read of the
+        # header files and can be turned off for a faster boot.
+        self.header_scan_on_startup = self.boolean('HEADER_SCAN_ON_STARTUP', True)
         self.tor_proxy_host = self.default('TOR_PROXY_HOST', 'localhost')
         self.tor_proxy_port = self.integer('TOR_PROXY_PORT', None)
 

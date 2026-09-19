@@ -221,6 +221,22 @@ class Daemon(object):
         params_iterable = ((h, ) for h in range(first, first + count))
         return await self._send_vector('getblockhash', params_iterable)
 
+    async def raw_block_headers(self, heights):
+        """Return {height: raw header bytes} straight from the daemon.
+
+        Used to repair header records that are damaged on disk.  The daemon is
+        the trust root here: a header it serves for a height is by definition
+        the one this server should be storing for that height.
+        """
+        heights = list(heights)
+        if not heights:
+            return {}
+        hex_hashes = await self._send_vector('getblockhash', ((h, ) for h in heights))
+        hex_headers = await self._send_vector('getblockheader',
+                                              ((hex_hash, False) for hex_hash in hex_hashes))
+        return {height: hex_to_bytes(hex_header)
+                for height, hex_header in zip(heights, hex_headers)}
+
     async def get_block(self, hex_hash, filename):
         rest_url = f'rest/block/{hex_hash}.bin'
         return await self._send(self._get_to_file, rest_url, filename)
