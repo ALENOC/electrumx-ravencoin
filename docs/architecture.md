@@ -1,7 +1,7 @@
 # Architecture
 
 Documentation: [Home](../README.rst) · [Docs index](README.md) ·
-[v1.13.11 overview](release-1.13.11.md) ·
+[Fork features](fork-features.md) · [Current release](release-1.13.11.md) ·
 [Security model](security-model.md)
 
 ElectrumX-RVN separates the wallet-serving path from deployment controls,
@@ -46,7 +46,7 @@ signed standalone installer
        +-- selects storage and Compose overlays
        +-- optionally stages ChainStrap raw block files
        v
-local Core reindex and validation -> normal serving plane
+local Core reindex + offline chain/index gate -> normal serving plane
 ```
 
 The installer verifies two independent trust domains: the ElectrumX
@@ -55,8 +55,9 @@ cannot replace the Core-policy verification key inside the same bundle.
 
 ChainStrap is optional transport acceleration for fresh bundled-Core installs.
 Only verified raw `blocks/blk*.dat` files may be staged; downloaded databases
-are ignored. Core then performs the complete local reindex with networking
-disabled. ChainStrap never becomes a consensus source.
+are not trusted. Core then performs the complete local reindex with networking
+disabled and must pass the offline post-reindex chain/index gate. ChainStrap
+never becomes a consensus source.
 
 ## Update plane
 
@@ -131,7 +132,7 @@ distributed to an independent maintainer quorum.
 | Node Monitor | Report local operational health | Classify the public Electrum network |
 | Governance verifier | Validate authorized policy and release transitions | Consume observer popularity as authority |
 
-Further detail: [Network Observer](network-observer.md),
-[governance and succession](GOVERNANCE_AND_SUCCESSION.md),
-[release artifact revisions](release-artifact-revisions.md), and the legacy
-[ElectrumX architecture reference](architecture.rst).
+Further detail: [Fork features](fork-features.md),
+[Network Observer](network-observer.md),
+[Governance and succession](GOVERNANCE_AND_SUCCESSION.md), and
+[Release identity and revisions](release-artifact-revisions.md).
