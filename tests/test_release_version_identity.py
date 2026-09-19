@@ -1,8 +1,8 @@
-"""Guard the 1.13.11 release identity.
+"""Guard the 1.13.12 release identity.
 
 1.13.2 and 1.13.3 were built, failed real hardware qualification and were
 withdrawn. The maintained historical summary may name those candidates;
-current release identity surfaces must pin 1.13.11.
+current release identity surfaces must pin 1.13.12.
 """
 import re
 import subprocess
@@ -11,8 +11,10 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE_VERSION = "1.13.11"
+RELEASE_VERSION = "1.13.12"
 WITHDRAWN_VERSION = "1.13.2"
+#: The hardware qualification result currently recorded for this release.
+QUALIFICATION_RESULT = "PENDING"
 
 # Historical-by-design: these summarize withdrawn candidates or exercise
 # migration behavior on purpose.
@@ -63,14 +65,14 @@ def test_no_release_executable_reference_to_1_13_2_candidate():
 
 
 @pytest.mark.parametrize("relative,pattern", [
-    ("electrumx/__init__.py", r"^version = 'ElectrumX-RVN 1\.13\.11'$"),
-    ("compose.yaml", r"image: alenoc/electrumx-ravencoin:1\.13\.11$"),
-    ("compose.existing-core.yaml", r"image: alenoc/electrumx-ravencoin:1\.13\.11$"),
+    ("electrumx/__init__.py", r"^version = 'ElectrumX-RVN 1\.13\.12'$"),
+    ("compose.yaml", r"image: alenoc/electrumx-ravencoin:1\.13\.12$"),
+    ("compose.existing-core.yaml", r"image: alenoc/electrumx-ravencoin:1\.13\.12$"),
     ("core-safety/scripts/legacy_1_13_1_apply.py",
-     r'^TARGET_ELECTRUMX_VERSION = "1\.13\.11"$'),
+     r'^TARGET_ELECTRUMX_VERSION = "1\.13\.12"$'),
     ("core-safety/scripts/render_installer_v2.py",
-     r"'\"alenoc/electrumx-ravencoin:1\.13\.11\", \"-ec\",'"),
-    (".github/workflows/release.yml", r"default: v1\.13\.11$"),
+     r"'\"alenoc/electrumx-ravencoin:1\.13\.12\", \"-ec\",'"),
+    (".github/workflows/release.yml", r"default: v1\.13\.12$"),
 ])
 def test_release_identity_is_pinned_to_current_version(relative, pattern):
     text = (ROOT / relative).read_text(encoding="utf-8")
@@ -101,10 +103,12 @@ def test_only_current_qualification_and_signing_docs_are_active():
 def test_current_qualification_records_chainstrap_mixed_content_contract():
     text = (ROOT / f"docs/HARDWARE_QUALIFICATION_{RELEASE_VERSION}.md").read_text(
         encoding="utf-8")
-    assert text.count("## RESULT: PASS") == 2
-    assert "Every mandatory gate above was observed" in text
-    assert "source version for the ordinary updater path: `1.13.10`" in text
-    assert "candidate version: `1.13.11`" in text
+    # Flip both of these to PASS wording once the hardware gates have been
+    # executed against the published artifacts and the evidence is recorded.
+    assert text.count(f"## RESULT: {QUALIFICATION_RESULT}") == 2
+    assert "No mandatory gate above has been executed" in text
+    assert "source version for the ordinary updater path: `1.13.11`" in text
+    assert "candidate version: `1.13.12`" in text
     assert "`assets/LOCK`" in text
     assert "`blocks/index/004089.ldb`" in text
     assert "`blocks/blk*.dat`" in text

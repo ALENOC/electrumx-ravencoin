@@ -41,7 +41,7 @@ import electrumx_update_cli as cli
 import update_runtime as runtime
 
 LEGACY_ELECTRUMX_VERSION = "1.13.1"
-TARGET_ELECTRUMX_VERSION = "1.13.11"
+TARGET_ELECTRUMX_VERSION = "1.13.12"
 LEGACY_CORE_VERSION = "4.8.0"
 CONSENT_TEXT = "ADOPT LEGACY 1.13.1"
 LEGACY_STORAGE_MODE = "named-volumes"

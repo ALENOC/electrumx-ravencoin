@@ -7,7 +7,7 @@ Ravencoin Core 4.8.0, Fast Verified Bootstrap, signed transactional updates,
 optional node monitoring, Network Observer tooling, and maintained Linux amd64
 / ARM64 deployment paths.
 
-**Current release: ElectrumX-RVN 1.13.11**
+**Current release: ElectrumX-RVN 1.13.12**
 
 `Install`_ · `Fork features`_ · `What's new`_ · `Architecture`_ · `Security`_ ·
 `Network Observer`_ · `Documentation`_ ·
@@ -80,21 +80,28 @@ it deliberately does not claim to prove. See `Fork feature guide`_.
 
 .. _What's new:
 
-What's new in 1.13.11
+What's new in 1.13.12
 =====================
 
 Since 1.13.1, the project has added revision-aware signed releases,
 host-wide anti-rollback state, transactional update/rollback, hardened
 ChainStrap staging, and explicit migration of legacy persistent state.
 
-Release 1.13.11 also introduces the optional Ravencoin Network Observer:
+Release 1.13.12 is a correctness release: the server no longer serves a
+damaged header record, repairs one from the daemon when it can, scans the whole
+header store at startup and through ``electrumx_rpc verifyheaders``, and fails
+the read rather than returning zeros a client cannot tell apart from real
+headers. A single damaged record previously stalled every wallet that reached
+its height, silently.
+
+Release 1.13.11 introduced the optional Ravencoin Network Observer:
 Chain Quorum 2.0, signed multi-vantage observations, operator-aware diversity,
 active asset capability probes, and height-bound Asset Data Quorum. A tested
 N-of-M governance/succession framework is included but production threshold
 governance is **not activated**; the project is founder-independence capable,
 not founder-independent.
 
-See `1.13.11 overview`_ for the technical changes and compatibility guarantees.
+See `1.13.12 overview`_ for the technical changes and compatibility guarantees.
 
 How it works
 ============
@@ -104,7 +111,7 @@ The normal data and trust path is::
    Wallet / Electrum client
              |
              v
-   ElectrumX-RVN 1.13.11
+   ElectrumX-RVN 1.13.12
              |
              v
    Ravencoin Core 4.8.0
@@ -310,7 +317,7 @@ Task                           Guide
 =============================  =================================================
 Understand what the fork adds  `Fork feature guide`_
 Install a first node           `Getting started`_
-Review 1.13.11 changes         `1.13.11 overview`_
+Review 1.13.12 changes         `1.13.12 overview`_
 Understand the architecture    `Architecture guide`_
 Understand ChainStrap          `Fast bootstrap`_
 Choose hardware                `Hardware`_
@@ -344,6 +351,7 @@ See ``LICENCE``.
 
 .. _Architecture: docs/architecture.md
 .. _Network Observer: docs/network-observer.md
+.. _1.13.12 overview: docs/release-1.13.12.md
 .. _Fork feature guide: docs/fork-features.md
 .. _1.13.11 overview: docs/release-1.13.11.md
 .. _Architecture guide: docs/architecture.md
