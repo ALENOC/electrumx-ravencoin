@@ -1,44 +1,39 @@
-# ElectrumX-RVN 1.13.12 hardware qualification
+# ElectrumX-RVN 1.13.13 hardware qualification
 
 ## RESULT: PENDING
 
 This document records the qualification plan and, after execution, the evidence
-for ElectrumX-RVN 1.13.12.
+for ElectrumX-RVN 1.13.13.
 
 A release candidate MUST NOT be considered qualified until every mandatory gate
 below has passed on real hardware and the resulting signed artifact identity is
 recorded here.
 
-## Why 1.13.12 exists
+## Why 1.13.13 exists
 
-1.13.12 is a correctness release on top of 1.13.11. It stops the server from
-serving a damaged header record, and gives it a way to notice and repair one.
+1.13.13 makes 1.13.12 startable. 1.13.12 carried the header-record integrity
+work but could not start: the server crash-looped with
 
-A single header record on the production node, at height 4502646, held 120 zero
-bytes. Every wallet that reached that height stalled: the client rejects the
-chunk containing the record, retries it about once a second indefinitely, never
-finishes header catch-up, and therefore reports itself as not connected without
-saying why. The server logged nothing at any point, because nothing checked.
+    File "electrumx/server/block_processor.py", line 612, in check_cache_size_loop
+      tx_hash_size = ((self.state.tx_count - self.db.fs_tx_count) * 32
+    AttributeError: 'NoneType' object has no attribute 'tx_count'
 
-- `read_headers()` now inspects what it read, repairs a damaged record from the
-  daemon, and fails the read if it cannot. Returning an error is strictly better
-  than returning zeros, which a client cannot tell apart from real headers
-  without verifying them.
-- A replacement is written only if it links to the headers already on disk: its
-  previous hash must match the header below it and the header above must point
-  back at it, or at the chain head it must match the committed tip. The daemon
-  says which block belongs at a height; it does not get to plant an unlinked
-  header.
-- Repairs are written through the same fsync barrier as ordinary header writes.
-- The store is scanned at startup, controlled by `HEADER_SCAN_ON_STARTUP`, and
-  on demand through `electrumx_rpc verifyheaders`, which also repairs.
-- Automatic repair is capped at 64 records per attempt: a handful is damage
-  worth healing in place, thousands is something an operator must look at.
+`check_cache_size_loop()` is spawned next to `fetch_and_process_blocks()`,
+which opens the databases and only afterwards publishes chain state. The loop
+read that state in its first statement, so its correctness depended on the
+databases opening before the event loop scheduled it. That was never a
+guarantee; the startup header scan added in 1.13.12 put real work on the open
+path and the loop started winning the race.
 
-The damaged record predates the crash-consistency work in `54aeaa26`, which
-landed three hours after that block was mined, and a full scan of every header
-file found no other damage in the month since. So this release is not a fix for
-how the hole appeared; it is the detection and recovery that were missing.
+`BlockProcessor.state_ready` is now set exactly where state is assigned, and
+the cache loop waits for it before touching anything. Work added to the open
+path in future can take as long as it needs.
+
+The header-record behavior introduced in 1.13.12 is unchanged: a damaged record
+is repaired from the daemon and never served, a replacement is written only if
+it links to the headers already on disk, the store is scanned at startup under
+`HEADER_SCAN_ON_STARTUP`, and `electrumx_rpc verifyheaders` reports and repairs
+on demand.
 
 Nothing in the serving path changes otherwise: `server.ravencoin_backend`, the
 legacy Electrum protocol surface, the safe-Core policy chain, the updater trust
@@ -57,7 +52,7 @@ unchanged:
   imported raw block, so ChainStrap stays transport acceleration and never a
   consensus trust source.
 
-The 1.13.11 persistent-state ownership contract is inherited unchanged:
+The persistent-state ownership contract is inherited unchanged:
 `PERSISTENT_PATHS` is the same fixed set, every preserved file and directory
 keeps its source uid and gid, and a switch that cannot preserve operator ownership
 fails closed rather than silently changing the owner. `.secrets`
@@ -66,7 +61,8 @@ handling is exactly as qualified for 1.13.11.
 ## Required identities
 
 - source version for the ordinary updater path: `1.13.11`
-- candidate version: `1.13.12`
+  (1.13.12 is published but cannot start, so no deployment runs it)
+- candidate version: `1.13.13`
 - candidate artifact revision: `0`
 - Ravencoin Core version: `4.8.0`
 - Ravencoin Core commit: `22549129888d02e0e08fcdb9f96f3c699167e774`
@@ -80,7 +76,7 @@ handling is exactly as qualified for 1.13.11.
 Built by the protected release workflow (run 32813304259) from the exact
 reviewed commit, signed by the documented offline ceremony (sign exit 0;
 `--verify-only` exit 0, `status=VERIFIED`), published as the release
-`v1.13.12` with the five publication bytes only:
+`v1.13.13` with the five publication bytes only:
 
 - release source commit: `152b5134b849a31b2fdd9ef9efe643683a5bcb5c`
 - `artifact_revision`: `0`
@@ -91,7 +87,7 @@ reviewed commit, signed by the documented offline ceremony (sign exit 0;
 - signed manifest SHA-256: `d6abc30e34a186cae553560dcfd3295e06abbd6b9005bf672cf63db08ffd2e51`
 - signing key ID: `6f4f944c9b0a19a1`
 - final tag commit: `152b5134b849a31b2fdd9ef9efe643683a5bcb5c` (verified via
-  `git ls-remote origin refs/tags/v1.13.12`)
+  `git ls-remote origin refs/tags/v1.13.13`)
 
 ## Mandatory gate 1: regression/security suite
 
@@ -116,7 +112,7 @@ passing unchanged.
 ## Mandatory gate 2: ordinary hardware update
 
 On the Raspberry Pi 5 qualification node, an existing healthy ElectrumX-RVN
-1.13.11 installation must be able to discover the signed 1.13.12 candidate
+1.13.12 installation must be able to discover the signed 1.13.13 candidate
 through the normal updater path.
 
 The update must preserve:
@@ -131,14 +127,14 @@ The update must preserve:
 
 Expected updater outcome:
 
-- candidate `1.13.12`, artifact revision `0`, VERIFIED and ELIGIBLE;
+- candidate `1.13.13`, artifact revision `0`, VERIFIED and ELIGIBLE;
 - external mutator suspend PASS;
 - release switch PASS;
 - external mutator resume PASS;
 - `HealthVerdict.PROMOTE_TO_CURRENT`;
 - `pendingCandidate = null`;
 - `failureReason = null`;
-- `lastKnownGoodRelease` records 1.13.11.
+- `lastKnownGoodRelease` records 1.13.12.
 
 ## Mandatory gate 3: post-install service state
 
@@ -147,7 +143,7 @@ Expected updater outcome:
 - Ravencoin Core stays up across restarts, with no crash loop;
 - ElectrumX starts;
 - ElectrumX is healthy;
-- ElectrumX reports `ElectrumX-RVN 1.13.12`;
+- ElectrumX reports `ElectrumX-RVN 1.13.13`;
 - the backend remains the trusted Ravencoin Core 4.8.0 identity.
 
 ## Mandatory gate 4: public endpoint
@@ -157,10 +153,10 @@ From an external client:
 - TLS certificate verification for `electrumx.raventag.com:50002` passes;
 - `server.version` over TLS returns:
 
-  `["ElectrumX-RVN 1.13.12", "1.4"]`
+  `["ElectrumX-RVN 1.13.13", "1.4"]`
 
 - `server.ravencoin_backend` returns every RavenTag contract field with the
-  same semantics as 1.13.11.
+  same semantics as 1.13.12.
 
 ## Mandatory gate 5: deployed ownership preservation
 
@@ -193,12 +189,12 @@ Gate 1 (regression/security suite), local venv on the reviewed source:
 Gate 2 (ordinary hardware update) on the Raspberry Pi 5 qualification node
 (aarch64, Docker 29.7.2):
 
-- `check`: candidate 1.13.12 r0 VERIFIED and ELIGIBLE against the pinned
+- `check`: candidate 1.13.13 r0 VERIFIED and ELIGIBLE against the pinned
   trust key; digests equal the signed ceremony output;
 - `apply`: `PROMOTE_TO_CURRENT`, "post-update health gates passed" (updater
   audit log, 2026-08-25T05:47:23+00:00);
 - `pendingCandidate = null`, `failureReason = null`,
-  `lastKnownGoodRelease = 1.13.11`, host high-water advanced to 1.13.12;
+  `lastKnownGoodRelease = 1.13.12`, host high-water advanced to 1.13.13;
 - blockchain data, ElectrumX DB and named-volume identities preserved
   (storage proofs PASS); `compose.tls.yaml` preserved; external Node Monitor
   and bandwidth reconciler untouched; ChainStrap one-shot state not re-run.
@@ -209,12 +205,12 @@ Gate 2 (ordinary hardware update) on the Raspberry Pi 5 qualification node
 
 Gate 3 (post-install service state): Core healthy `4.8.0`, mainnet,
 blocks == headers, 17 peers, restart count 0; ElectrumX healthy, reporting
-`ElectrumX-RVN 1.13.12`, restart count 0, db height == daemon height at every
+`ElectrumX-RVN 1.13.13`, restart count 0, db height == daemon height at every
 hourly checkpoint since the update.
 
 Gate 4 (public endpoint): from an external client, TLS certificate for
 `electrumx.raventag.com:50002` verifies (`Verify return code: 0 (ok)`),
-`server.version` returns `["ElectrumX-RVN 1.13.12", "1.4"]`, and
+`server.version` returns `["ElectrumX-RVN 1.13.13", "1.4"]`, and
 `server.ravencoin_backend` returns every RavenTag contract field with
 unchanged semantics (BUILD_IDENTITY_VERIFIED, RavenProject/Ravencoin @
 22549129888d02e0e08fcdb9f96f3c699167e774, all compatibility flags true,
@@ -248,7 +244,7 @@ peers).
 
 ## RESULT: PENDING
 
-No mandatory gate above has been executed for 1.13.12 yet. This section
+No mandatory gate above has been executed for 1.13.13 yet. This section
 records RESULT: PENDING until every gate has been observed against the
-published 1.13.12 artifacts on the real node, at which point it becomes
+published 1.13.13 artifacts on the real node, at which point it becomes
 RESULT: PASS with the evidence.
