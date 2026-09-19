@@ -373,6 +373,11 @@ class BlockProcessor:
 
          # State.  Initially taken from DB;
         self.state = None
+        #: Set once state is loaded from the opened DB.  Loops that are spawned
+        #: alongside fetch_and_process_blocks() must wait for it: they used to
+        #: rely on the DB opening faster than the event loop got round to them,
+        #: which is not a guarantee and breaks as soon as opening does more work.
+        self.state_ready = asyncio.Event()
 
         # Caches of unflushed items.
         self.headers = []
@@ -603,6 +608,12 @@ class BlockProcessor:
         one_MB = 1000 * 1000
         cache_MB = self.env.cache_MB
         OnDiskBlock.daemon = self.daemon
+
+        # This coroutine is spawned next to fetch_and_process_blocks(), which
+        # opens the databases before it can publish chain state.  Reading state
+        # before then raises AttributeError on None and takes the server down
+        # on startup.
+        await self.state_ready.wait()
 
         while True:
             utxo_cache_size = len(self.utxo_cache) * 213
@@ -1891,6 +1902,7 @@ class BlockProcessor:
         # metadata.  Repair is bounded and anchored to the daemon + LevelDB tip.
         await self._repair_trailing_fs_metadata()
         self.state = OnDiskBlock.state = self.db.state.copy()
+        self.state_ready.set()
         # Refuse a stale or forked index before extending or serving it.  This
         # requires the open database above, so it cannot run any earlier.
         await verify_database_chain(self.db, self.daemon)
