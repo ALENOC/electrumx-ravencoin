@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -18,6 +19,7 @@ def _fake_processor(*, caught_up, first_sync, reopened_for_serving, height=100):
                      'qualifier_association_touched')
     fake = SimpleNamespace(
         state=SimpleNamespace(first_sync=first_sync, height=height),
+        state_ready=asyncio.Event(),
         caught_up=caught_up,
         reopened_for_serving=reopened_for_serving,
         flush=AsyncMock(),
@@ -145,6 +147,7 @@ async def test_confirmed_block_chain_error_is_diagnosed_distinctly_and_not_flush
     '''
     state = SimpleNamespace(height=100)
     fake = SimpleNamespace(
+        state_ready=asyncio.Event(),
         env=SimpleNamespace(write_bad_vouts_to_file=False),
         db=SimpleNamespace(
             state=SimpleNamespace(copy=lambda: state),

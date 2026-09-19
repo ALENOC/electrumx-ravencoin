@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 
 from electrumx.lib.hash import hex_str_to_hash
@@ -190,6 +191,7 @@ async def test_block_processor_verifies_chain_only_after_opening_database(monkey
         db=StubDB(),
         daemon=object(),
         state=None,
+        state_ready=asyncio.Event(),
         _repair_trailing_fs_metadata=stub_repair_trailing_fs_metadata,
         next_block_hashes=stub_next_block_hashes,
     )
