@@ -7,7 +7,7 @@ operator or reference section.
 ## New here?
 
 1. [What the node stack does](getting-started.md#what-the-services-do)
-2. [What changed in v1.13.11](release-1.13.11.md)
+2. [What changed in v1.13.12](release-1.13.12.md)
 3. [Choose hardware](hardware.md)
 4. [Start a private node](getting-started.md)
 5. [Understand the August 2026 incident](incident-2026.md)
@@ -35,6 +35,7 @@ operator or reference section.
 
 ## I want to understand the security design
 
+- [v1.13.12 technical overview](release-1.13.12.md): header record integrity
 - [v1.13.11 technical overview](release-1.13.11.md): changes since v1.13.1,
   compatibility, qualification, and links to each detailed subsystem.
 - [Architecture](architecture.md): serving, deployment, observation, and
