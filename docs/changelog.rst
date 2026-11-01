@@ -2,6 +2,18 @@
  ChangeLog
 ===========
 
+Version 1.13.14 RVN (candidate)
+================================
+
+* Automatically configures monitor startup recovery for fresh Linux deployments.
+* Waits for published LAN addresses and retries late networking after boot or
+  Docker restart, recreating only the monitor.
+* Verifies the trusted startup helper against the signed bundle and removes
+  partial service installation during rollback.
+* Preserves the Electrum protocol, database format and Core trust identity.
+
+See ``docs/release-1.13.14.md``. Signed-artifact hardware qualification is pending.
+
 Version 1.13.11 RVN (25 Aug 2026)
 =================================
 

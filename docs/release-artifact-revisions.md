@@ -13,6 +13,14 @@ signing procedure only for the current release. Superseded per-release working
 papers remain recoverable from Git history; the concise compatibility, defect,
 and trust-transition record below is the maintained historical reference.
 
+## 1.13.14 candidate
+
+`v1.13.14` uses artifact revision `0` because automatic host startup recovery
+changes installer behavior. It retains the existing production update-signing
+root and does not rotate keys. The bundled helper is verified against the signed
+bundle before its root-owned copy and operator-identity service are enabled.
+Hardware qualification remains pending for the new signed artifacts.
+
 ## 1.13.11
 
 `v1.13.11` adds Ravencoin Network Observer Phase 1 and the tested governance
