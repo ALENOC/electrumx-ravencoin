@@ -97,6 +97,10 @@ MONITOR_ENV = f"{MONITOR_PATH}/.env"
 MONITOR_OVERLAY = "compose.monitor.yaml"
 MONITOR_CONTROLLER_OVERLAY = "compose.monitor-controller.yaml"
 CONTROLLER_SCRIPT = f"{MONITOR_PATH}/contrib/ravencoin-bandwidth-controller.py"
+MONITOR_STARTUP_SCRIPT = f"{MONITOR_PATH}/contrib/monitor-startup.py"
+MONITOR_STARTUP_UNIT = "electrumx-ravencoin-monitor-start.service"
+TRUSTED_STARTUP_PATH = Path("/usr/local/lib/electrumx-ravencoin/monitor-startup.py")
+MONITOR_STARTUP_UNIT_PATH = Path("/etc/systemd/system") / MONITOR_STARTUP_UNIT
 MONITOR_PORT_VERIFY = f"{MONITOR_PATH}/contrib/verify-published-port.py"
 NETWORK_CONFIG_HELPER = "core-safety/scripts/configure_monitor_admin_network.py"
 CONTROLLER_UNIT = "electrumx-ravencoin-monitor-controller.service"
@@ -148,6 +152,7 @@ REQUIRED_BUNDLE_PATHS = frozenset({
     f"{MONITOR_PATH}/.env.example",
     CONTROLLER_SCRIPT,
     MONITOR_PORT_VERIFY,
+    MONITOR_STARTUP_SCRIPT,
     NETWORK_CONFIG_HELPER,
 })
 
@@ -197,6 +202,7 @@ def print_installation_summary(storage_root: Optional[Path], bootstrap: str,
         ("Docker images", "existing Docker data-root (unchanged)"),
         ("Bootstrap", "ChainStrap Fast Verified Bootstrap" if bootstrap == "chainstrap" else "Traditional Ravencoin P2P"),
         ("Node Monitor", "enabled" if monitor else "disabled"),
+        ("Monitor boot recovery", "systemd service (requires sudo)" if monitor else "disabled"),
         ("Advanced controls", "enabled (root-owned helper)" if controller else "disabled"),
     )
     label_width = max(len(label) for label, _value in rows)
@@ -1409,6 +1415,93 @@ def verify_monitor_host_publish(root: Path, files: Sequence[str]) -> None:
     run_checked(argv, cwd=root)
 
 
+def monitor_startup_prerequisites() -> None:
+    if platform.system().lower() != "linux":
+        raise InstallError("monitor boot recovery requires a Linux systemd host")
+    for command in ("systemctl", "python3"):
+        require_command(command)
+    if os.geteuid() != 0:
+        require_command("sudo")
+    for path in (MONITOR_STARTUP_UNIT_PATH, TRUSTED_STARTUP_PATH):
+        if path.exists() or path.is_symlink():
+            raise InstallError(f"refusing to overwrite existing monitor startup file {path}")
+
+
+def monitor_startup_unit_body(root: Path, files: Sequence[str]) -> str:
+    # Disable environment expansion and escape systemd specifiers in paths.
+    def quote(value):
+        value = str(value)
+        if any(char in value for char in "\n\r\x00"):
+            raise InstallError("unsupported control character in startup path")
+        return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"'
+
+    command = ["/usr/bin/python3", str(TRUSTED_STARTUP_PATH), "--start",
+               "--project-directory", str(root.resolve()),
+               "--project-name", COMPOSE_PROJECT_NAME]
+    for filename in files:
+        command += ["--file", str((root / filename).resolve())]
+    return "\n".join((
+        "[Unit]",
+        "Description=ElectrumX Ravencoin monitor network-aware startup",
+        "Wants=network-online.target", "Requires=docker.service",
+        "After=network-online.target docker.service", "PartOf=docker.service",
+        "StartLimitIntervalSec=0", "", "[Service]", "Type=oneshot",
+        "RemainAfterExit=yes",
+        f"User={os.geteuid()}", f"Group={os.getegid()}",
+        "ExecStart=:" + " ".join(quote(part) for part in command),
+        "Restart=on-failure", "RestartSec=10", "TimeoutStartSec=120",
+        "", "[Install]", "WantedBy=multi-user.target docker.service", "",
+    ))
+
+
+def install_monitor_startup(root: Path, files: Sequence[str], expected_sha256: str) -> None:
+    """Enable future boot recovery with a signed, root-owned helper copy."""
+    if not RAW_SHA256_RE.fullmatch(expected_sha256 or ""):
+        raise InstallError("monitor startup digest is malformed")
+    prefix = _sudo_prefix()
+    staged = TRUSTED_STARTUP_PATH.with_name("monitor-startup.new." + secrets.token_hex(8))
+    run_checked(prefix + ["install", "-d", "-o", "root", "-g", "root", "-m", "0755",
+                          str(TRUSTED_STARTUP_PATH.parent)])
+    try:
+        run_checked(prefix + ["install", "-o", "root", "-g", "root", "-m", "0644",
+                              str(root / MONITOR_STARTUP_SCRIPT), str(staged)])
+        if _file_sha256(staged) != expected_sha256:
+            raise InstallError("monitor startup SHA-256 mismatch after privileged copy")
+        run_checked(prefix + ["mv", "-fT", str(staged), str(TRUSTED_STARTUP_PATH)])
+        stat_result = TRUSTED_STARTUP_PATH.stat()
+        dir_stat = TRUSTED_STARTUP_PATH.parent.stat()
+        if (stat_result.st_uid != 0 or stat_result.st_gid != 0 or stat_result.st_mode & 0o022
+                or dir_stat.st_uid != 0 or dir_stat.st_mode & 0o022
+                or _file_sha256(TRUSTED_STARTUP_PATH) != expected_sha256):
+            raise InstallError("monitor startup trusted copy has unsafe ownership or bytes")
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as handle:
+            handle.write(monitor_startup_unit_body(root, files))
+            handle.flush()
+            run_checked(prefix + ["install", "-o", "root", "-g", "root", "-m", "0644",
+                                  handle.name, str(MONITOR_STARTUP_UNIT_PATH)])
+        run_checked(prefix + ["systemctl", "daemon-reload"])
+        # Activation already passed its host-side health gate. Enable for the
+        # next boot/Docker restart without recreating the healthy monitor now.
+        run_checked(prefix + ["systemctl", "enable", MONITOR_STARTUP_UNIT])
+    finally:
+        subprocess.run(prefix + ["rm", "-f", str(staged)], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def uninstall_monitor_startup_best_effort() -> None:
+    try:
+        prefix = _sudo_prefix()
+        for command in (
+            ["systemctl", "disable", "--now", MONITOR_STARTUP_UNIT],
+            ["rm", "-f", str(MONITOR_STARTUP_UNIT_PATH), str(TRUSTED_STARTUP_PATH)],
+            ["systemctl", "daemon-reload"],
+        ):
+            subprocess.run(prefix + command, check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
 def compose_files(bootstrap: str, monitor: bool, controller: bool = False) -> list[str]:
     files = [BASE_COMPOSE, STORAGE_OVERLAY]
     if bootstrap == "chainstrap":
@@ -1698,6 +1791,8 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
     if state_dir.exists():
         raise InstallError(
             f"refusing fresh install because updater state path already exists: {state_dir}")
+    if monitor:
+        monitor_startup_prerequisites()
     if controller:
         controller_prerequisites(require_sudo=True)
         controller_unit_body(target)
@@ -1705,6 +1800,9 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
     # bytes before anything is extracted into the operator-writable tree.
     trusted_controller_sha256 = (
         _bundle_member_sha256(data, CONTROLLER_SCRIPT) if controller else None)
+
+    trusted_startup_sha256 = (
+        _bundle_member_sha256(data, MONITOR_STARTUP_SCRIPT) if monitor else None)
 
     # compose.yaml intentionally has a fixed project name because monitor and
     # controller isolation reference deterministic container names. Therefore a
@@ -1718,6 +1816,7 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
     staging = Path(tempfile.mkdtemp(prefix=".electrumx-ravencoin-install-", dir=parent))
     moved = False
     controller_installed = False
+    startup_install_attempted = False
     storage_prepared = False
     files = compose_files(bootstrap, monitor, controller)
     base = _compose_prefix(files)
@@ -1762,6 +1861,8 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
 
         if monitor:
             verify_monitor_host_publish(target, files)
+            startup_install_attempted = True
+            install_monitor_startup(target, files, trusted_startup_sha256)
 
         # Marker/state are commit records and are written only after Compose
         # accepted the final release directory and the optional controller was
@@ -1771,6 +1872,8 @@ def install_fresh(target: Path, data: bytes, *, body: dict, metadata: dict,
             monitor=monitor, controller=controller, storage_root=storage_root)
         write_initial_update_state(target, body)
     except BaseException:
+        if startup_install_attempted:
+            uninstall_monitor_startup_best_effort()
         if moved and target.exists():
             # The preflight proved this project had no runtime resources before
             # this attempt, so volumes now carrying this project label belong to

@@ -46,7 +46,7 @@ The guided installer defaults to:
 * official ``RavenProject/Ravencoin`` Core 4.8.0;
 * ChainStrap Fast Verified Bootstrap;
 * a mandatory full local Core validation/reindex;
-* Ravencoin Node Monitor enabled;
+* Ravencoin Node Monitor enabled, with automatic systemd boot recovery;
 * the privileged bandwidth/connection controller disabled unless requested;
 * explicit storage selection;
 * deterministic Compose project name ``electrumx-ravencoin``.
@@ -195,6 +195,24 @@ repository.
 The default dashboard is published only on ``127.0.0.1:8899``. The optional
 bandwidth/connection controller is a separate privileged component and remains
 disabled unless explicitly requested.
+
+When the monitor is selected, the Linux installer automatically enables
+``electrumx-ravencoin-monitor-start.service`` for subsequent boots and Docker
+restarts. It waits for the published host addresses and retries every 10 seconds
+if the network is late. Recovery recreates only the monitor, using the same
+Compose project and overlays selected during installation. Core and ElectrumX
+are not restarted, and monitor history held in RAM resets on recreation.
+
+Installing this startup service requires sudo. Its helper is copied to a
+root-owned location and verified against the signed bundle before enabling the
+unit. The unit runs with the installing user's UID and GID. This does not enable
+the optional privileged bandwidth/connection controller.
+
+Inspect recovery with ``systemctl status electrumx-ravencoin-monitor-start.service``
+and ``journalctl -u electrumx-ravencoin-monitor-start.service``. To intentionally
+keep the monitor stopped across reboots, first run
+``sudo systemctl disable --now electrumx-ravencoin-monitor-start.service``, then
+stop the monitor through Compose.
 
 Update
 ======

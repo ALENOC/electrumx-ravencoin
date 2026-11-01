@@ -45,3 +45,27 @@ mapping, the verified installer additionally executes the pinned Node Monitor
 port metadata and a real host-loopback `/healthz` response.  On the known reboot
 failure it may force-recreate **only** the Monitor once, then verifies again and
 fails instead of looping or touching Core/ElectrumX.
+
+
+Fresh verified installations with the monitor selected also enable
+`electrumx-ravencoin-monitor-start.service`. Docker can attempt to restore a
+LAN-bound port before Wi-Fi has acquired that address, even after
+`network-online.target`. The service reads the published addresses from the
+same Compose project/overlays used during installation, checks that they exist
+locally, and retries startup every 10 seconds on failure. At boot and after a
+Docker restart it recreates only the monitor with the existing image, clearing
+incomplete network endpoints. Core/ElectrumX are not restarted.
+
+The helper comes from the pinned monitor bundle and is copied into
+`/usr/local/lib/electrumx-ravencoin/monitor-startup.py` as root:root. Its SHA-256
+is derived from the authenticated bundle before extraction and checked again
+after privileged copying. The unit runs as the installing user's UID/GID;
+installation requires sudo but does not enable the optional host controller.
+If the fresh install fails, its new startup unit and trusted helper are removed.
+Existing startup installations are refused before activation instead of overwritten.
+The selected install path remains stable through atomic updater switches.
+
+The service is enabled for future boots after initial host-port verification;
+it does not recreate the already verified monitor during installation. If an
+operator deliberately stops the monitor, disable this unit first to keep it
+stopped across future boots. In-memory monitor history resets on recreation.
